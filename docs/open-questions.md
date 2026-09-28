@@ -37,10 +37,16 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 
 | # | Decision | Recommendation | Status |
 |---|---|---|---|
-| D1 | Platform and architecture | Office.js + TypeScript, targeting Windows, Mac and the web (ADR-0001) | Proposed |
+| D0 | Exact Macabacus keys required? | — | **Decided 2026-09-28: yes, critical** |
+| D1 | Platform and architecture | Excel-DNA (C#, .NET Framework 4.8), Windows desktop first (ADR-0002); ADR-0001 (Office.js) superseded | Proposed |
 | D2 | License | MIT, with DCO sign-off for contributions (research/03) | Proposed |
-| D3 | Copyright holder | Individual vs Pegasus Technology Group LLC — **owner decides** | Open |
-| D4 | Build fresh vs fork XLerate | See PLAN §"Build vs fork" | Open |
-| D5 | Number format cycles in v1 | 5 cycles on one engine: Number, Percent, Multiple, Currency, Date | Proposed |
-| D6 | Default keymap | Macabacus-compatible where Office.js allows it; see PLAN | Proposed, to be tested in the spike |
+| D3 | Copyright holder | Individual or Pegasus Technology Group LLC: **owner decides** | Open |
+| D4 | Build fresh vs fork XLerate | Build fresh; XLerate is a design reference only (it's TypeScript) | Proposed |
+| D5 | Cycles in v1 | Number, Date, Currency, Percent, Multiple, Font, Fill (7). Blue-black and decimals are stretch goals | Proposed |
+| D6 | Keymap | Macabacus defaults exactly, and users can remap them (PLAN §4.2) | Proposed |
 | D7 | Product name | `excel-modeling-toolkit` is a working name | Open |
+| D8 | Mac / web follow-up | Defer. Later choose between VBA (Mac, Control-key shortcuts) and Office.js (web, letter shortcuts) | Open |
+| D9 | Approve decision spikes K1–K4 (throwaway code) | Yes. They settle the undo and key questions in about 1–2 days | Open |
+
+## C. Development-machine note
+Macabacus is installed on the owner's machine, and it binds the same keys. Whichever add-in registers a key last owns it. **During spikes and development, disable Macabacus** (File › Options › Add-ins › COM Add-ins) or remap its keys in its Shortcut Manager.

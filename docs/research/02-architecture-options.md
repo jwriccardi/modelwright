@@ -2,6 +2,10 @@
 
 *Researched 2026-09-28. The two claims the recommendation depends on were checked directly against Microsoft Learn on 2026-09-28; those are marked ✔︎ below.*
 
+> **Update (2026-09-28):** the owner has since made **exact Macabacus keys** a hard requirement. That rules out Office.js, so the recommendation below is superseded: see [05-keys-and-undo.md](05-keys-and-undo.md) and ADR-0002.
+>
+> Correction: Office.js native undo is confirmed only on Windows and Mac desktop. Microsoft says web support is coming "based on customer demand".
+
 ## What we require
 
 | # | Requirement | Weight |

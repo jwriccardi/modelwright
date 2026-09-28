@@ -1,260 +1,245 @@
 # Work plan — Excel Modeling Toolkit
 
-> **Status: PENDING APPROVAL.** Planning only. No code has been written yet.
-> Research: [`research/01-feature-survey.md`](research/01-feature-survey.md), [`research/02-architecture-options.md`](research/02-architecture-options.md), [`research/03-licensing.md`](research/03-licensing.md), [`research/04-xlerate-evaluation.md`](research/04-xlerate-evaluation.md).
-> Decisions: [`decisions/0001-platform-architecture.md`](decisions/0001-platform-architecture.md). Open items: [`open-questions.md`](open-questions.md).
+> **Status: PENDING APPROVAL.** Planning only; no code has been written yet.
+>
+> - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
+> - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
+> - Open items: [`open-questions.md`](open-questions.md).
 
 ## 1. Requirements summary
 
-An open-source Excel add-in for financial modelers that does four things:
+An open-source Excel add-in for financial modelers. It does four things:
 
-1. **Number format cycling.** A shortcut steps the selection through an ordered, user-editable list of number formats.
-2. **Font color cycling.** The same mechanism for font color.
-3. **Fill color cycling.** The same mechanism for fill color, including a "No fill" slot.
-4. **Smart trace precedents.** A keyboard-driven tree of the active cell's precedents, with values, that works across sheets. Moving through the tree selects each cell in Excel, and you can jump back to where you started.
+1. **Number format cycling**
+2. **Font color cycling**
+3. **Fill color cycling**
+4. **Smart trace precedents**
 
-**Constraints:**
-- Runs on Excel for Windows, Mac and the web (owner's preference: all three > Windows + Mac > Windows only).
-- Ctrl+Z must undo every formatting action.
+**Hard requirement (owner, 2026-09-28):** the add-in must use **exactly Macabacus's keyboard shortcuts**. Users must not have to learn new keys.
+
+**Other constraints:**
+- Undo must work at least as well as it does in Macabacus.
 - Settings are per user and can be exported.
-- Will be open-sourced later.
+- The project will be open-sourced later.
 
-**Out of v1, but the design should leave room for:** AutoColor, trace dependents, "evaluate functions & groups", custom style cycles, and cross-workbook navigation.
+**Platform:** **Windows desktop in v1.** Exact keys can't be bound in Office.js, which is the only way to run on the web (research/05). Mac and web are deferred.
+
+**Not in v1, but the design leaves room for:**
+- AutoColor
+- Pro Dependents (Ctrl+Shift+])
+- Evaluate functions & groups
+- Custom style cycles
+- The Mac version
 
 ## 2. RALPLAN-DR summary
 
 **Principles**
-1. The keyboard comes first. Every feature can be used without the mouse.
-2. Never break the user's undo.
-3. One codebase for every platform, unless a measured blocker forces otherwise.
-4. Keep logic separate from Excel. Cycle and precedent logic is pure TypeScript that can be unit-tested without Excel.
-5. Configuration is data. Cycles, palettes and keymaps are JSON that users can export and share.
+1. Macabacus muscle memory is the spec: the same keys, and behavior as close to Macabacus as possible.
+2. Never make undo worse than Macabacus does.
+3. Keep logic out of Excel code: cycle, undo and precedent logic lives in a pure C# library with unit tests.
+4. Configuration is data: cycles, palettes and the keymap are JSON that users can export and share.
+5. Keep installing easy: one per-user install, no admin rights, and a signed binary.
 
 **Decision drivers**
-1. Support all three platforms (R1).
-2. Undo still works (R3).
-3. Keyboard latency and reliability (R2).
+1. Exact keys
+2. Undo parity
+3. Precedent navigation parity, including into other workbooks
 
-**Options considered.** Full comparison in research/02.
+**Options considered.** Details are in ADR-0002.
 
 | Option | Verdict |
 |---|---|
-| **A. Office.js + TypeScript** | **Chosen.** The only option that meets drivers 1 and 2. Driver 3 is tested in the Phase 1 spike. |
-| B. Excel-DNA (C#) | Fallback or optional Windows companion. Best keys and cross-workbook support, but Windows only and clears undo. |
-| C–F. VSTO / C++ XLL / VBA / Python | Rejected: see research/02. |
+| **Excel-DNA (C#, .NET Framework 4.8)** | **Chosen**: meets all three drivers. |
+| Office.js | Rejected: it can't bind `[ ' ; , .`. It comes back only if spike K1 finds that named punctuation keys work. |
+| VBA .xlam | Only as a later Mac port. |
+| Excel-DNA↔Office.js bridge | A later experiment. |
+| VSTO / C++ | Rejected. |
 
 ## 3. Build vs fork
+XLerate is TypeScript/Office.js, so it can't be forked for this architecture. We use it as a **design reference only**:
+- range paging thresholds;
+- how it merges duplicate precedents;
+- its tree-state and keyboard model;
+- its cross-host color-matching lessons.
 
-*See [`research/04-xlerate-evaluation.md`](research/04-xlerate-evaluation.md).*
-
-XLerate (MIT, Office.js + TS, one maintainer) already has format cycles, auto-color and a trace dialog.
-
-**Recommendation: build fresh, and borrow MIT code with attribution.**
-
-- **Why not fork:**
-  - It carries a legacy VBA tree and a committed binary.
-  - Its UI layer is ES5 and non-strict.
-  - Its manifest declares no requirement sets.
-  - It has no color cycles.
-  - Its trace UI is a dialog, not a docked pane.
-- **Why not contribute upstream:** it has never merged an outside PR, and it works from a private spec.
-- **What we borrow** (keeping their MIT notice in `THIRD_PARTY_NOTICES.md`):
-  - the trace back end (precedent loading, range paging, scheduler, tree state);
-  - the formula-reference tokenizer;
-  - the cross-host color-matching helpers.
-
-  This removes an estimated one-third of the work in Phase 4.
+No code is copied, so no attribution is needed unless we later port a specific algorithm. See research/04.
 
 ## 4. Proposed design (no code yet)
 
-### 4.1 Module layout
-
+### 4.1 Solution layout
 ```
 src/
-  core/        pure TS, no Office.js: cycle engine, format/color matching,
-               formula tokenizing and reference extraction, precedent-tree model,
-               settings schema and migrations
-  excel/       thin Office.js adapters (read state, apply format, get precedents, select)
-  commands/    shortcut and ribbon handlers (Office.actions.associate)
-  taskpane/    trace pane and settings UI
-manifest/      XML add-in-only manifest + shortcuts.json
-test/          unit tests (core), adapter tests with office-addin-mock, fixture workbooks
-docs/
+  Toolkit.Core/      netstandard2.0, no Excel references: cycle engine, color and format
+                     matching, settings schema + migrations, undo snapshot model,
+                     formula reference extraction (XLParser or ClosedXML.Parser),
+                     precedent-tree model
+  Toolkit.AddIn/     net48 + Excel-DNA: AutoOpen/AutoClose (key registration),
+                     commands, COM adapters, ribbon XML, UndoManager,
+                     trace window, settings dialog
+  Toolkit.Tests/     xUnit tests for Core (CI runs them on windows-latest)
+installer/           per-user installer (no admin rights)
+test/fixtures/       fixture workbooks for manual end-to-end runs
 ```
 
-### 4.2 How the cycles work (features 1–3)
+### 4.2 Keymap (Macabacus defaults; users can remap them)
 
-**Cycle definition.**
-- `{ id, name, kind: "numberFormat" | "fontColor" | "fillColor", items: [...] }`.
-- Number-format items carry `{ name, code }`.
-- Color items carry `{ name, rgb | "none" | "automatic" }`.
-
-**Choosing the next item (proposed hybrid rule):**
-1. If the previous command was *this cycle on the same selection address*, move to the next position (position + 1, wrapping).
-2. Otherwise, read the active cell's current value. If it equals item *k*, apply item *k+1*. If it matches nothing, apply item 1.
-
-On a clean cell this behaves like Macabacus ("press 3× to reach item 3"). Like XLerate, it also continues from wherever a cell already is. **Check against Macabacus** (open-questions A3).
-
-**Other rules:**
-- **Mixed selections.** The active cell decides the "current" value. The result is applied to the whole selection.
-- **Undo.** One key press is one `Excel.run({ mergeUndoGroup: true })`, which is one undo step. If ExcelApi 1.20 is missing, the command still works, and a one-time notice says undo isn't available on this Excel build.
-  - Never save settings on the formatting path: `document.settings.saveAsync` breaks the undo chain (XLerate finding).
-- **Selection size.** Read only the active cell's format, and write the whole selection in one range assignment, never cell by cell.
-- **Number-format limit.** Catch the "invalid number format" error and show a clear message.
-- **Default contents.**
-  - Number formats use Macabacus-style alignment conventions (see research/01 §1), with `[$$]` for currency.
-  - Colors follow the blue/black/green/red convention.
-  - Fill includes a **No fill** slot.
-  - Final values will be taken from the installed Macabacus (open-questions A1–A2).
-
-**v1 cycles (proposal D5):**
-- Number, Percent, Multiple, Currency and Date. These are one engine with five sets of data.
-- One font cycle and one fill cycle.
-
-### 4.3 Default keymap (to be tested in the spike)
-
-The keys must fit Office.js's allowed set. Keys can be set per platform (`windows` / `mac` / `web`), and users can remap them at runtime (KeyboardShortcuts 1.1).
-
-| Action | Windows / Mac | Web | Notes |
+| Action | Key | `OnKey` string | v1? |
 |---|---|---|---|
-| Number cycle | Ctrl+Shift+1 | same | Same as Macabacus; overrides Excel's Number format (one-time conflict prompt) |
-| Date cycle | Ctrl+Shift+2 | same | Same as Macabacus |
-| Currency cycle | Ctrl+Shift+4 | same | Same as Macabacus |
-| Percent cycle | Ctrl+Shift+5 | same | Same as Macabacus |
-| Multiple cycle | Ctrl+Shift+8 | same | Same as Macabacus |
-| Font color cycle | Ctrl+Shift+C *(candidate)* | Ctrl+Alt+Shift+C | Macabacus's Ctrl+' isn't allowed. The web variant avoids the browser DevTools shortcut. |
-| Fill color cycle | Ctrl+Shift+K | same *(verify)* | Same as Macabacus |
-| Trace precedents | Ctrl+Shift+P *(candidate)* | Ctrl+Alt+Shift+P | Macabacus's Ctrl+Shift+[ isn't allowed. The web variant avoids Edge InPrivate / Firefox private-window shortcuts. |
-| Return to audited cell | TBD in spike | TBD | |
+| General Number cycle | Ctrl+Shift+1 | `^+1` | ✅ |
+| Date cycle | Ctrl+Shift+2 | `^+2` | ✅ |
+| Local Currency cycle | Ctrl+Shift+4 | `^+4` | ✅ |
+| Percent cycle | Ctrl+Shift+5 | `^+5` | ✅ |
+| Multiple cycle | Ctrl+Shift+8 | `^+8` | ✅ |
+| Font Color cycle | Ctrl+' | `^'` | ✅ |
+| Fill Color cycle | Ctrl+Shift+K | `^+k` | ✅ |
+| Pro Precedents | Ctrl+Shift+[ | `^+{[}` (also register `^{{}` as a hedge) | ✅ |
+| Last Audited Cell | Ctrl+Shift+\ [to confirm] | `^+\` / `^|` | ✅ |
+| Blue-Black toggle | Ctrl+; | `^;` | stretch |
+| Increase / Decrease decimals | Ctrl+, / Ctrl+. | `^,` / `^.` | stretch |
+| Undo / Redo (formatting stack) | Ctrl+Z / Ctrl+Y | `^z` / `^y` | ✅ (see §4.4) |
+| Pro Dependents, Show All arrows | Ctrl+Shift+], Ctrl+Alt+[ ] | … | v2 |
 
-**Mac.** Cmd+Shift+3/4/5 are macOS screenshot keys, so the Mac number cycles use **Ctrl**, not Cmd (verify).
+- **Registration.** Keys are registered in `AutoOpen` and cleared in `AutoClose`.
+- **"Override" command.** Re-registers every key, as Macabacus's Override button does, for when another add-in has taken them.
+- **Coexistence.** If Macabacus is also loaded, the add-in that registered a key last owns it.
 
-### 4.4 Smart trace precedents (feature 4, v1)
+### 4.3 Cycles (features 1–3)
+- **Definition:** `{ id, name, kind: numberFormat | fontColor | fillColor, items[] }`.
+- **Choosing the next item (hybrid rule):**
+  1. If the previous command was *this cycle on the same selection address*, move to the next position.
+  2. Otherwise, match the active cell's current value against the list. If it equals item *k*, apply item *k+1*; if nothing matches, apply item 1.
+  3. The list wraps around from the last item to the first. This must be checked against the installed Macabacus (open-questions A3).
+- **Applying a format.** Read only the active cell. Write to the whole selection in one COM call each:
+  - `Selection.NumberFormat = code`
+  - `Font.Color`
+  - `Interior.Color`, or `Interior.Pattern = xlNone` for "No fill"
+- **Default contents.** Macabacus-style codes (research/01 §1), for example `_(#,##0_)_%;(#,##0)_%;_("–"_)_%;_(@_)_%`. Final values will be taken from the installed Macabacus (open-questions A1–A2).
+- **Too many number formats.** Excel's "too many number formats" error is caught and shown as a clear message.
 
-**Invoking it.**
-- A shortcut or ribbon button on the active cell opens the task pane.
-- If the cell has no formula, show a message instead.
+### 4.4 Undo (Macabacus parity or better)
+- **Preferred approach, if spike K2 passes:** apply formats through `CommandBars.ExecuteMso` built-in commands, so Excel's native undo stack survives.
+- **Default approach: our own `UndoManager`.**
+  - **Snapshot first.** Before each change, record the number format, font color and fill of the affected cells.
+    - Capture is capped at a configurable number of cells, default 10,000. Macabacus has the same kind of setting.
+    - Storage is run-length compressed for uniform ranges.
+  - **Ctrl+Z / Ctrl+Y are rebound** to the UndoManager.
+  - **Ordering rule.** Every action of ours wipes Excel's native undo stack. So if Excel's own undo is available, anything on it must be newer than our last action.
+    - If native undo is available (`GetEnabledMso("Undo")`), pass Ctrl+Z through to `Application.Undo`.
+    - Otherwise, pop our own stack.
+    - This keeps the user's typing and our formatting in the correct order.
+  - **Invalidation.** Clear our stack when the workbook is closed. Also clear it when a structural change is detected (rows or columns inserted or deleted, found via the `SheetChange` target shape), because the stored addresses would be wrong.
+  - **Ribbon.** A Quick Access Toolbar undo button is optional.
 
-**Pane layout.**
-- Header: the audited cell's address and its formula.
-- Tree rows: the reference as written, the resolved address, the value, and an ƒ badge if that precedent is itself a formula.
+### 4.5 Smart trace precedents (feature 4, v1)
+- **Invoke.** Ctrl+Shift+[ opens a **modeless window owned by Excel** (WPF, or WinForms if K4 finds problems with keyboard focus).
+- **Layout.**
+  - Header: the formula, with references color-coded.
+  - Tree with columns **Precedent | Address | Value**.
+- **How precedents are found.** Parse `Range.Formula` (invariant A1) with XLParser, then resolve each reference:
+  - **A1 references** → `Range`
+  - **Names** → `Names(...).RefersToRange`
+  - **Table references** → `ListObjects`
+  - **External `[Book]Sheet!A1`:**
+    - If the workbook is open, resolve and **navigate into it**.
+    - If it's closed, list it. An "Open linked workbooks" option opens it (Macabacus parity).
+  - **Check:** compare with `Range.DirectPrecedents` for references on the same sheet.
+- **Keys.**
+  - **Up/Down:** `Application.Goto` the node's range (across sheets and workbooks); focus returns to the window.
+  - **Right:** expand the node; its children are loaded only then.
+  - **Left:** collapse, or go to the parent.
+  - **Enter / OK:** stay on the current cell.
+  - **Esc / Cancel:** return to the audited cell. Confirm this matches Macabacus (open-questions A7).
+  - **F2:** edit the formula (stretch).
+- **History.** Last Audited Cell keeps a stack of up to 20 audits.
+- **Edge cases.**
+  - Ranges over 50 cells are shown as one node; expanding it shows pages of 100.
+  - Circular references are marked ↻.
+  - Hidden sheets, rows and columns get a badge. "Unhide rows & columns" is a stretch.
+  - INDIRECT/OFFSET are labelled "dynamic"; v2 will evaluate their arguments.
 
-**Where the data comes from.**
-- The **formula parser** gives the order and labels. Rows are listed in the order they're written, and named ranges and table references keep their names.
-- **`getDirectPrecedents()`** gives the addresses across sheets and validates the parse.
-- Children load when a node is expanded (lazy loading).
-
-**Keys.**
-
-| Key | Action |
-|---|---|
-| Up / Down | Select the node's range in Excel (switching sheet if needed) |
-| Right | Expand |
-| Left | Collapse, or go to the parent |
-| Enter | Close and stay on the current cell |
-| Esc | Close and return to the audited cell |
-| "Return to audited cell" command | Walks back through a history of up to 20 audits |
-
-**Edge cases.**
-
-| Case | v1 behavior |
-|---|---|
-| Multi-cell range | One node, e.g. "A1:A100 (100 cells)". Expands in pages of 50. |
-| Circular path | Marked ↻ and can't be expanded |
-| External-workbook reference | Listed with a 🔗 badge; **can't be navigated to** (Office.js limit) |
-| Hidden sheet or rows | Marked with a badge; selecting it doesn't throw an error |
-| INDIRECT / OFFSET | Whatever `getDirectPrecedents` returns, labelled "dynamic" |
-
-**Not in v1:** dependents, evaluating functions and groups, arrows, cross-workbook navigation.
-
-### 4.5 Settings
-- Stored per user in the add-in's storage (`OfficeRuntime.storage` or `localStorage`; chosen in spike S7).
-- Versioned JSON schema.
-- **Export and import JSON** in the settings pane. This is also how users share settings, as Macabacus users do.
-- A settings UI to edit, reorder and preview cycle items.
+### 4.6 Settings
+- **Storage.** `%AppData%\<ProductName>\settings.json`, with a versioned schema.
+- **Settings dialog.** Edit, reorder and preview cycles, remap keys, and set the undo cap. Reset, export and import are included.
 
 ## 5. Phases and acceptance criteria
 
 ### Phase 0 — Decisions (now)
-- D1–D7 in `open-questions.md` are resolved.
-- The Macabacus checks (A1–A11) are captured.
+- Resolve D1–D8 in `open-questions.md`.
+- Capture the Macabacus observations A1–A11.
+- **Exit:** ADR-0002 approved in principle; license chosen; copyright holder decided.
 
-**Exit:** ADR-0001 is accepted, a LICENSE is chosen, and there's a build-vs-fork decision.
+### Phase 1 — Decision spikes (throwaway code, needs owner approval)
 
-### Phase 1 — Spike (throwaway `spike/*` branch)
+**Before starting:** disable Macabacus, or change its keys, on the test machine.
 
-Each test must pass on Windows desktop (M365 ≥ 2509), Mac (≥ 16.100) and Excel on the web, unless it says otherwise.
+| # | Test | Pass criterion | If it fails |
+|---|---|---|---|
+| K1 | Office.js named punctuation keys (`Ctrl+Shift+BracketLeft`, `Ctrl+Quote`, `Ctrl+Semicolon`) | The keys register and fire on Windows | Stay with ADR-0002. **If they work → reopen ADR-0001.** |
+| K2 | `ExecuteMso` formatting keeps native undo | Type a value → cycle via ExecuteMso → Ctrl+Z twice undoes both | Use our own UndoManager (§4.4) |
+| K3 | Excel-DNA binds every key in §4.2 | 100% fire. Over 30 presses on a selection of ≤ 1,000 cells, p95 key → format ≤ 50 ms | Try a thread keyboard hook |
+| K4 | Modeless trace window keeps keyboard focus through `Application.Goto` on another sheet and in another workbook | Up/Down stay in the window in both cases | WinForms instead of WPF, or re-activate the window after each Goto |
 
-| # | Test | Pass criterion |
-|---|---|---|
-| S1 | Shortcut → format applied latency | Over 30 presses, p95 ≤ 150 ms on Windows desktop and ≤ 300 ms on the web (measured with `performance.now` in the handler plus a screen-recording check) |
-| S2 | Undo | 3 cycle presses, then 3× Ctrl+Z, restore the original format exactly |
-| S3 | Conflict prompt on Ctrl+Shift+1 | Appears once, and the choice persists across an Excel restart |
-| S4 | Cold start | A shortcut works on the first press after opening a workbook, without opening the pane first (`setStartupBehavior(load)`) |
-| S5 | **Pane focus** | Test **both a task pane and an Office dialog** (XLerate chose a dialog). After the trace shortcut, Up/Down must reach the trace UI, not the grid, and `range.select()` must leave focus in the trace UI. Pick whichever passes on all platforms; prefer the task pane if both do. |
-| S6 | Precedent correctness | Fixture workbook: cross-sheet, names, tables, whole columns, INDIRECT, external refs. Every expected precedent is found, or a documented limitation explains why not. |
-| S7 | Settings persistence | Survives an Excel restart on each platform |
-
-**Exit:** a go/no-go note in `docs/spike-results.md`. **If S1 or S5 fail on Windows, reopen ADR-0001** (consider an Excel-DNA companion).
+**Exit:** a go/no-go note in `docs/spike-results.md`.
 
 ### Phase 2 — Scaffold
+- **Contents:**
+  - `.sln` with Core / AddIn / Tests projects.
+  - GitHub Actions on `windows-latest`: build, test, and a packed `.xll` as an artifact.
+  - `LICENSE`, `CONTRIBUTING.md` (DCO sign-off), `THIRD_PARTY_NOTICES.md` (Excel-DNA zlib, XLParser MPL-2.0).
+  - A dependency license check that fails the build on GPL/AGPL.
+- **Exit:**
+  - CI passes.
+  - The `.xll` loads in Excel and shows its ribbon tab.
+  - One placeholder key fires.
 
-**Deliverables:**
-- TypeScript in strict mode, ESLint, and Vitest.
-- GitHub Actions (lint, typecheck, test, build).
-- GitHub Pages hosting.
-- XML manifest and `shortcuts.json`.
-- `LICENSE`, `CONTRIBUTING.md` (DCO), and a license check that fails the build on GPL or AGPL dependencies.
+### Phase 3 — Cycles and undo (features 1–3)
+- **Exit criteria:**
+  - xUnit covers the cycle engine: wrap-around, the hybrid rule, mixed selections, color normalization and "No fill". Line coverage of `Toolkit.Core` is ≥ 90%.
+  - All 7 v1 cycles fire on their Macabacus keys and meet the K3 latency target.
+  - **Undo scenarios pass:**
+    - (a) cycle ×3 then Ctrl+Z ×3 restores the original exactly;
+    - (b) type → cycle → type → Ctrl+Z ×3 undoes them in reverse order;
+    - (c) Ctrl+Y re-applies;
+    - (d) inserting a row clears our stack without corrupting anything.
+  - The settings dialog can edit, reorder, preview, reset, import and export. Export → import gives identical JSON.
 
-**Exit:**
-- CI passes on an empty feature set.
-- The add-in sideloads on all three platforms and shows its ribbon tab.
-
-### Phase 3 — Features 1–3 (cycles)
-
-**Exit:**
-- Unit tests cover the cycle engine: wrap-around, the hybrid next-item rule, mixed selections and color normalization. `core/` has ≥ 90% line coverage.
-- Each of the 7 v1 cycles passes S1 and S2 on all three platforms.
-- The settings pane can edit, reorder, preview, reset, export and import, and an export → import round trip gives identical JSON.
-- Hitting the number-format limit produces a clear message rather than a silent failure.
-
-### Phase 4 — Feature 4 (trace precedents v1)
-
-**Exit:**
-- On the fixture workbook, every case in §4.4 behaves as specified.
-- Expanding a node takes ≤ 2 `context.sync()` calls.
-- A formula with ≤ 20 references renders in ≤ 500 ms on Windows desktop.
-- Unit tests cover reference extraction and tree-model logic.
+### Phase 4 — Trace precedents (feature 4)
+- **Exit criteria:**
+  - On the fixture workbook, every §4.5 case behaves as specified: cross-sheet, names, tables, open and closed external workbooks, a range over 50 cells, a circular reference, a hidden sheet, INDIRECT.
+  - A formula with ≤ 20 references opens in ≤ 300 ms.
+  - Up/Down navigation takes ≤ 100 ms per step.
+  - Last Audited Cell returns correctly through 3 levels of history.
 
 ### Phase 5 — Release
-
-**Exit:**
-- The README has install and sideload instructions for each platform.
-- A manual test script has been run and recorded on all three platforms.
-- The repo is made public, with a v0.1.0 tag.
-- Optionally, a Marketplace submission.
+- **Contents:**
+  - A per-user installer and Authenticode signing.
+  - Antivirus check: VirusTotal shows 0 detections from major engines.
+  - README with install, the Unblock fallback, and Macabacus coexistence notes.
+  - A manual test run recorded on Microsoft 365 Current Channel and Office LTSC 2024.
+- **Exit:** the repo is made public and v0.1.0 is released.
 
 ## 6. Risks and mitigations
 
 | Risk | Likelihood / impact | Mitigation |
 |---|---|---|
-| Office.js shortcut latency feels sluggish next to Macabacus | Medium / High | Spike S1 with hard thresholds. Keep cycle state in memory to avoid reads. Fallback: Excel-DNA companion (ADR-0001). |
-| Task pane doesn't take keyboard focus, so arrow keys move the grid instead | Medium / High | Spike S5 first. Fallback: an in-pane "click to focus" and explicit keys in the pane. |
-| Users miss Macabacus keys (Ctrl+', Ctrl+Shift+[) | High / Medium | Document the mapping, let users remap in-app, and explain the platform limit in the README. |
-| Enterprise users on LTSC or perpetual Office have no add-in undo | Medium / Medium | Detect ExcelApi 1.20, show a one-time notice, and document supported builds. |
-| Can't navigate into other workbooks | Certain / Low–Medium | List them with a badge. Revisit with an Excel-DNA companion if users demand it. |
-| Sideloading friction before Marketplace listing | High / Medium | Write clear per-platform instructions, and plan a Marketplace submission for v0.1. |
-| Clash with Macabacus/FactSet installed alongside | Medium / Low | Office's conflict prompt resolves it per user. Document it. |
+| Keys stolen by other add-ins (CapIQ re-binds periodically; Macabacus if installed alongside) | Medium / High | "Override" command, and re-registering keys on `WorkbookActivate`. Optional keyboard hook in v2. |
+| Custom undo ordering or corruption bugs | Medium / High | Pure `UndoManager` in Core with thorough unit tests, the §4.4 ordering rule, and clearing the stack on structural changes. |
+| AltGr keyboard layouts have no Ctrl+[ | Low for US/UK users / Medium | Keys can be remapped. The keyboard hook (virtual-key codes) is a v2 option. |
+| WPF keyboard focus problems inside Excel | Medium / Medium | Spike K4, with a WinForms fallback. |
+| Mark-of-the-Web, SmartScreen and antivirus friction | High / Medium | Per-user installer, signing, and VirusTotal checks in the release checklist. |
+| Mac and web users left out | Certain / Low for now | JSON settings are portable, so a VBA (Mac) or Office.js (web) port can come later. Recorded as a follow-up. |
+| .NET runtime conflicts with other add-ins | Low (net48) / High | Target .NET Framework 4.8, not .NET 6+. |
 
 ## 7. Verification
-- **Unit:** Vitest on `core/` (pure logic), in CI.
-- **Adapter:** `office-addin-mock` for `excel/` adapters, in CI.
-- **End-to-end:** a scripted manual test run on the three platforms using `test/fixtures/*.xlsx`, recorded in `docs/test-runs/`.
-- **Performance:** timing hooks in development builds, reporting p50/p95 per command (S1).
+- **Unit tests:** xUnit on `Toolkit.Core`, run in CI.
+- **Integration tests:** a manual script against the fixture workbooks, plus an optional Excel-DNA test harness running inside Excel (ExcelDna.Testing).
+- **Performance:** timing logs in debug builds (p50/p95 per command).
+- **Records:** each test run is saved in `docs/test-runs/`.
 
 ## 8. ADR
-See [`decisions/0001-platform-architecture.md`](decisions/0001-platform-architecture.md).
+See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md).
 
 ## Changelog
-- 2026-09-28: first draft from research.
-- 2026-09-28: added the build-vs-fork recommendation (research/04). Spike S5 now tests a dialog as well as a task pane. Added the undo/`saveAsync` and selection-size rules.
+- 2026-09-28: first draft (Office.js, ADR-0001).
+- 2026-09-28: build-vs-fork recommendation added (research/04).
+- 2026-09-28: **Pivot.** The owner made exact Macabacus keys a hard requirement. Now Excel-DNA, Windows first (ADR-0002, research/05). Spikes changed from S1–S7 to K1–K4. Undo design changed to Macabacus-parity.

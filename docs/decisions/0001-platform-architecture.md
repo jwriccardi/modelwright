@@ -1,6 +1,6 @@
 # ADR-0001 — Platform architecture: Office.js + TypeScript
 
-- **Status:** Proposed (2026-09-28). Will be accepted once the owner approves and the Phase 1 spike passes.
+- **Status:** **Superseded by [ADR-0002](0002-excel-dna-windows-first.md)** (2026-09-28). The owner made exact Macabacus keys a hard requirement, and Office.js can't bind `[ ' ; , .`. It can be reopened if spike K1 finds that named punctuation keys work.
 - **Context:** [research/02-architecture-options.md](../research/02-architecture-options.md)
 
 ## Decision

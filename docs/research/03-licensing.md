@@ -33,7 +33,7 @@
   - Don't use "Macabacus" (or FactSet, Arixcel and the like) in the product name, icon or marketing beyond factual comparisons such as "Macabacus-compatible shortcuts".
   - Don't copy their help text, icons or screenshots.
   - Reimplementing the same *functionality* and similar default keys is normal practice in this category: FactSet and Macabacus already share almost the same keymap.
-- **Third-party notices.** Generate `THIRD_PARTY_NOTICES.md` from npm dependencies in CI, for example with `license-checker`, and fail the build on GPL or AGPL dependencies.
+- **Third-party notices.** Keep `THIRD_PARTY_NOTICES.md` up to date. Under ADR-0002 that means NuGet dependencies: Excel-DNA (zlib) and XLParser (MPL-2.0, which is fine to consume unmodified from an MIT project). CI should fail the build on GPL or AGPL dependencies.
 - **Name.** `excel-modeling-toolkit` is a working name. Before going public, check for trademark or name collisions on npm, GitHub and Microsoft Marketplace.
 
 ## Status

@@ -8,6 +8,8 @@
 - Hosted on GitHub Pages and installed by sideloading.
 - One contributor (199 commits), 24 stars, and no outside PRs ever merged.
 
+> **Update (2026-09-28):** with the move to Excel-DNA (ADR-0002), XLerate's TypeScript can't be reused directly. It remains a **design reference** for paging thresholds, duplicate merging, the keyboard model and color-matching lessons.
+
 ## Findings
 
 ### Structure
