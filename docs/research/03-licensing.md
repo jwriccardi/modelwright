@@ -28,7 +28,7 @@
 
 ## Things to settle before publishing
 
-- **Copyright holder.** Either "John Riccardi" or "Pegasus Technology Group LLC". If the work is done on company time or equipment, the company may own it, so decide this deliberately and put the same name in `LICENSE`.
+- **Copyright holder: decided 2026-09-28, Pegasus Technology Group LLC.** `LICENSE` will read "Copyright (c) 2026 Pegasus Technology Group LLC".
 - **Trademarks and clean room.**
   - Don't use "Macabacus" (or FactSet, Arixcel and the like) in the product name, icon or marketing beyond factual comparisons such as "Macabacus-compatible shortcuts".
   - Don't copy their help text, icons or screenshots.
