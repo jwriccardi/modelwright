@@ -54,6 +54,17 @@
 
 **One possible cause.** On Windows, Ctrl+Alt is treated as AltGr. So Ctrl+Alt+punctuation may be turned into a character before Excel's `OnKey` sees it, and those keys might need the keyboard hook instead. The fact that Ctrl+Alt+Shift+, and . fired makes the picture mixed. **Retest** with the step-by-step list in the runbook addendum (below).
 
+## K3 retest (19:15)
+
+| Key | Result |
+|---|---|
+| Ctrl+Shift+8 (Multiple) | ✅ fired ×6, median ~1.4 ms (it just hadn't been pressed earlier) |
+| **Ctrl+Alt+[** (Show All Precedents) | ✅ fired |
+| **`Ctrl+Alt+\`** (Clear Arrows) | ✅ fired |
+| Ctrl+Alt+], Ctrl+Alt+', Ctrl+Alt+., Ctrl+Alt+=, Ctrl+Alt+-, Ctrl+Alt+Shift+[, Ctrl+Alt+Shift+', Alt+Shift+- | Not in the log. Waiting for the owner to confirm whether these were pressed. |
+
+So the AltGr theory is **disproved for Ctrl+Alt+[ and `Ctrl+Alt+\`**. Ctrl+Alt+punctuation *can* be bound through `OnKey`.
+
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
 - **Helper workbook.** The hidden helper workbook opened as "Book2", which confirms the startup side effect noted in the spike README.
