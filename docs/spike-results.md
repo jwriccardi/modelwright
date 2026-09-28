@@ -6,7 +6,7 @@
 |---|---|
 | A1 — Load the add-in | ✅ Passed. Loaded in 251 ms; the ribbon tab appeared. |
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
-| K2 — Native undo | Pending (runbook A3) |
+| K2 — Native undo | 🟡 Partly done (details below) |
 | K4 — Trace window focus | Pending (runbook A4) |
 | K1 — Office.js named keys | Pending (runbook Part B) |
 
@@ -72,6 +72,41 @@ So the AltGr theory is **disproved for Ctrl+Alt+[ and `Ctrl+Alt+\`**. Ctrl+Alt+p
 **Lessons for the product:**
 - Clear or time out status-bar feedback, so a stale message can't pass for a successful key press.
 - Add an in-product "key test" diagnostic that lists every binding and whether it last fired.
+
+
+## K2 details (19:26–19:33)
+
+**The probe.** It reads `GetEnabledMso("Undo")` before and after each action. The owner then pressed Ctrl+Z twice after typing `1` and `2`.
+
+| Key | Method | Undo enabled before → after | Owner's Ctrl+Z observation |
+|---|---|---|---|
+| F5 | COM `Font.Bold` (control) | T → **F** | as expected (wiped) |
+| F6 | `ExecuteMso("Bold")` directly | T → **T** | 1st Ctrl+Z undid the format*; **2nd did nothing** (the earlier typing was lost) |
+| F7 | `ExecuteMso("Bold")` via `QueueAsMacro` | T → **F** (flips at `deferred:afterExecute`) | wiped |
+| F8 | `ExecuteMso("PercentStyle")` | T → **T** | same as F6 |
+| F9 | Copy + COM `PasteSpecial(xlPasteFormats)` (rerun at 19:32) | T → **F** (flips at `afterPasteSpecial`) | Ctrl+Z did **not** remove the percent format (wiped) |
+| F10 | Copy + `ExecuteMso("PasteFormatting")` | T → **T** | same as F6. The `PasteFormats` idMso doesn't exist; `PasteFormatting` does. |
+| F11 | `xlcFormatNumber("0.0%")` (C API) | T → **T** | same as F6 |
+
+\*The owner's "second Ctrl+Z did nothing" implies the first one did something. Confirmation is pending.
+
+**What we can conclude so far:**
+- **Running any add-in command loses Excel's earlier undo history.**
+- **Built-in commands (`ExecuteMso`) and the C API (`xlcFormatNumber`) put our own change onto Excel's native stack as a normal entry.** So Ctrl+Z undoes it natively, with Excel's own Undo list and redo.
+- COM writes, including COM `PasteSpecial`, add nothing.
+- Deferring through `QueueAsMacro` breaks it: F7 is wiped while F6 is kept.
+
+**Still open: does it accumulate?** Do three presses give three undo levels?
+- If yes, native undo covers our actions *and* anything the user does afterwards. The only loss is history from before the user's first add-in keystroke.
+- **Test:** F6 three times, then Ctrl+Z three times.
+
+**Candidate routes if it accumulates:**
+
+| Format | Route | Caveat |
+|---|---|---|
+| Number formats | `xlcFormatNumber` | No clipboard involved. Cleanest. |
+| Font and fill RGB | copy from a pre-formatted cell in the hidden add-in workbook + `ExecuteMso("PasteFormatting")` | Overwrites the clipboard. It also pastes *all* formats unless the template cell copies the target's other properties. |
+| Font and fill | C API `xlcFormatFont` / `xlcPatterns` | These take **palette indexes (1–56), not RGB**. Untested. |
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
