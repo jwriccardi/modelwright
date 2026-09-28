@@ -24,6 +24,8 @@ No code has been written yet. Start here:
 | [docs/research/03-licensing.md](docs/research/03-licensing.md) | License options (MIT recommended) |
 | [docs/research/04-xlerate-evaluation.md](docs/research/04-xlerate-evaluation.md) | Existing open-source prior art: whether to fork or build fresh |
 | [docs/research/05-keys-and-undo.md](docs/research/05-keys-and-undo.md) | Which architectures can bind Macabacus's keys, and the options for undo |
+| [docs/research/06-macabacus-observed-config.md](docs/research/06-macabacus-observed-config.md) | The owner's Macabacus settings: cycles, colors and the full keymap |
+| [docs/research/07-macabacus-trace-in-spec.md](docs/research/07-macabacus-trace-in-spec.md) | How Macabacus's Trace In behaves, and what that means for our design |
 
 ## License
 

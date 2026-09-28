@@ -6,8 +6,8 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 
 **Formatting cycles**
 
-1. **Number cycle defaults.** Settings › Configure › Excel › Format › Numbers. Capture the list for each cycle (General, Percent, Multiple, Currency, Date, Binary) with its format codes. *→ Sets our default cycle contents.*
-2. **Font color cycle defaults.** Settings › … › Colors. Capture the RGB values in the Font Color Cycle, Fill Color Cycle and AutoColor scheme. *→ Sets our default palettes.*
+1. ◐ *General Number cycle captured (research/06). Still needed: Percent, Currency, Multiple, Date and Binary.* **Number cycle defaults.** Settings › Configure › Excel › Format › Numbers. Capture the list for each cycle (General, Percent, Multiple, Currency, Date, Binary) with its format codes. *→ Sets our default cycle contents.*
+2. ✅ *Captured (research/06).* **Font color cycle defaults.** Settings › … › Colors. Capture the RGB values in the Font Color Cycle, Fill Color Cycle and AutoColor scheme. *→ Sets our default palettes.*
 3. **What resets the cycle position?** Select a cell, press Ctrl+Shift+1 twice, then:
    - (a) move to another cell and press it again;
    - (b) come back to the first cell and press it again;
@@ -24,13 +24,13 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
    - Can the range node be expanded into its 10 cells?
    - Does moving with Up/Down switch sheets?
 7. **OK vs Cancel vs Esc.** Where does the cursor end up after each?
-8. **"Last Audited Cell."** Is Ctrl+Shift+\ the key? How deep is its history?
+8. ◐ *Key confirmed as Ctrl+Shift+\. History depth still open.* **"Last Audited Cell."** Is Ctrl+Shift+\ the key? How deep is its history?
 9. **Hard cases.** What does the dialog show for:
    - INDIRECT / OFFSET;
    - a reference to a closed external workbook;
    - a very large range (A1:A10000);
    - a cell on a hidden sheet?
-10. **Evaluate functions & groups (Ctrl+E).** A screenshot of a nested IF/SUM formula expanded this way.
+10. ✅ *Captured from the help PDF (research/07).* **Evaluate functions & groups (Ctrl+E).** A screenshot of a nested IF/SUM formula expanded this way.
 11. **Priorities.** Which of these do you use *every day*, and which could wait for v2?
 
 ## B. Decisions for the owner

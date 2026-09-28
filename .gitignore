@@ -12,3 +12,6 @@ coverage/
 Thumbs.db
 .vscode/*
 !.vscode/extensions.json
+
+# Third-party reference material (Macabacus screenshots, shortcut export) - local only, never publish
+reference/

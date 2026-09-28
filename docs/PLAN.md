@@ -93,7 +93,7 @@ test/fixtures/       fixture workbooks for manual end-to-end runs
 | Font Color cycle | Ctrl+' | `^'` | ✅ |
 | Fill Color cycle | Ctrl+Shift+K | `^+k` | ✅ |
 | Pro Precedents | Ctrl+Shift+[ | `^+{[}` (also register `^{{}` as a hedge) | ✅ |
-| Last Audited Cell | Ctrl+Shift+\ [to confirm] | `^+\` / `^|` | ✅ |
+| Last Audited Cell | Ctrl+Shift+\ (confirmed, research/06) | `^+\` / `^|` | ✅ |
 | Blue-Black toggle | Ctrl+; | `^;` | stretch |
 | Increase / Decrease decimals | Ctrl+, / Ctrl+. | `^,` / `^.` | stretch |
 | Undo / Redo (formatting stack) | Ctrl+Z / Ctrl+Y | `^z` / `^y` | ✅ (see §4.4) |
@@ -113,7 +113,11 @@ test/fixtures/       fixture workbooks for manual end-to-end runs
   - `Selection.NumberFormat = code`
   - `Font.Color`
   - `Interior.Color`, or `Interior.Pattern = xlNone` for "No fill"
-- **Default contents.** Macabacus-style codes (research/01 §1), for example `_(#,##0_)_%;(#,##0)_%;_("–"_)_%;_(@_)_%`. Final values will be taken from the installed Macabacus (open-questions A1–A2).
+- **Default contents.** Taken from the owner's installed Macabacus (research/06):
+  - The General Number cycle has 4 codes.
+  - Font: Blue → Green → Purple → Red → White → Black.
+  - Fill: (201,218,248) → (210,242,255) → (244,204,204) → (252,229,205) → Navy (28,69,135) → No fill.
+  - Percent, Currency, Multiple and Date lists are still to be captured.
 - **Too many number formats.** Excel's "too many number formats" error is caught and shown as a clear message.
 
 ### 4.4 Undo (Macabacus parity or better)
@@ -130,32 +134,62 @@ test/fixtures/       fixture workbooks for manual end-to-end runs
   - **Invalidation.** Clear our stack when the workbook is closed. Also clear it when a structural change is detected (rows or columns inserted or deleted, found via the `SheetChange` target shape), because the stored addresses would be wrong.
   - **Ribbon.** A Quick Access Toolbar undo button is optional.
 
-### 4.5 Smart trace precedents (feature 4, v1)
-- **Invoke.** Ctrl+Shift+[ opens a **modeless window owned by Excel** (WPF, or WinForms if K4 finds problems with keyboard focus).
+### 4.5 Smart trace precedents (feature 4, "Trace In")
+
+Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
+
+- **Invoke.** Ctrl+Shift+[ opens a modeless window owned by Excel, titled "Trace In". It remembers its position.
+- **Keyboard model (decided by spike K4):**
+  - **Preferred (variant C, likely how Macabacus does it):** the window **doesn't take focus**. Excel keeps focus, and a thread-level keyboard hook sends Up/Down/Left/Right/Enter/Esc/Ctrl+E to the tree. This is the only model that also supports F2 editing in Point mode with the dialog open.
+  - **Fallback:** the window takes focus (WPF or WinForms) and is re-activated after each Goto.
 - **Layout.**
-  - Header: the formula, with references color-coded.
-  - Tree with columns **Precedent | Address | Value**.
-- **How precedents are found.** Parse `Range.Formula` (invariant A1) with XLParser, then resolve each reference:
-  - **A1 references** → `Range`
-  - **Names** → `Names(...).RefersToRange`
-  - **Table references** → `ListObjects`
+  - Formula header with color-coded references and a wrap toggle.
+  - Tree with columns **Precedents | Argument | Value**.
+- **v1 tree ("classic" mode):** the root is the audited cell, with one child per reference in the order written. A reference can be:
+  - a cell or range;
+  - a name;
+  - a table reference;
+  - an external workbook reference.
+
+  Values come from `Value2` (the first cell for ranges, plus the count).
+- **v1.1 tree ("Evaluate functions & groups", Ctrl+E):** the nodes follow the formula's structure.
+  - Parenthesized groups are `(x)` nodes, and functions are `ƒx NAME(...)` nodes.
+  - A function's children are its arguments, labelled with Excel's parameter names from a **function signature table** (the top ~100 functions first).
+  - Each node's value comes from `Worksheet.Evaluate(subexpression)` in the audited cell's sheet context.
+  - A function that returns a reference (INDEX, OFFSET, INDIRECT, CHOOSE) is resolved to its target range, so you can navigate to it.
+- **How precedents are found.** Parse `Range.Formula` (invariant A1) with XLParser, which also produces the structure for v1.1. Then resolve each reference:
+  - **A1 references** → `Range`.
+  - **Names** → `Names(...).RefersToRange`.
+  - **Table references** → `ListObjects`. Unqualified `[Col]` is resolved via the table containing the audited cell. Macabacus can't do this, so it's a small improvement.
   - **External `[Book]Sheet!A1`:**
-    - If the workbook is open, resolve and **navigate into it**.
-    - If it's closed, list it. An "Open linked workbooks" option opens it (Macabacus parity).
+    - If the workbook is open, navigate into it.
+    - If it's closed, **try to open it**, as Macabacus does by default.
   - **Check:** compare with `Range.DirectPrecedents` for references on the same sheet.
 - **Keys.**
-  - **Up/Down:** `Application.Goto` the node's range (across sheets and workbooks); focus returns to the window.
-  - **Right:** expand the node; its children are loaded only then.
-  - **Left:** collapse, or go to the parent.
-  - **Enter / OK:** stay on the current cell.
-  - **Esc / Cancel:** return to the audited cell. Confirm this matches Macabacus (open-questions A7).
-  - **F2:** edit the formula (stretch).
-- **History.** Last Audited Cell keeps a stack of up to 20 audits.
+
+| Key | Action |
+|---|---|
+| Up / Down | `Application.Goto` the node's range |
+| Right | Expand one level (children load only then) |
+| Left | Go up a level or collapse |
+| Enter / OK | Stay on the current cell |
+| Esc / Cancel | Return to the audited cell (confirm, open-questions A7) |
+| F2 | Edit in Point mode with the dialog open (depends on variant C) |
+| Ctrl+E | Evaluate mode (v1.1) |
+| Ctrl+Arrows / Ctrl+Home / Ctrl+End / Shift+Arrows | Move, snap and resize the dialog |
+
+- **History.** Last Audited Cell (`Ctrl+Shift+\`) keeps a stack of up to 20 audits.
 - **Edge cases.**
   - Ranges over 50 cells are shown as one node; expanding it shows pages of 100.
   - Circular references are marked ↻.
-  - Hidden sheets, rows and columns get a badge. "Unhide rows & columns" is a stretch.
-  - INDIRECT/OFFSET are labelled "dynamic"; v2 will evaluate their arguments.
+  - Hidden sheets, rows and columns get a badge.
+  - Merged cells are handled: the node shows the merge area.
+- **v2:**
+  - Trace Out (Ctrl+Shift+], using Excel's own dependency data).
+  - Show All Precedents/Dependents (Ctrl+Alt+[ / ]).
+  - Clear Arrows (`Ctrl+Alt+\`).
+  - AutoTrace (≤ 20 cells).
+  - Highlight Navigated Cells, built as an overlay that **doesn't clear undo**, unlike Macabacus's version.
 
 ### 4.6 Settings
 - **Storage.** `%AppData%\<ProductName>\settings.json`, with a versioned schema.
@@ -177,7 +211,7 @@ test/fixtures/       fixture workbooks for manual end-to-end runs
 | K1 | Office.js named punctuation keys (`Ctrl+Shift+BracketLeft`, `Ctrl+Quote`, `Ctrl+Semicolon`) | The keys register and fire on Windows | Stay with ADR-0002. **If they work → reopen ADR-0001.** |
 | K2 | `ExecuteMso` formatting keeps native undo | Type a value → cycle via ExecuteMso → Ctrl+Z twice undoes both | Use our own UndoManager (§4.4) |
 | K3 | Excel-DNA binds every key in §4.2 | 100% fire. Over 30 presses on a selection of ≤ 1,000 cells, p95 key → format ≤ 50 ms | Try a thread keyboard hook |
-| K4 | Modeless trace window keeps keyboard focus through `Application.Goto` on another sheet and in another workbook | Up/Down stay in the window in both cases | WinForms instead of WPF, or re-activate the window after each Goto |
+| K4 | Trace window keyboard model: **A** WPF with focus, **B** WinForms with focus, **C** a window that doesn't take focus plus a thread keyboard hook (Macabacus-style) | Up/Down/Left/Right/Enter/Esc reach the tree through `Goto` to another sheet and to another workbook. For C, F2 also passes through to Excel. | Choose the best variant that passes; prefer C |
 
 **Exit:** a go/no-go note in `docs/spike-results.md`.
 
@@ -242,4 +276,6 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 ## Changelog
 - 2026-09-28: first draft (Office.js, ADR-0001).
 - 2026-09-28: build-vs-fork recommendation added (research/04).
+- 2026-09-28: Trace In spec from the Macabacus help PDF (research/07): the Argument column, Evaluate mode as v1.1, the focus/hook keyboard model, and the K4 variant C.
+- 2026-09-28: Added the owner's Macabacus config (research/06): confirmed default cycles, colors and the full 132-command keymap.
 - 2026-09-28: **Pivot.** The owner made exact Macabacus keys a hard requirement. Now Excel-DNA, Windows first (ADR-0002, research/05). Spikes changed from S1–S7 to K1–K4. Undo design changed to Macabacus-parity.
