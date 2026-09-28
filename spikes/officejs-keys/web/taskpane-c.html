@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+  <title>EMT K1 Single</title>
+  <link rel="stylesheet" href="taskpane-style.css" />
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+  <h1 id="addin-name">EMT K1 Single</h1>
+
+  <h2>Diagnostics</h2>
+  <dl>
+    <dt>Office.context.diagnostics</dt>
+    <dd id="diagnostics">(loading...)</dd>
+    <dt>Requirement sets</dt>
+    <dd id="requirement-sets">(loading...)</dd>
+  </dl>
+
+  <h2>Office.actions.getShortcuts()</h2>
+  <pre id="get-shortcuts">(loading...)</pre>
+
+  <h2>Office.actions.areShortcutsInUse(candidates)</h2>
+  <pre id="in-use">(loading...)</pre>
+
+  <h2>Office.actions.replaceShortcuts(candidates)</h2>
+  <pre id="replace-shortcuts">(loading...)</pre>
+
+  <h2>Errors</h2>
+  <div id="errors"></div>
+
+  <h2>Actions registered from shortcuts-c.json</h2>
+  <p><em>Note: this add-in exists purely as a control for whole-file rejection. It has only the
+  baseline control key plus a single named-key candidate (Ctrl+Shift+BracketLeft). If add-in A's
+  file (which mixes many candidates) fails to load any shortcuts, but this one-candidate file
+  loads fine, that isolates the failure to a specific bad entry rather than the whole file.</em></p>
+  <table class="actions">
+    <thead><tr><th>action id</th><th>key string</th></tr></thead>
+    <tbody id="actions-tbody"></tbody>
+  </table>
+
+  <h2>Fired log (press keys in the Excel grid to test)</h2>
+  <ul id="log"></ul>
+
+  <script src="taskpane-common.js"></script>
+  <script>
+    window.EMT_K1_CONFIG = {
+      name: "EMT K1 Single",
+      actions: [
+        { id: "ControlL", key: "Ctrl+Alt+Shift+L" },
+        { id: "CandBracketLeftShift", key: "Ctrl+Shift+BracketLeft" }
+      ],
+      inUseCheckKeys: [
+        "Ctrl+Shift+BracketLeft"
+      ],
+      replaceCandidates: [
+        { action: "CandBracketLeftShift", key: "Ctrl+Shift+BracketLeft" }
+      ]
+    };
+    window.emtK1Init();
+  </script>
+</body>
+</html>

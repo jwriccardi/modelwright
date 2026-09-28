@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+  <title>EMT K1 Literal Keys</title>
+  <link rel="stylesheet" href="taskpane-style.css" />
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+  <h1 id="addin-name">EMT K1 Literal Keys</h1>
+
+  <h2>Diagnostics</h2>
+  <dl>
+    <dt>Office.context.diagnostics</dt>
+    <dd id="diagnostics">(loading...)</dd>
+    <dt>Requirement sets</dt>
+    <dd id="requirement-sets">(loading...)</dd>
+  </dl>
+
+  <h2>Office.actions.getShortcuts()</h2>
+  <pre id="get-shortcuts">(loading...)</pre>
+
+  <h2>Office.actions.areShortcutsInUse(candidates)</h2>
+  <pre id="in-use">(loading...)</pre>
+
+  <h2>Office.actions.replaceShortcuts(candidates)</h2>
+  <pre id="replace-shortcuts">(loading...)</pre>
+
+  <h2>Errors</h2>
+  <div id="errors"></div>
+
+  <h2>Actions registered from shortcuts-b.json</h2>
+  <p><em>Note: shortcuts-b.json intentionally uses literal punctuation key strings, which the
+  published extended-manifest schema regex (<code>^[A-Za-z0-9-_+]+$</code>) does not allow. This
+  add-in exists to observe whether Office rejects the whole file, silently drops just the invalid
+  entries, or accepts them anyway.</em></p>
+  <table class="actions">
+    <thead><tr><th>action id</th><th>key string</th></tr></thead>
+    <tbody id="actions-tbody"></tbody>
+  </table>
+
+  <h2>Fired log (press keys in the Excel grid to test)</h2>
+  <ul id="log"></ul>
+
+  <script src="taskpane-common.js"></script>
+  <script>
+    window.EMT_K1_CONFIG = {
+      name: "EMT K1 Literal Keys",
+      actions: [
+        { id: "ControlJ", key: "Ctrl+Alt+Shift+J" },
+        { id: "LitShiftBracketLeft", key: "Ctrl+Shift+[" },
+        { id: "LitBracketLeft", key: "Ctrl+[" },
+        { id: "LitQuote", key: "Ctrl+'" },
+        { id: "LitSemicolon", key: "Ctrl+;" },
+        { id: "LitComma", key: "Ctrl+," },
+        { id: "LitPeriod", key: "Ctrl+." }
+      ],
+      inUseCheckKeys: [
+        "Ctrl+Shift+[",
+        "Ctrl+[",
+        "Ctrl+'",
+        "Ctrl+;",
+        "Ctrl+,",
+        "Ctrl+."
+      ],
+      replaceCandidates: [
+        { action: "LitShiftBracketLeft", key: "Ctrl+Shift+[" },
+        { action: "LitSemicolon", key: "Ctrl+;" }
+      ]
+    };
+    window.emtK1Init();
+  </script>
+</body>
+</html>

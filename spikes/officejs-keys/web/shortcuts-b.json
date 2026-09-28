@@ -1,0 +1,21 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/office-js/extended-manifest.schema.json",
+  "actions": [
+    { "id": "ControlJ", "type": "ExecuteFunction", "name": "Control: Ctrl+Alt+Shift+J (baseline, should work)" },
+    { "id": "LitShiftBracketLeft", "type": "ExecuteFunction", "name": "Literal: Ctrl+Shift+[" },
+    { "id": "LitBracketLeft", "type": "ExecuteFunction", "name": "Literal: Ctrl+[" },
+    { "id": "LitQuote", "type": "ExecuteFunction", "name": "Literal: Ctrl+'" },
+    { "id": "LitSemicolon", "type": "ExecuteFunction", "name": "Literal: Ctrl+;" },
+    { "id": "LitComma", "type": "ExecuteFunction", "name": "Literal: Ctrl+," },
+    { "id": "LitPeriod", "type": "ExecuteFunction", "name": "Literal: Ctrl+." }
+  ],
+  "shortcuts": [
+    { "action": "ControlJ", "key": { "default": "Ctrl+Alt+Shift+J" } },
+    { "action": "LitShiftBracketLeft", "key": { "default": "Ctrl+Shift+[" } },
+    { "action": "LitBracketLeft", "key": { "default": "Ctrl+[" } },
+    { "action": "LitQuote", "key": { "default": "Ctrl+'" } },
+    { "action": "LitSemicolon", "key": { "default": "Ctrl+;" } },
+    { "action": "LitComma", "key": { "default": "Ctrl+," } },
+    { "action": "LitPeriod", "key": { "default": "Ctrl+." } }
+  ]
+}
