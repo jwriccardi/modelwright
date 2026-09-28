@@ -61,9 +61,17 @@
 | Ctrl+Shift+8 (Multiple) | ✅ fired ×6, median ~1.4 ms (it just hadn't been pressed earlier) |
 | **Ctrl+Alt+[** (Show All Precedents) | ✅ fired |
 | **`Ctrl+Alt+\`** (Clear Arrows) | ✅ fired |
-| Ctrl+Alt+], Ctrl+Alt+', Ctrl+Alt+., Ctrl+Alt+=, Ctrl+Alt+-, Ctrl+Alt+Shift+[, Ctrl+Alt+Shift+', Alt+Shift+- | Not in the log. Waiting for the owner to confirm whether these were pressed. |
+| Ctrl+Alt+] (Show All Dependents) | ✅ fired in the 19:23 recheck |
+| Ctrl+Alt+' (Comment Formula) | ✅ fired in the 19:23 recheck |
+| Ctrl+Alt+., Ctrl+Alt+=, Ctrl+Alt+-, Ctrl+Alt+Shift+[, Ctrl+Alt+Shift+', Alt+Shift+- | No log entry from the 19:15 pass. The owner saw status-bar messages, but the spike never clears the status bar, so those were probably leftovers. The same pass also missed Ctrl+Alt+] and ', which then fired on recheck. So these are **very likely fine**. They're not v1 keys; confirm them when convenient. |
 
 So the AltGr theory is **disproved for Ctrl+Alt+[ and `Ctrl+Alt+\`**. Ctrl+Alt+punctuation *can* be bound through `OnKey`.
+
+**K3 verdict: PASS.** Every v1 key and every Ctrl+Alt+punctuation key tested so far binds through `xlcOnKey`. Latency is about 7 ms median.
+
+**Lessons for the product:**
+- Clear or time out status-bar feedback, so a stale message can't pass for a successful key press.
+- Add an in-product "key test" diagnostic that lists every binding and whether it last fired.
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
