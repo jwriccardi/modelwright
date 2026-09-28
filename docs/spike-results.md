@@ -6,7 +6,7 @@
 |---|---|
 | A1 — Load the add-in | ✅ Passed. Loaded in 251 ms; the ribbon tab appeared. |
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
-| K2 — Native undo | 🟡 Partly done (details below) |
+| K2 — Native undo | ✅ **Mostly passed.** Built-in commands give native multi-level undo for our actions. Two items remain: a volatile-cell control test, and color routes. |
 | K4 — Trace window focus | Pending (runbook A4) |
 | K1 — Office.js named keys | Pending (runbook Part B) |
 
@@ -96,7 +96,13 @@ So the AltGr theory is **disproved for Ctrl+Alt+[ and `Ctrl+Alt+\`**. Ctrl+Alt+p
 - COM writes, including COM `PasteSpecial`, add nothing.
 - Deferring through `QueueAsMacro` breaks it: F7 is wiped while F6 is kept.
 
-**Still open: does it accumulate?** Do three presses give three undo levels?
+**Accumulation test (19:45–19:46): ✅ it accumulates.**
+- **On a hard-coded cell:** F6 (built-in Bold) ×3 toggled bold three times, and **Ctrl+Z ×3 undid all three, one step at a time**. That is native multi-level undo for our own actions, with no custom undo stack.
+- **On a `=RAND()*1000000` cell:** F6 ×3 toggled bold. But the **first Ctrl+Z unbolded and recalculated, and after that nothing more could be undone.**
+  - The add-in logged nothing during the undo, and it has no calculation event handlers.
+  - The control test (native Ctrl+B ×3, then Ctrl+Z ×3 on the same cell) is pending. It will show whether this is native Excel behavior with volatile functions, or something the add-in's presence causes.
+
+*Earlier question, kept for the record:* do three presses give three undo levels?
 - If yes, native undo covers our actions *and* anything the user does afterwards. The only loss is history from before the user's first add-in keystroke.
 - **Test:** F6 three times, then Ctrl+Z three times.
 
