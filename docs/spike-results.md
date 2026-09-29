@@ -131,7 +131,7 @@ Excel was on Automatic calculation, with `=RAND()` present in the workbook.
 |---|---|---|
 | K2.8 | **Thread keyboard hook** (Ctrl+Alt+Shift+Z) → `BeginInvoke` to a hidden WinForms control → `ExecuteMso("Bold")` | ✅ **Bold ×3, then Ctrl+Z ×3: all three undone** |
 | K2.10 | Ribbon callback runs `ExecuteMso("Bold")` directly (no `QueueAsMacro`) | ✅ **all three undone** |
-| K2.9 | Hook → copy the hidden template cell (0.0%) → `ExecuteMso("PasteFormatting")` | ✅ Typed `1`, `2`, applied the format, Ctrl+Z ×2: **the 1st undid our format change, the 2nd undid the typing of "2"**. So the **earlier history is kept.** (The owner described the 1st undo as "removed the bold"; which formatting was visible is being clarified.) |
+| K2.9 | Hook → copy the hidden template cell (0.0%) → `ExecuteMso("PasteFormatting")` | ✅ Typed `1`, `2`, applied the format, Ctrl+Z ×2: **the 1st undid our format change, the 2nd undid the typing of "2"**. So the **earlier history is kept.** **Confirmed on rerun (22:02–22:04, build K4b): the 1st Ctrl+Z removed the percent format, the 2nd removed the "2".** K2.8 and K2.10 also reproduced: bold ×3 without recalculation, then Ctrl+Z ×3 all toggle, and each undo recalculates. That recalculation is normal Excel behavior; the native Ctrl+B control does the same. |
 
 **Conclusion.**
 - **Macro context is what breaks undo.** Built-in commands dispatched from Excel's normal message loop are recorded exactly like user actions: multi-level, and no history lost, even with volatile formulas.
