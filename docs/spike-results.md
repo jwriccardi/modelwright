@@ -200,7 +200,9 @@ Excel was on Automatic calculation, with `=RAND()` present in the workbook.
 **Decision.**
 - **Variant C is the target design for Trace In:** Macabacus's own model, and the only one that allows F2 editing in Point mode with the window open.
 - **Variant B is the fallback**, if the hook proves fragile alongside other add-ins (Macabacus documents conflicts with Workshare and Anaplan).
-- **The UI toolkit is WinForms**, because WPF failed on Excel's thread. Alternatively, WPF on its own STA thread; revisit only if WinForms styling is inadequate.
+- **UI toolkit:** variant C's window *is* WPF, and it works, because its keys come from the hook rather than from WPF input. **WPF is fine for rendering; only WPF keyboard focus is unreliable on Excel's thread.** So:
+  - C can use WPF (richer tree UI) or WinForms.
+  - Fallback B must use WinForms.
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
