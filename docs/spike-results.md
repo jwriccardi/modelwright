@@ -8,7 +8,7 @@
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
 | K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. **K2c:** any COM write wipes the history, so arbitrary formats get Macabacus parity at best with Excel-DNA alone. A hybrid with Office.js (K2d) could beat it. |
 | K4 — Trace window focus | ✅ **Passed with variants B (WinForms, focused) and C (hook, Excel keeps focus)**, including cross-workbook navigation. Variant A (WPF) is rejected. The F2 check on C is pending. |
-| K1 — Office.js named keys | Pending (runbook Part B) |
+| K1 — Office.js named keys | 🟡 Run 1: **no shortcuts registered at all**, not even the controls. Retest (K1b) isolates whether invalid keys cause the whole file to be rejected. |
 
 ## K3 details
 
@@ -203,6 +203,26 @@ Excel was on Automatic calculation, with `=RAND()` present in the workbook.
 - **UI toolkit:** variant C's window *is* WPF, and it works, because its keys come from the hook rather than from WPF input. **WPF is fine for rendering; only WPF keyboard focus is unreliable on Excel's thread.** So:
   - C can use WPF (richer tree UI) or WinForms.
   - Fallback B must use WinForms.
+
+
+## K1, run 1 (22:33, Office.js, Excel 16.0.20326.20158, PC)
+
+All three add-ins loaded:
+- `SharedRuntime 1.1 = true`
+- `KeyboardShortcuts 1.1 = true`
+- actions associated
+
+**But `Office.actions.getShortcuts()` returned `{}` for every add-in, and no key fired, not even the control keys** (Ctrl+Alt+Shift+L/K/J, Ctrl+Alt+Up).
+
+`areShortcutsInUse` and `replaceShortcuts` failed with "invalid format" for every call. That's inconclusive: the calls referenced actions Office had never registered, and batches mixed invalid strings.
+
+**The test-design flaw:** even the "Single" file contained one candidate (`Ctrl+Shift+BracketLeft`). So "one invalid key rejects the whole file" and "the file never loaded" couldn't be told apart.
+
+**K1b retest:**
+- "Single" now serves a **control-only** file (`shortcuts-c2.json`) and the manifest version is bumped (1.0.0.1).
+- Every key string gets its own `areShortcutsInUse` check.
+- The *registered* control action is re-keyed with `replaceShortcuts` to each candidate. `Ctrl+Alt+Shift+M` is the positive control. Afterwards everything is reverted.
+- The server logs every file Office fetches.
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.

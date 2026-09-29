@@ -5,7 +5,7 @@
            xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
            xsi:type="TaskPaneApp">
   <Id>181291ff-36c5-47e3-8980-2c68d40d950a</Id>
-  <Version>1.0.0.0</Version>
+  <Version>1.0.0.1</Version>
   <ProviderName>EMT Spike K1</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="EMT K1 Single"/>
@@ -80,7 +80,7 @@
       </bt:Images>
       <bt:Urls>
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3100/taskpane-c.html"/>
-        <bt:Url id="Shortcuts.Url" DefaultValue="https://localhost:3100/shortcuts-c.json"/>
+        <bt:Url id="Shortcuts.Url" DefaultValue="https://localhost:3100/shortcuts-c2.json"/>
         <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://localhost:3100"/>
       </bt:Urls>
       <bt:ShortStrings>
@@ -94,5 +94,5 @@
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>
-  <ExtendedOverrides Url="https://localhost:3100/shortcuts-c.json"></ExtendedOverrides>
+  <ExtendedOverrides Url="https://localhost:3100/shortcuts-c2.json"></ExtendedOverrides>
 </OfficeApp>

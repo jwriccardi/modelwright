@@ -74,6 +74,10 @@ const server = https.createServer(options, (req, res) => {
     });
     return;
   }
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.appendFileSync(LOG_FILE, JSON.stringify({ ts: new Date().toISOString(), addin: "server", kind: "http", data: req.method + " " + req.url + " ua=" + (req.headers["user-agent"] || "").slice(0, 60) }) + String.fromCharCode(10));
+  } catch (e) { /* ignore */ }
   let urlPath = req.url === "/" ? "/taskpane-a.html" : req.url;
   let filePath = safeJoin(WEB_ROOT, urlPath);
 

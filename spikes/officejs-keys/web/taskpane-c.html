@@ -48,15 +48,29 @@
     window.EMT_K1_CONFIG = {
       name: "EMT K1 Single",
       actions: [
-        { id: "ControlL", key: "Ctrl+Alt+Shift+L" },
-        { id: "CandBracketLeftShift", key: "Ctrl+Shift+BracketLeft" }
+        { id: "ControlL", key: "Ctrl+Alt+Shift+L" }
       ],
       inUseCheckKeys: [
-        "Ctrl+Shift+BracketLeft"
+        "Ctrl+Alt+Shift+L", "Ctrl+Alt+Shift+M",
+        "Ctrl+Shift+BracketLeft", "Ctrl+BracketLeft", "Ctrl+Quote", "Ctrl+Semicolon", "Ctrl+Comma", "Ctrl+Period",
+        "Ctrl+Oem4", "Ctrl+Oem7", "Ctrl+Oem1", "Ctrl+OemComma", "Ctrl+OemPeriod", "Ctrl+F2",
+        "Ctrl+Shift+[", "Ctrl+[", "Ctrl+'", "Ctrl+;", "Ctrl+,", "Ctrl+."
       ],
+      // Re-key the REGISTERED control action to each candidate; the valid key M is the positive control.
       replaceCandidates: [
-        { action: "CandBracketLeftShift", key: "Ctrl+Shift+BracketLeft" }
-      ]
+        { action: "ControlL", key: "Ctrl+Alt+Shift+M" },
+        { action: "ControlL", key: "Ctrl+Shift+BracketLeft" },
+        { action: "ControlL", key: "Ctrl+BracketLeft" },
+        { action: "ControlL", key: "Ctrl+Quote" },
+        { action: "ControlL", key: "Ctrl+Semicolon" },
+        { action: "ControlL", key: "Ctrl+Oem4" },
+        { action: "ControlL", key: "Ctrl+Oem7" },
+        { action: "ControlL", key: "Ctrl+F2" },
+        { action: "ControlL", key: "Ctrl+Shift+[" },
+        { action: "ControlL", key: "Ctrl+'" },
+        { action: "ControlL", key: "Ctrl+;" }
+      ],
+      revertAfterReplace: true
     };
     window.emtK1Init();
   </script>

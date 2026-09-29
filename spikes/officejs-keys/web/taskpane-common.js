@@ -156,57 +156,44 @@
       appendError(msg);
     }
 
-    // areShortcutsInUse(): probe each candidate key string.
-    try {
-      const keys = config.inUseCheckKeys || [];
-      const result = await Office.actions.areShortcutsInUse(keys);
-      setText("in-use", JSON.stringify(result, null, 2));
-      appendLog(`areShortcutsInUse() checked ${keys.length} key string(s).`);
-    } catch (err) {
-      const msg = `areShortcutsInUse() failed: ${err && err.message ? err.message : err}`;
-      setText("in-use", msg);
-      appendError(msg);
-    }
-
-    // replaceShortcuts(): try a couple of candidates, two different call
-    // shapes, since the exact accepted shape is unverified preview behavior.
-    const candidates = config.replaceCandidates || [];
-    const replaceResults = [];
-    for (const candidate of candidates) {
-      // Shape 1: array of {key:{default}, action} objects (matches the
-      // manifest "shortcuts" array shape).
+    // areShortcutsInUse(): probe each key string ON ITS OWN, so one invalid string can't fail the whole call.
+    const inUse = [];
+    for (const k of config.inUseCheckKeys || []) {
       try {
-        const payload = [{ key: { default: candidate.key }, action: candidate.action }];
-        const res = await Office.actions.replaceShortcuts(payload);
-        replaceResults.push({ candidate, shape: "array-of-key-action", ok: true, result: res });
-        appendLog(`replaceShortcuts (shape A) OK for ${candidate.action} -> ${candidate.key}`);
+        const r = await Office.actions.areShortcutsInUse([k]);
+        inUse.push({ key: k, ok: true, result: r });
       } catch (err) {
-        replaceResults.push({
-          candidate,
-          shape: "array-of-key-action",
-          ok: false,
-          error: err && err.message ? err.message : String(err),
-        });
-        appendError(`replaceShortcuts (shape A) failed for ${candidate.action} -> ${candidate.key}: ${err.message || err}`);
+        inUse.push({ key: k, ok: false, error: err && err.message ? err.message : String(err) });
       }
+    }
+    setText("in-use", JSON.stringify(inUse, null, 2));
+    appendLog(`areShortcutsInUse(): ${inUse.filter((x) => x.ok).length}/${inUse.length} key strings accepted individually.`);
 
-      // Shape 2: object literal keyed by actionId -> key string (the shape
-      // named in the spike brief). Tried separately so a rejection of one
-      // shape doesn't hide whether the other shape is accepted.
+    // replaceShortcuts(): documented shape {actionId: key}. Each candidate re-keys a registered action;
+    // after an accepted replace, read getShortcuts() back to see what Office stored.
+    const replaceResults = [];
+    for (const candidate of config.replaceCandidates || []) {
+      const payload = {};
+      payload[candidate.action] = candidate.key;
       try {
-        const payload = {};
-        payload[candidate.action] = candidate.key;
-        const res = await Office.actions.replaceShortcuts(payload);
-        replaceResults.push({ candidate, shape: "actionId-key-object", ok: true, result: res });
-        appendLog(`replaceShortcuts (shape B) OK for ${candidate.action} -> ${candidate.key}`);
+        await Office.actions.replaceShortcuts(payload);
+        let stored = null;
+        try { stored = await Office.actions.getShortcuts(); } catch (e) { stored = "getShortcuts failed: " + e.message; }
+        replaceResults.push({ candidate, ok: true, stored });
+        appendLog(`replaceShortcuts OK: ${candidate.action} -> ${candidate.key}; stored=${JSON.stringify(stored)}`);
       } catch (err) {
-        replaceResults.push({
-          candidate,
-          shape: "actionId-key-object",
-          ok: false,
-          error: err && err.message ? err.message : String(err),
-        });
-        appendError(`replaceShortcuts (shape B) failed for ${candidate.action} -> ${candidate.key}: ${err.message || err}`);
+        replaceResults.push({ candidate, ok: false, error: err && err.message ? err.message : String(err) });
+        appendLog(`replaceShortcuts REJECTED: ${candidate.action} -> ${candidate.key}: ${err.message || err}`);
+      }
+    }
+    if (config.revertAfterReplace) {
+      const revert = {};
+      for (const c of config.replaceCandidates || []) revert[c.action] = null;
+      try {
+        await Office.actions.replaceShortcuts(revert);
+        appendLog(`reverted to manifest defaults; now ${JSON.stringify(await Office.actions.getShortcuts())}`);
+      } catch (err) {
+        appendError(`revert failed: ${err.message || err}`);
       }
     }
     setText("replace-shortcuts", JSON.stringify(replaceResults, null, 2));
