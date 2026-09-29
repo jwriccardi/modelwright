@@ -8,7 +8,7 @@
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
 | K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. **K2c:** any COM write wipes the history, so arbitrary formats get Macabacus parity at best with Excel-DNA alone. A hybrid with Office.js (K2d) could beat it. |
 | K4 — Trace window focus | ✅ **Passed with variants B (WinForms, focused) and C (hook, Excel keeps focus)**, including cross-workbook navigation. Variant A (WPF) is rejected. The F2 check on C is pending. |
-| K1 — Office.js named keys | 🟡 Run 1: **no shortcuts registered at all**, not even the controls. Retest (K1b) isolates whether invalid keys cause the whole file to be rejected. |
+| K1 — Office.js named keys | 🟡 **K1b:** one invalid key rejects the whole shortcuts file. Office's parser **accepts `Semicolon`, `Comma`, `Period` and `F2`**, but no name found yet for `[`, `]`, `'` or `\`. |
 
 ## K3 details
 
@@ -223,6 +223,31 @@ All three add-ins loaded:
 - Every key string gets its own `areShortcutsInUse` check.
 - The *registered* control action is re-keyed with `replaceShortcuts` to each candidate. `Ctrl+Alt+Shift+M` is the positive control. Afterwards everything is reverted.
 - The server logs every file Office fetches.
+
+
+## K1b (23:07–23:08, 2 Excel sessions)
+
+**Did Office load the shortcut files?** Server log: Office fetched every shortcuts file (`GET /shortcuts-c2.json`, `-a`, `-b`, user agent `Microsoft Office/16.0 … Excel`).
+
+**Registration:**
+- **The control-only "Single" file registered** (`getShortcuts() = {"ControlL":"Ctrl+Shift+Alt+L"}`) and **the control fired in both sessions**.
+- **The Named and Literal files registered nothing** (`{}`).
+- **Conclusion: one invalid key string makes Office reject the entire shortcuts file.**
+
+**Office's key parser**, tested one string at a time with `areShortcutsInUse([k])`, and by re-keying the registered control with `replaceShortcuts`:
+
+| Accepted | Rejected ("invalid format") |
+|---|---|
+| `Ctrl+Alt+Shift+M` (positive control, stored as `Ctrl+Shift+Alt+M`) | `BracketLeft`, `Quote`, `Oem1`, `Oem4`, `Oem7`, `OemComma`, `OemPeriod` |
+| **`Ctrl+Semicolon`** (stored as **`Ctrl+;`**) | literal `Ctrl+[`, `Ctrl+Shift+[`, `Ctrl+'`, `Ctrl+;`, `Ctrl+,`, `Ctrl+.` |
+| **`Ctrl+Comma`**, **`Ctrl+Period`** (accepted by the parser check) | |
+| `Ctrl+F2` | |
+
+**Implications:**
+- Office.js *may* support Macabacus's **Ctrl+;**, **Ctrl+,** and **Ctrl+.** through undocumented names. Whether they actually *fire* when pressed hasn't been tested yet.
+- **No accepted name has been found yet for `[`, `]`, `'` or `\`.** These are Trace In/Out (Ctrl+Shift+[ ]), Font cycle (Ctrl+'), Last Audited Cell (Ctrl+Shift+\) and Show All (Ctrl+Alt+[ ]).
+- Any Office.js keymap must be validated one key at a time. Otherwise a single bad key silently disables *all* shortcuts.
+- **Owner note:** a sideloaded add-in had to be started manually from Home › Add-ins in each Excel session, because the runtime isn't auto-started. The product would use `Office.addin.setStartupBehavior(load)`.
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
