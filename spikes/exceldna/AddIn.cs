@@ -114,7 +114,7 @@ namespace EmtSpike
         /// <summary>OnKey string -> "xlcOnKey" | "COM OnKey" | "failed".</summary>
         internal static readonly Dictionary<string, string> Methods = new Dictionary<string, string>();
 
-        internal const string BuildStamp = "K2c (2026-09-28)";
+        internal const string BuildStamp = "K4b (2026-09-28)";
 
         public void AutoOpen()
         {

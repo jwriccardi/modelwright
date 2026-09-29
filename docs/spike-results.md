@@ -7,7 +7,7 @@
 | A1 — Load the add-in | ✅ Passed. Loaded in 251 ms; the ribbon tab appeared. |
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
 | K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. **K2c:** any COM write wipes the history, so arbitrary formats get Macabacus parity at best with Excel-DNA alone. A hybrid with Office.js (K2d) could beat it. |
-| K4 — Trace window focus | Pending (runbook A4) |
+| K4 — Trace window focus | 🟡 Run 1: works within a workbook; focus lost on jumping to another workbook. Fixed in build K4b; retest pending. |
 | K1 — Office.js named keys | Pending (runbook Part B) |
 
 ## K3 details
@@ -170,6 +170,22 @@ Excel was on Automatic calculation, with `=RAND()` present in the workbook.
   - Does a WebView2 page served over https accept a `ws://localhost` connection?
   - What latency does the round trip add?
   - Is the Office.js runtime always loaded?
+
+
+## K4, run 1 (21:50–21:54, build K2c)
+
+**Variant A (WPF, focused; Ctrl+Shift+[):**
+- **The arrow keys drove the list.** About 40 navigation events were logged.
+- **Across sheets in the same workbook:** Goto took 2–25 ms, and after each Goto the window **kept** foreground and keyboard focus (`foregroundIsOurs=true`).
+- **Into `EMT_Fixture_B`:** Goto took 65–116 ms. Excel brought B's own top-level window to the front (Excel is SDI, one window per workbook), and our window, owned by A's window, went **behind** it. From then on the arrow keys went to the grid. That matches what the owner saw.
+- **Hidden sheet:** `Application.Goto` fails with "Unable to get the Goto property" (expected). The product needs a hidden-sheet badge, or to unhide temporarily.
+
+**Variants B (WinForms) and C (hook): not really tested.** When they were opened, the active cell was in EMT_Fixture_B (`Data!C3`, a constant `10`), left there by the earlier navigation. The formula had no references, so the lists were empty. That's a flaw in the test design.
+
+**Fixes in build K4b:**
+- After each Goto, if Excel's active window changed, the trace window is **re-owned** to the new workbook window (`GWLP_HWNDPARENT`) and raised to the top. The hook variant is raised *without* activation.
+- Focused variants take focus back automatically after a workbook switch.
+- Trace refuses to open on a cell with no formula, and says so in the status bar.
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.

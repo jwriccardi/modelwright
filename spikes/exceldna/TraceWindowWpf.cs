@@ -78,6 +78,7 @@ namespace EmtSpike
             }
 
             s.OurHwnd = hwnd;
+            s.NoActivate = noActivate;
             s.FrameworkFocus = () => w.IsKeyboardFocusWithin;
             s.ReactivateAction = w.ReactivateNow;
             w.Show();

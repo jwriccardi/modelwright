@@ -34,11 +34,18 @@ namespace EmtSpike
             var sw = Stopwatch.StartNew();
             dynamic app = Xl.App;
             dynamic root = app.ActiveCell;
+            if (!(bool)root.HasFormula)
+            {
+                string where = Address((object)root);
+                Xl.Status($"EMT spike: {where} has no formula - select EMT_Fixture_A.xlsx Sheet1!A1 and try again");
+                return new { ui = ui.ToString(), key, refused = "no formula", where };
+            }
             _lastRoot = root;
             var session = new Session(ui, root, reactivate);
             session.Build();
 
-            var owner = new IntPtr(Convert.ToInt64(app.Hwnd));
+            var owner = new IntPtr(Convert.ToInt64(app.ActiveWindow.Hwnd));
+            session.OwnerHwnd = owner;
             switch (ui)
             {
                 case Ui.Wpf: TraceWindowWpf.ShowNew(session, owner, noActivate: false); break;
@@ -112,6 +119,8 @@ namespace EmtSpike
             public IntPtr OurHwnd;
             public Func<bool> FrameworkFocus;   // WPF IsKeyboardFocusWithin / WinForms ContainsFocus
             public Action ReactivateAction;
+            public IntPtr OwnerHwnd;
+            public bool NoActivate;
 
             public Session(Ui ui, dynamic root, bool reactivate) { Ui = ui; Root = root; Reactivate = reactivate; }
 
@@ -143,8 +152,25 @@ namespace EmtSpike
                     catch (Exception ex) { gotoError = (ex.InnerException ?? ex).Message; }
                     double elapsedMs = Math.Round((Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency, 3);
 
-                    object afterGoto = FocusState(), afterReactivate = null;
-                    if (Reactivate && ReactivateAction != null)
+                    object afterGoto = FocusState(), afterReactivate = null, reowned = null;
+                    bool windowChanged = false;
+                    try
+                    {
+                        var active = new IntPtr(Convert.ToInt64(Xl.App.ActiveWindow.Hwnd));
+                        if (active != OwnerHwnd && active != IntPtr.Zero)
+                        {
+                            windowChanged = true;
+                            Native.SetWindowLongPtr(OurHwnd, Native.GWLP_HWNDPARENT, active);
+                            uint flags = Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_SHOWWINDOW | (NoActivate ? Native.SWP_NOACTIVATE : 0u);
+                            Native.SetWindowPos(OurHwnd, Native.HWND_TOP, 0, 0, 0, 0, flags);
+                            reowned = new { from = OwnerHwnd.ToInt64(), to = active.ToInt64() };
+                            OwnerHwnd = active;
+                        }
+                    }
+                    catch (Exception ex) { reowned = "reown failed: " + ex.Message; }
+
+                    // Focused variants must take focus back after a workbook switch; the hook variant must not.
+                    if ((Reactivate || (windowChanged && !NoActivate)) && ReactivateAction != null)
                     {
                         try { ReactivateAction(); afterReactivate = FocusState(); }
                         catch (Exception ex) { afterReactivate = "reactivate failed: " + ex.Message; }
@@ -152,7 +178,7 @@ namespace EmtSpike
                     Log.Write("k4nav", new
                     {
                         ui = Ui.ToString(), index, target = item.Address, gotoError, elapsedMs, activeBook,
-                        afterGoto, reactivate = Reactivate, afterReactivate,
+                        afterGoto, reactivate = Reactivate, windowChanged, reowned, afterReactivate,
                     });
 
                     // Excel may take focus back after the macro returns; check again a bit later.
@@ -294,7 +320,11 @@ namespace EmtSpike
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
-        public const int GWL_EXSTYLE = -20;
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+        public const int GWL_EXSTYLE = -20, GWLP_HWNDPARENT = -8;
+        public const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
+        public static readonly IntPtr HWND_TOP = IntPtr.Zero;
         public const long WS_EX_NOACTIVATE = 0x08000000L;
     }
 }
