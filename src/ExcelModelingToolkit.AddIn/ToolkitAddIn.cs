@@ -29,6 +29,8 @@ public sealed class ToolkitAddIn : IExcelAddIn
         try
         {
             // xlcOnKey with no macro restores Excel's default behavior for the key.
+            // Known limitation: it does so even if another add-in rebound the key after us, silently
+            // unbinding theirs. Acceptable for one placeholder key; revisit when many keys are registered.
             XlCall.Excel(XlCall.xlcOnKey, AboutKey.ToOnKeyString());
         }
         catch (XlCallException)

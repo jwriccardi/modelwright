@@ -130,6 +130,16 @@ public class OleColorTests
         Assert.Contains("Invalid color", ex.Message);
     }
 
+    [Theory]
+    [InlineData("rgb(٢٨,69,135)")] // Arabic-Indic digits 28
+    [InlineData("rgb(28,６９,135)")] // full-width digits 69
+    [InlineData("rgb(28,69,१३५)")] // Devanagari digits 135
+    public void Parse_rejects_non_ASCII_digits(string text)
+    {
+        var ex = Assert.Throws<FormatException>(() => OleColor.Parse(text));
+        Assert.Contains("Invalid color", ex.Message);
+    }
+
     [Fact]
     public void Parse_reports_out_of_range_component()
     {

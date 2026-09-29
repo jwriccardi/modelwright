@@ -15,7 +15,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build/check-licenses.ps1
 
 - Warnings are errors, so the build must report 0 warnings.
 - The tests run twice: on `net8.0`, and on `net48`, which is the runtime inside Excel.
-- `build/check-licenses.ps1` fails if a shipped project (`src/`) uses a NuGet package that is not in `build/allowed-packages.json`. If you add a dependency, review its license and add it there in the same pull request. GPL and AGPL packages are not accepted.
+- `build/check-licenses.ps1` fails if a shipped project (`src/`) uses a NuGet package that is not in `build/allowed-packages.json`. If you add a dependency, review its license and add it there in the same pull request. LGPL, GPL, AGPL, SSPL and non-commercial licenses are not accepted for shipped code.
+- Any new DLL that ships with the add-in must also be added to `ExcelAddInInclude` in `src/ExcelModelingToolkit.AddIn/ExcelModelingToolkit.AddIn.csproj`. Otherwise it is not packed into the `.xll`, and Excel fails at load with a `FileNotFoundException`.
 
 ## Load the development add-in in Excel
 

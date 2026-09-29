@@ -35,9 +35,11 @@
   <!--
     Stamps InformationalVersion as "<Version>+<short git SHA>" ("+local" when git is unavailable or this is
     not a git checkout) and records the commit and UTC build date as AssemblyMetadata (read by ProductInfo).
+    git's stderr is discarded (Exec runs cmd.exe; this project is Windows-only), and the output is used only
+    if it is a bare hex SHA, so a warning or error message can never end up in the version.
   -->
   <Target Name="StampVersion" BeforeTargets="GetAssemblyAttributes">
-    <Exec Command="git rev-parse --short HEAD"
+    <Exec Command="git rev-parse --short HEAD 2&gt;nul"
           WorkingDirectory="$(MSBuildProjectDirectory)"
           ConsoleToMSBuild="true"
           EchoOff="true"
@@ -50,7 +52,8 @@
       <Output TaskParameter="ExitCode" PropertyName="_EmtGitExitCode" />
     </Exec>
     <PropertyGroup>
-      <EmtGitCommit Condition="'$(_EmtGitExitCode)' == '0' and '$(_EmtGitOutput)' != ''">$(_EmtGitOutput.Trim())</EmtGitCommit>
+      <_EmtGitOutput>$(_EmtGitOutput.Trim())</_EmtGitOutput>
+      <EmtGitCommit Condition="'$(_EmtGitExitCode)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_EmtGitOutput)', '^[0-9a-f]{7,40}$'))">$(_EmtGitOutput)</EmtGitCommit>
       <EmtGitCommit Condition="'$(EmtGitCommit)' == ''">local</EmtGitCommit>
       <EmtBuildDate>$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd'))</EmtBuildDate>
       <InformationalVersion>$(Version)+$(EmtGitCommit)</InformationalVersion>

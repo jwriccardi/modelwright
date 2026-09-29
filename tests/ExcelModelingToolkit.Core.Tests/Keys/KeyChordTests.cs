@@ -8,7 +8,8 @@ public class KeyChordTests
 {
     /// <summary>
     /// Every binding the Excel-DNA spike registered successfully through xlcOnKey (spikes/exceldna/AddIn.cs,
-    /// Keys and Coverage tables; docs/spike-results.md K3), as (human key, proven OnKey string).
+    /// Keys and Coverage tables; docs/spike-results.md K3), as (human key, proven OnKey string). The spike's
+    /// upper-case <c>^+K</c> hedge is intentionally excluded: KeyChord always emits lower-case letters (<c>^+k</c>).
     /// </summary>
     public static TheoryData<string, string> SpikeProvenKeys => new TheoryData<string, string>
     {

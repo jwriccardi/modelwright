@@ -14,8 +14,9 @@ public static class Commands
         try
         {
             var xllPath = ExcelDnaUtil.XllPath;
+            // The add-in path (long, and user-specific) goes in the dialog only, not the status bar.
             StatusBar.Show(
-                $"{ProductInfo.Name} {ProductInfo.Version} (commit {ProductInfo.Commit}, built {ProductInfo.BuildDate}) - {xllPath}");
+                $"{ProductInfo.Name} {ProductInfo.Version} (commit {ProductInfo.Commit}, built {ProductInfo.BuildDate})");
             MessageBox.Show(
                 $"{ProductInfo.Name}\n\n" +
                 $"Version: {ProductInfo.Version}\n" +

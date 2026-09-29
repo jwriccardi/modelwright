@@ -18,7 +18,7 @@ public readonly struct OleColor : IEquatable<OleColor>
     private const int NoFillValue = -1;
 
     private static readonly Regex RgbPattern = new Regex(
-        @"^\s*rgb\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s*$",
+        @"^\s*rgb\s*\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*\)\s*$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex HexPattern = new Regex(
@@ -30,6 +30,11 @@ public readonly struct OleColor : IEquatable<OleColor>
     private OleColor(int value) => _value = value;
 
     /// <summary>The "no fill" sentinel (a cell with no interior color). It is not equal to any RGB color.</summary>
+    /// <remarks>
+    /// Excel reports a no-fill cell's <c>Interior.Color</c> as white (<c>0xFFFFFF</c>), the same as a white
+    /// fill. Adapters reading a cell must check <c>Interior.Pattern == xlNone</c> (<c>-4142</c>) first and map
+    /// it to <see cref="NoFill"/>; only otherwise is <c>Interior.Color</c> the fill color.
+    /// </remarks>
     public static OleColor NoFill { get; } = new OleColor(NoFillValue);
 
     /// <summary>True for <see cref="NoFill"/>.</summary>
