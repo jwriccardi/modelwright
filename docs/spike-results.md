@@ -6,7 +6,7 @@
 |---|---|
 | A1 — Load the add-in | ✅ Passed. Loaded in 251 ms; the ribbon tab appeared. |
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
-| K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. How to apply arbitrary formats this way is still open (K2c). |
+| K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. **K2c:** any COM write wipes the history, so arbitrary formats get Macabacus parity at best with Excel-DNA alone. A hybrid with Office.js (K2d) could beat it. |
 | K4 — Trace window focus | Pending (runbook A4) |
 | K1 — Office.js named keys | Pending (runbook Part B) |
 
@@ -143,6 +143,33 @@ Excel was on Automatic calculation, with `=RAND()` present in the workbook.
 - (a) Does a COM write from the message-loop context (e.g. `Font.Color`) wipe the history, and is it undoable?
 - (b) Can a COM write to the *hidden template* (to clone the target's formats before pasting) be done without wiping the history?
 - (c) Paste Formatting copies *all* formats and overwrites the clipboard. On a mixed selection it makes everything uniform.
+
+
+## K2c: COM writes outside macro context (21:38–21:41, build stamp `K2c (2026-09-28)`)
+
+| Variant | Undo enabled before → after | Owner's observation |
+|---|---|---|
+| K2.11: hook → COM `Selection.Font.Color` | T → **F** | Ctrl+Z did nothing: the history was wiped and the change wasn't undoable |
+| K2.12: hook → COM writes that clone the target's formats onto the **hidden template** → copy → `ExecuteMso("PasteFormatting")` | T → **F at `afterTemplateWrite`** → T after the paste | One Ctrl+Z (the paste), then nothing: **the history was wiped by the write to the hidden workbook** |
+| Mixed-selection check (C) | not run | The fills were set with the COM fill cycle (which also wipes), and no Ctrl+Alt+Shift+X press was logged. Superseded by the finding below. |
+
+**Rule established.** **Any COM write to any cell, even in a hidden add-in workbook and even outside macro context, erases Excel's undo history.** Only built-in commands (`ExecuteMso`) dispatched outside macro context are recorded like user actions.
+
+**Consequences for arbitrary formats** (exact number-format codes and exact RGB colors):
+- **Built-in commands exist only for fixed formats:** Bold, Percent Style, Comma Style and similar.
+- **Template + Paste Formatting:**
+  - The templates must be pre-built at load time, because writing them later wipes history.
+  - Paste Formatting copies **all** formats, so a number-format cycle would reset the target's font color, fill and borders. **Rejected.**
+- So with Excel-DNA alone, the best we can do for arbitrary formats is **Macabacus parity**: our own multi-level undo stack for our changes, with Excel's earlier history lost at the first keystroke.
+
+**Candidate that might beat parity: a hybrid (K2d, needs approval).**
+- The Excel-DNA thread hook catches the exact keys and forwards the command over a local channel to an Office.js add-in (shared runtime) in the same Excel instance.
+- Office.js applies `numberFormat` / `font.color` / `fill.color`, which are native-undoable per ExcelApi 1.20.
+- The forwarding step makes no workbook change, so nothing gets wiped.
+- Open questions:
+  - Does a WebView2 page served over https accept a `ws://localhost` connection?
+  - What latency does the round trip add?
+  - Is the Office.js runtime always loaded?
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
