@@ -118,6 +118,49 @@ namespace EmtSpike
             return result;
         }
 
+        // ---- K2c (called from the K2b hook, i.e. outside macro context) ----------------------
+
+        /// <summary>K2.11: plain COM write of the font color (red/blue toggle). Does it wipe history? Is it undoable?</summary>
+        public static object ComFontColorNoMacro() => Variant("K2.11", () =>
+        {
+            dynamic font = Xl.App.Selection.Font;
+            double cur = Convert.ToDouble(font.Color);
+            double next = cur == 255 ? 16711680 : 255; // BGR: red (255) <-> blue (0xFF0000)
+            font.Color = next;
+            return new { was = cur, set = next };
+        });
+
+        /// <summary>
+        /// K2.12: make the hidden template cell a clone of the active cell's formats via COM (hidden workbook only),
+        /// change only its number format to the next of two codes, then copy it and ExecuteMso("PasteFormatting").
+        /// Question: does the COM write to the HIDDEN workbook wipe the user's undo history?
+        /// </summary>
+        public static object CloneTemplatePaste() => Variant("K2.12", () =>
+        {
+            dynamic app = Xl.App;
+            dynamic target = app.ActiveCell;
+            dynamic tpl = SourceCell();
+            string curFmt = Convert.ToString(target.NumberFormat);
+            string nextFmt = curFmt == "0.00%" ? "#,##0.0" : "0.00%";
+
+            tpl.Font.Bold = target.Font.Bold;
+            tpl.Font.Italic = target.Font.Italic;
+            tpl.Font.Color = target.Font.Color;
+            object pattern = target.Interior.Pattern;
+            if (Convert.ToInt32(pattern) == -4142) tpl.Interior.Pattern = -4142; // xlNone
+            else tpl.Interior.Color = target.Interior.Color;
+            tpl.HorizontalAlignment = target.HorizontalAlignment;
+            tpl.NumberFormat = nextFmt;
+            UndoProbe.Snapshot("afterTemplateWrite", "K2.12");
+
+            tpl.Copy();
+            UndoProbe.Snapshot("afterCopy", "K2.12");
+            app.CommandBars.ExecuteMso("PasteFormatting");
+            UndoProbe.Snapshot("afterPasteMso", "K2.12");
+            app.CutCopyMode = false;
+            return new { curFmt, nextFmt, targetBold = Convert.ToString(target.Font.Bold), targetColor = Convert.ToString(target.Font.Color), pattern = Convert.ToString(pattern) };
+        });
+
         /// <summary>A1 of the hidden add-in workbook, pre-formatted as 0.0% so the test itself writes nothing there.</summary>
         private static dynamic SourceCell()
         {

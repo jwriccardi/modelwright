@@ -114,6 +114,8 @@ namespace EmtSpike
         /// <summary>OnKey string -> "xlcOnKey" | "COM OnKey" | "failed".</summary>
         internal static readonly Dictionary<string, string> Methods = new Dictionary<string, string>();
 
+        internal const string BuildStamp = "K2c (2026-09-28)";
+
         public void AutoOpen()
         {
             var sw = Stopwatch.StartNew();
@@ -129,13 +131,14 @@ namespace EmtSpike
                 sw.Stop();
                 Log.Write("autoOpen", new
                 {
+                    build = BuildStamp,
                     excelVersion = version,
                     excelBuild = build,
                     bitness = Environment.Is64BitProcess ? 64 : 32,
                     xllPath = ExcelDnaUtil.XllPath,
                     loadMs = Xl.Ms(sw),
                 });
-                Xl.Status($"EMT spike loaded ({Xl.Ms(sw):0.0} ms). Log: {Log.FilePath}");
+                Xl.Status($"EMT spike {BuildStamp} loaded ({Xl.Ms(sw):0.0} ms). Log: {Log.FilePath}");
 
                 // Pre-create the hidden add-in workbook outside any K2 test (creation itself may clear undo).
                 ExcelAsyncUtil.QueueAsMacro(() =>
