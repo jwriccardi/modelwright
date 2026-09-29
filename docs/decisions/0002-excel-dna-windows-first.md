@@ -65,5 +65,5 @@ Only the settings files carry over to that later version; its code would be sepa
 ## Follow-ups (decision spikes, throwaway code, which the owner must approve)
 
 - **K1.** 10-minute Office.js test: do `Ctrl+Shift+BracketLeft` / `Quote` / `Semicolon` register and fire on Windows? **If yes, reopen ADR-0001.**
-- **K2.** Excel-DNA test: does `CommandBars.ExecuteMso` for number format, font color and fill keep Excel's native undo stack, when called directly and when deferred with `OnTime`?
-- **K3.** Excel-DNA test: do all the keys in research/05 §1 bind and fire, with Macabacus disabled? Measure key-to-format latency; target p95 ≤ 50 ms.
+- **K2 (done).** Built-in commands dispatched outside macro context keep native undo, but only for fixed formats. Any COM write wipes the history. v1 therefore matches Macabacus with a custom undo stack. A hybrid with Office.js for full native undo is recorded as a v2 candidate (PLAN §4.4).
+- **K3 (passed).** Every Macabacus key tested binds through `xlcOnKey`. p95 is 9.8 ms on a 4,770-cell selection.

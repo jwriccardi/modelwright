@@ -120,19 +120,32 @@ test/fixtures/       fixture workbooks for manual end-to-end runs
   - Percent, Currency, Multiple and Date lists are still to be captured.
 - **Too many number formats.** Excel's "too many number formats" error is caught and shown as a clear message.
 
-### 4.4 Undo (Macabacus parity or better)
-- **Preferred approach, if spike K2 passes:** apply formats through `CommandBars.ExecuteMso` built-in commands, so Excel's native undo stack survives.
-- **Default approach: our own `UndoManager`.**
-  - **Snapshot first.** Before each change, record the number format, font color and fill of the affected cells.
-    - Capture is capped at a configurable number of cells, default 10,000. Macabacus has the same kind of setting.
-    - Storage is run-length compressed for uniform ranges.
-  - **Ctrl+Z / Ctrl+Y are rebound** to the UndoManager.
-  - **Ordering rule.** Every action of ours wipes Excel's native undo stack. So if Excel's own undo is available, anything on it must be newer than our last action.
-    - If native undo is available (`GetEnabledMso("Undo")`), pass Ctrl+Z through to `Application.Undo`.
-    - Otherwise, pop our own stack.
-    - This keeps the user's typing and our formatting in the correct order.
-  - **Invalidation.** Clear our stack when the workbook is closed. Also clear it when a structural change is detected (rows or columns inserted or deleted, found via the `SheetChange` target shape), because the stored addresses would be wrong.
-  - **Ribbon.** A Quick Access Toolbar undo button is optional.
+### 4.4 Undo: Macabacus parity in v1, native undo through a hybrid in v2
+
+Decided by the owner on 2026-09-28, based on spike K2/K2b/K2c (see `docs/spike-results.md`).
+
+**What the spikes established:**
+- **Any COM write** to any cell (even in a hidden workbook, even outside macro context) **erases Excel's undo history**, and the change isn't undoable.
+- **Built-in commands** (`ExecuteMso`) dispatched *outside* macro context (from the keyboard hook or a ribbon callback) are recorded exactly like user actions. They give full multi-level undo and keep the earlier history, even with volatile formulas. But they exist only for fixed formats: Bold, Percent Style and similar.
+- Built-in commands run *inside* an `OnKey` macro lose the earlier history. They also collapse to one level when the workbook has volatile formulas.
+
+**v1 design: our own `UndoManager` (Macabacus parity).**
+- **Snapshot.** Before each change, snapshot the number format, font color and fill of the affected cells.
+  - Capture is capped (default 10,000 cells).
+  - Uniform ranges are run-length compressed.
+- **Ctrl+Z / Ctrl+Y are intercepted.** The thread keyboard hook is preferred: it can *decline* to swallow the key.
+- **Ordering rule.**
+  - If Excel's native undo is available (`GetEnabledMso("Undo")`), the entries on it must be newer than our last action, because our action wiped the stack. So let the key through to Excel.
+  - Otherwise, pop our own stack.
+- **Invalidation.** Clear our stack when the workbook is closed, and on structural changes (row or column insert or delete).
+- **Where native commands exist, use them (optional).** If a cycle item matches a built-in command, such as Bold, dispatch it from the hook outside macro context. That keeps the user's history intact for that action.
+
+**v2 candidate: the hybrid (spike K2d, deferred).**
+- The Excel-DNA hook catches the exact keys and forwards the command over a local channel to a small Office.js add-in in the same Excel.
+- Office.js applies `numberFormat` / `font.color` / `fill.color`, which are native-undoable in ExcelApi 1.20+.
+- **Payoff:**
+  - exact keys, exact formats *and* full native undo;
+  - a formatting engine that can be reused for Mac and web.
 
 ### 4.5 Smart trace precedents (feature 4, "Trace In")
 
@@ -209,7 +222,7 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
 | # | Test | Pass criterion | If it fails |
 |---|---|---|---|
 | K1 | Office.js named punctuation keys (`Ctrl+Shift+BracketLeft`, `Ctrl+Quote`, `Ctrl+Semicolon`) | The keys register and fire on Windows | Stay with ADR-0002. **If they work → reopen ADR-0001.** |
-| K2 | `ExecuteMso` formatting keeps native undo | Type a value → cycle via ExecuteMso → Ctrl+Z twice undoes both | Use our own UndoManager (§4.4) |
+| K2 | `ExecuteMso` formatting keeps native undo | Type a value → cycle via ExecuteMso → Ctrl+Z twice undoes both | **Done:** partly passes (fixed formats only, outside macro context). v1 uses our own UndoManager (§4.4). |
 | K3 | Excel-DNA binds every key in §4.2 | 100% fire. Over 30 presses on a selection of ≤ 1,000 cells, p95 key → format ≤ 50 ms | Try a thread keyboard hook |
 | K4 | Trace window keyboard model: **A** WPF with focus, **B** WinForms with focus, **C** a window that doesn't take focus plus a thread keyboard hook (Macabacus-style) | Up/Down/Left/Right/Enter/Esc reach the tree through `Goto` to another sheet and to another workbook. For C, F2 also passes through to Excel. | Choose the best variant that passes; prefer C |
 
@@ -276,6 +289,7 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 ## Changelog
 - 2026-09-28: first draft (Office.js, ADR-0001).
 - 2026-09-28: build-vs-fork recommendation added (research/04).
+- 2026-09-28: Undo decision (owner): Macabacus parity in v1, with the Office.js hybrid for native undo as a v2 candidate. §4.4 rewritten from spike K2/K2b/K2c.
 - 2026-09-28: Trace In spec from the Macabacus help PDF (research/07): the Argument column, Evaluate mode as v1.1, the focus/hook keyboard model, and the K4 variant C.
 - 2026-09-28: Added the owner's Macabacus config (research/06): confirmed default cycles, colors and the full 132-command keymap.
 - 2026-09-28: **Pivot.** The owner made exact Macabacus keys a hard requirement. Now Excel-DNA, Windows first (ADR-0002, research/05). Spikes changed from S1–S7 to K1–K4. Undo design changed to Macabacus-parity.

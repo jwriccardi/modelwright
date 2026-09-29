@@ -47,6 +47,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 | D7 | Product name | `excel-modeling-toolkit` is a working name | Open |
 | D8 | Mac / web follow-up | Defer. Later choose between VBA (Mac, Control-key shortcuts) and Office.js (web, letter shortcuts) | Open |
 | D9 | Approve decision spikes K1–K4 (throwaway code) | — | **Approved 2026-09-28** |
+| D10 | Undo target | — | **Decided 2026-09-28: Macabacus parity in v1. The Excel-DNA + Office.js hybrid for full native undo is a v2 candidate.** |
 
 ## C. Development-machine note
 Macabacus is installed on the owner's machine, and it binds the same keys. Whichever add-in registers a key last owns it. **During spikes and development, disable Macabacus** (File › Options › Add-ins › COM Add-ins) or remap its keys in its Shortcut Manager.
