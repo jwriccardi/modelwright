@@ -15,3 +15,9 @@ Thumbs.db
 
 # Third-party reference material (Macabacus screenshots, shortcut export) - local only, never publish
 reference/
+
+# .NET build output
+bin/
+obj/
+*.user
+TestResults/

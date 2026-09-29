@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Pull requests: build the PR head commit itself (not the synthetic merge commit), so the
+          # version stamp and the DCO check see the contributor's commits.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Full history (with origin/<base>) only for pull requests, where the DCO step needs it.
+          # String values: a bare 0 is falsy in expressions and would always fall through to 1.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+
+      - name: DCO sign-off check
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: ./build/check-dco.ps1 -Base "origin/$env:BASE_REF"
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore ExcelModelingToolkit.sln
+
+      - name: Build
+        run: dotnet build ExcelModelingToolkit.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test ExcelModelingToolkit.sln -c Release --no-build --collect:"XPlat Code Coverage"
+
+      - name: License check
+        shell: pwsh
+        run: ./build/check-licenses.ps1
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: '**/TestResults/**/coverage.cobertura.xml'
+          if-no-files-found: error
+
+      - name: Upload packed add-in
+        uses: actions/upload-artifact@v7
+        with:
+          name: ModelingToolkit-xll
+          path: src/ExcelModelingToolkit.AddIn/bin/Release/net48/publish/ModelingToolkit64-packed.xll
+          if-no-files-found: error

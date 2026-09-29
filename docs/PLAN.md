@@ -1,6 +1,6 @@
 # Work plan — Excel Modeling Toolkit
 
-> **Status: PENDING APPROVAL for Phase 2 (scaffold).** Phase 0 (decisions) and Phase 1 (decision spikes) are complete; see [`spike-results.md`](spike-results.md). No product code has been written; the spikes are throwaway code in `spikes/`.
+> **Status: Phase 2 (scaffold) APPROVED 2026-09-29, in progress.** Phase 0 (decisions) and Phase 1 (decision spikes) are complete; see [`spike-results.md`](spike-results.md). No product code has been written; the spikes are throwaway code in `spikes/`.
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
 > - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
@@ -273,6 +273,13 @@ These are not v1 scope.
   - K1c proved Office.js can bind the exact v1 keys through undocumented names: `Semicolon`, `Comma`, `Period`, `LeftBracket`, `RightBracket`, `SingleQuote`, `Backslash`. It must use runtime `replaceShortcuts` and a self-test, because one invalid key rejects the whole shortcuts file.
   - Office.js formatting is native-undoable (ExcelApi 1.20+).
   - Its trace can't enter other workbooks, so on Mac/web it would *list* external precedents only.
+- **Excel on the web: colors-only edition** (owner idea, 2026-09-29). A lightweight Office.js add-in offering just the font- and fill-color cycles (maybe the number-format cycles too), for people who work in browser Excel.
+  - It uses the K1c key names: `Ctrl+SingleQuote` (font cycle); `Ctrl+Shift+K` is standard.
+  - Open questions:
+    - whether those names also work in browsers (K1c was tested on Windows desktop only);
+    - native undo on the web (Microsoft says it's coming "based on customer demand");
+    - browser-reserved shortcuts.
+  - It shares the cycle and palette JSON with the desktop add-in.
 - **Windows hybrid for native undo:** Excel-DNA keeps the hook and cross-workbook trace, and hands formatting to the Office.js component through a local channel (research/05 §3).
 
 ## 6. Risks and mitigations
@@ -299,6 +306,7 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 ## Changelog
 - 2026-09-28: first draft (Office.js, ADR-0001).
 - 2026-09-28: build-vs-fork recommendation added (research/04).
+- 2026-09-29: Phase 2 (scaffold) approved and started on branch `phase2/scaffold`. The web colors-only edition is logged as a future development.
 - 2026-09-28: **Phase 1 complete.** ADR-0002 accepted. D11: cross-workbook trace essential. K1c: Office.js key names work; recorded as the v2 path.
 - 2026-09-28: Undo decision (owner): Macabacus parity in v1, with the Office.js hybrid for native undo as a v2 candidate. §4.4 rewritten from spike K2/K2b/K2c.
 - 2026-09-28: Trace In spec from the Macabacus help PDF (research/07): the Argument column, Evaluate mode as v1.1, the focus/hook keyboard model, and the K4 variant C.
