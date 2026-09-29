@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the build can stamp the git commit
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore ExcelModelingToolkit.sln
+
+      - name: Build
+        run: dotnet build ExcelModelingToolkit.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test ExcelModelingToolkit.sln -c Release --no-build --collect:"XPlat Code Coverage"
+
+      - name: License check
+        shell: pwsh
+        run: ./build/check-licenses.ps1
+
+      - name: Upload packed add-in
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModelingToolkit-xll
+          path: src/ExcelModelingToolkit.AddIn/bin/Release/net48/publish/ModelingToolkit64-packed.xll
+          if-no-files-found: error

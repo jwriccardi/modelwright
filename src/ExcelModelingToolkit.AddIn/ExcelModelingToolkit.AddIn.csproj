@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>ExcelModelingToolkit.AddIn</RootNamespace>
+    <AssemblyName>ExcelModelingToolkit.AddIn</AssemblyName>
+
+    <!-- Excel-DNA: 64-bit only, packed into a single .xll (bin\<Config>\net48\publish\ModelingToolkit64-packed.xll). -->
+    <ExcelAddInName>Modeling Toolkit</ExcelAddInName>
+    <ExcelAddInFileName>ModelingToolkit</ExcelAddInFileName>
+    <ExcelAddInExplicitExports>true</ExcelAddInExplicitExports>
+    <ExcelDnaCreate32BitAddIn>false</ExcelDnaCreate32BitAddIn>
+    <ExcelDnaCreate64BitAddIn>true</ExcelDnaCreate64BitAddIn>
+    <RunExcelDnaPack>true</RunExcelDnaPack>
+    <!-- net48 does not pack project references automatically; list every shipped dependency here. -->
+    <ExcelAddInInclude>ExcelModelingToolkit.Core.dll</ExcelAddInInclude>
+
+    <!-- The version stamp (short git SHA) is added by the StampVersion target below. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ExcelDna.AddIn" Version="1.9.0" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ExcelModelingToolkit.Core\ExcelModelingToolkit.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    Stamps InformationalVersion as "<Version>+<short git SHA>" ("+local" when git is unavailable or this is
+    not a git checkout) and records the commit and UTC build date as AssemblyMetadata (read by ProductInfo).
+  -->
+  <Target Name="StampVersion" BeforeTargets="GetAssemblyAttributes">
+    <Exec Command="git rev-parse --short HEAD"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true"
+          EchoOff="true"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_EmtGitOutput" />
+      <Output TaskParameter="ExitCode" PropertyName="_EmtGitExitCode" />
+    </Exec>
+    <PropertyGroup>
+      <EmtGitCommit Condition="'$(_EmtGitExitCode)' == '0' and '$(_EmtGitOutput)' != ''">$(_EmtGitOutput.Trim())</EmtGitCommit>
+      <EmtGitCommit Condition="'$(EmtGitCommit)' == ''">local</EmtGitCommit>
+      <EmtBuildDate>$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd'))</EmtBuildDate>
+      <InformationalVersion>$(Version)+$(EmtGitCommit)</InformationalVersion>
+    </PropertyGroup>
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GitCommit</_Parameter1>
+        <_Parameter2>$(EmtGitCommit)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>BuildDate</_Parameter1>
+        <_Parameter2>$(EmtBuildDate)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
+
+</Project>

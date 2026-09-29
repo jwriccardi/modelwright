@@ -1,0 +1,23 @@
+<Project>
+
+  <!--
+    Common settings for the product projects (src/, tests/).
+    The throwaway spikes under spikes/ are excluded so they keep building exactly as they did.
+  -->
+  <PropertyGroup Condition="!$([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)').StartsWith('spikes'))">
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Company>Pegasus Technology Group LLC</Company>
+    <Authors>Pegasus Technology Group LLC</Authors>
+    <Copyright>Copyright (c) 2026 Pegasus Technology Group LLC</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/jwriccardi/excel-modeling-toolkit</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

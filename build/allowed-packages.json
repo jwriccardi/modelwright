@@ -1,0 +1,41 @@
+{
+  "comment": "NuGet packages allowed in the shipped projects (src/). Checked by build/check-licenses.ps1. Add a package here only after reviewing its license. buildOnly = used at build time only; nothing from it is in the packed .xll.",
+  "packages": [
+    {
+      "id": "ExcelDna.AddIn",
+      "license": "Zlib",
+      "buildOnly": false,
+      "notes": "Excel-DNA build tasks and native .xll loader; the loader is part of the packed .xll."
+    },
+    {
+      "id": "ExcelDna.Integration",
+      "license": "Zlib",
+      "buildOnly": false,
+      "notes": "Excel-DNA runtime library, embedded in the packed .xll."
+    },
+    {
+      "id": "Microsoft.NETFramework.ReferenceAssemblies",
+      "license": "MIT",
+      "buildOnly": true,
+      "notes": "Reference assemblies so net48 builds without Visual Studio (developmentDependency)."
+    },
+    {
+      "id": "Microsoft.NETFramework.ReferenceAssemblies.net48",
+      "license": "MIT",
+      "buildOnly": true,
+      "notes": "Transitive part of Microsoft.NETFramework.ReferenceAssemblies."
+    },
+    {
+      "id": "NETStandard.Library",
+      "license": "MIT",
+      "buildOnly": true,
+      "notes": "Implicit reference for the netstandard2.0 Core library; .NET Framework 4.8 supplies netstandard at run time."
+    },
+    {
+      "id": "Microsoft.NETCore.Platforms",
+      "license": "MS-.NET-Library (https://go.microsoft.com/fwlink/?LinkId=329770)",
+      "buildOnly": true,
+      "notes": "Transitive via NETStandard.Library; contains only the runtime identifier graph (runtime.json), no assemblies."
+    }
+  ]
+}
