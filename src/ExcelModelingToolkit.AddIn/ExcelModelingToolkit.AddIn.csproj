@@ -25,6 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Late-bound COM (dynamic) for the Excel object model; part of .NET Framework, nothing to pack. -->
+    <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Windows.Forms" />
   </ItemGroup>
 

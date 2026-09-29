@@ -1,6 +1,6 @@
 # Work plan — Excel Modeling Toolkit
 
-> **Status: Phase 2 (scaffold) APPROVED 2026-09-29, in progress.** Phase 0 (decisions) and Phase 1 (decision spikes) are complete; see [`spike-results.md`](spike-results.md). No product code has been written; the spikes are throwaway code in `spikes/`.
+> **Status: Phase 2 complete (PR #1 merged 2026-09-29). Phase 3 approved and in progress, in three slices (3a cycles, 3b undo, 3c settings dialog).** Phase 0 (decisions) and Phase 1 (decision spikes) are complete; see [`spike-results.md`](spike-results.md). No product code has been written; the spikes are throwaway code in `spikes/`.
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
 > - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
@@ -240,6 +240,13 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
   - One placeholder key fires.
 
 ### Phase 3 — Cycles and undo (features 1–3)
+
+Delivered as three PRs:
+- **3a:** the cycle engine and the 7 cycles plus Blue-Black on the exact keys, a settings JSON with defaults, ribbon buttons and a timing log.
+- **3b:** `UndoManager`, with Ctrl+Z / Ctrl+Y through the thread keyboard hook.
+- **3c:** the settings dialog.
+
+Until the owner's Percent, Currency, Multiple and Date screenshots arrive, those four lists ship as **provisional** Macabacus-style defaults (marked in the defaults file).
 - **Exit criteria:**
   - xUnit covers the cycle engine: wrap-around, the hybrid rule, mixed selections, color normalization and "No fill". Line coverage of `Toolkit.Core` is ≥ 90%.
   - All 7 v1 cycles fire on their Macabacus keys and meet the K3 latency target.
@@ -306,6 +313,7 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 ## Changelog
 - 2026-09-28: first draft (Office.js, ADR-0001).
 - 2026-09-28: build-vs-fork recommendation added (research/04).
+- 2026-09-29: PR #1 (scaffold) merged. Phase 3 approved and split into 3a, 3b and 3c.
 - 2026-09-29: Phase 2 (scaffold) approved and started on branch `phase2/scaffold`. The web colors-only edition is logged as a future development.
 - 2026-09-28: **Phase 1 complete.** ADR-0002 accepted. D11: cross-workbook trace essential. K1c: Office.js key names work; recorded as the v2 path.
 - 2026-09-28: Undo decision (owner): Macabacus parity in v1, with the Office.js hybrid for native undo as a v2 candidate. §4.4 rewritten from spike K2/K2b/K2c.
