@@ -20,7 +20,21 @@
     return new Date().toISOString().split("T")[1].replace("Z", "");
   }
 
+  // Mirror everything to the local spike server (POST /log), which appends it to
+  // %LOCALAPPDATA%\EmtSpike\k1-log.jsonl so results can be read without screenshots.
+  function remote(kind, data) {
+    try {
+      const addin = (window.EMT_K1_CONFIG && window.EMT_K1_CONFIG.name) || "unknown";
+      fetch("/log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ts: new Date().toISOString(), addin, kind, data }),
+      }).catch(function () { /* logging must never break the spike */ });
+    } catch (e) { /* ignore */ }
+  }
+
   function appendLog(message) {
+    remote("log", message);
     const line = `${nowStamp()} ${message}`;
     console.log(line);
     const list = document.getElementById("log");
@@ -32,6 +46,7 @@
   }
 
   function appendError(message) {
+    remote("error", message);
     console.error(message);
     const box = document.getElementById("errors");
     if (box) {
@@ -43,6 +58,7 @@
   }
 
   function setText(id, text) {
+    remote("field", { id: id, text: text });
     const el = document.getElementById(id);
     if (el) {
       el.textContent = text;

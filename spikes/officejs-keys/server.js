@@ -52,7 +52,28 @@ function safeJoin(root, urlPath) {
   return full;
 }
 
+const LOG_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), "EmtSpike");
+const LOG_FILE = path.join(LOG_DIR, "k1-log.jsonl");
+
 const server = https.createServer(options, (req, res) => {
+  if (req.method === "POST" && req.url === "/log") {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 1e6) req.destroy();
+    });
+    req.on("end", () => {
+      try {
+        fs.mkdirSync(LOG_DIR, { recursive: true });
+        fs.appendFileSync(LOG_FILE, body.replace(/\r?\n/g, " ") + "\n");
+        console.log("log:", body.slice(0, 160));
+      } catch (e) {
+        console.error("log write failed:", e.message);
+      }
+      res.writeHead(204).end();
+    });
+    return;
+  }
   let urlPath = req.url === "/" ? "/taskpane-a.html" : req.url;
   let filePath = safeJoin(WEB_ROOT, urlPath);
 
