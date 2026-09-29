@@ -1,6 +1,6 @@
 # ADR-0001 — Platform architecture: Office.js + TypeScript
 
-- **Status:** **Superseded by [ADR-0002](0002-excel-dna-windows-first.md)** (2026-09-28). The owner made exact Macabacus keys a hard requirement, and Office.js can't bind `[ ' ; , .`. It can be reopened if spike K1 finds that named punctuation keys work.
+- **Status:** **Superseded by [ADR-0002](0002-excel-dna-windows-first.md)** (2026-09-28). Spike K1c later proved that Office.js *can* bind the exact v1 keys through undocumented names. It remains superseded because Office.js can't trace into other workbooks, which the owner ruled essential. It is the planned basis for the v2 Mac/web and native-undo work.
 - **Context:** [research/02-architecture-options.md](../research/02-architecture-options.md)
 
 ## Decision

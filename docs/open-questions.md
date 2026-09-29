@@ -38,7 +38,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 | # | Decision | Recommendation | Status |
 |---|---|---|---|
 | D0 | Exact Macabacus keys required? | — | **Decided 2026-09-28: yes, critical** |
-| D1 | Platform and architecture | Excel-DNA (C#, .NET Framework 4.8), Windows desktop first (ADR-0002); ADR-0001 (Office.js) superseded | Proposed |
+| D1 | Platform and architecture | — | **Decided 2026-09-28: Excel-DNA (C#, net48), Windows desktop first. ADR-0002 accepted.** |
 | D2 | License | MIT, with DCO sign-off for contributions (research/03) | Proposed |
 | D3 | Copyright holder | — | **Decided 2026-09-28: Pegasus Technology Group LLC** |
 | D4 | Build fresh vs fork XLerate | Build fresh; XLerate is a design reference only (it's TypeScript) | Proposed |
@@ -47,6 +47,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 | D7 | Product name | `excel-modeling-toolkit` is a working name | Open |
 | D8 | Mac / web follow-up | Defer. Later choose between VBA (Mac, Control-key shortcuts) and Office.js (web, letter shortcuts) | Open |
 | D9 | Approve decision spikes K1–K4 (throwaway code) | — | **Approved 2026-09-28** |
+| D11 | Cross-workbook trace | — | **Decided 2026-09-28: essential.** This is why Excel-DNA was kept over Office.js. |
 | D10 | Undo target | — | **Decided 2026-09-28: Macabacus parity in v1. The Excel-DNA + Office.js hybrid for full native undo is a v2 candidate.** |
 
 ## C. Development-machine note
