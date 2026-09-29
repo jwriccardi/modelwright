@@ -156,6 +156,39 @@
       appendError(msg);
     }
 
+    // K1c: for each probe action, try candidate key names until Office accepts one, and KEEP it
+    // so the owner can press the physical key. Start from a clean slate first.
+    if (config.probeTargets && config.probeTargets.length) {
+      const all = {};
+      for (const a of config.actions) all[a.id] = null;
+      try { await Office.actions.replaceShortcuts(all); appendLog("probe: reset all to defaults first"); }
+      catch (err) { appendLog("probe: initial reset failed: " + (err.message || err)); }
+      const lines = [];
+      const summary = [];
+      for (const t of config.probeTargets) {
+        let accepted = null;
+        const rejected = [];
+        for (const cand of t.candidates) {
+          const payload = {};
+          payload[t.action] = cand;
+          try { await Office.actions.replaceShortcuts(payload); accepted = cand; break; }
+          catch (err) { rejected.push(cand); }
+        }
+        summary.push({ action: t.action, target: t.label, accepted, rejected });
+        lines.push(`${t.action}  ${t.label.padEnd(36)}  ${accepted ? "ACCEPTED as " + accepted : "none accepted (" + rejected.length + " tried)"}`);
+      }
+      let stored = null;
+      try { stored = await Office.actions.getShortcuts(); } catch (e) { stored = "getShortcuts failed: " + e.message; }
+      const NL = String.fromCharCode(10);
+      setText("probe-results", lines.join(NL) + NL + NL + "stored: " + JSON.stringify(stored));
+      remote("probeSummary", { summary, stored });
+      const btn = document.getElementById("revert-btn");
+      if (btn) btn.onclick = async () => {
+        try { await Office.actions.replaceShortcuts(all); appendLog("reverted all shortcuts: " + JSON.stringify(await Office.actions.getShortcuts())); }
+        catch (err) { appendError("revert failed: " + (err.message || err)); }
+      };
+    }
+
     // areShortcutsInUse(): probe each key string ON ITS OWN, so one invalid string can't fail the whole call.
     const inUse = [];
     for (const k of config.inUseCheckKeys || []) {
