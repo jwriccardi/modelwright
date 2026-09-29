@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using ExcelModelingToolkit.Core.Formatting;
 using ExcelModelingToolkit.Core.Settings;
 using ExcelModelingToolkit.Core.Undo;
@@ -60,20 +61,27 @@ internal static class Session
             return result;
         }
 
-        var previous = Settings;
-        Settings = result.Settings;
-        Engine.RetainAliases(Settings.Cycles);
-        foreach (var cycleId in new List<string>(States.Keys))
-        {
-            if (previous.FindCycle(cycleId)?.HasSameItems(Settings.FindCycle(cycleId)) != true)
-            {
-                States.Remove(cycleId);
-            }
-        }
-
-        DiagnosticsLog.Enabled = Settings.DiagnosticsLog;
+        Use(result.Settings);
         LogLoad(result, Describe(result.Outcome));
         return result;
+    }
+
+    /// <summary>
+    /// Uses <paramref name="settings"/>, just saved to the settings file by the settings dialog, exactly as a
+    /// successful <see cref="Reload"/> would: the engine keeps its aliases for number format codes still in their
+    /// cycle, and each cycle keeps its last state if its items are unchanged. Logs the save first, while the
+    /// previous diagnostics setting still applies, so turning the log off is itself logged. Never throws.
+    /// </summary>
+    public static void ApplySaved(ToolkitSettings settings)
+    {
+        DiagnosticsLog.Write(
+            "SettingsSaved",
+            SettingsStore.FilePath,
+            "source=dialog",
+            "cycles=" + settings.Cycles.Count.ToString(CultureInfo.InvariantCulture),
+            "undoCellCap=" + settings.UndoCellCap.ToString(CultureInfo.InvariantCulture),
+            "diagnosticsLog=" + (settings.DiagnosticsLog ? "true" : "false"));
+        Use(settings);
     }
 
     /// <summary>
@@ -95,6 +103,23 @@ internal static class Session
         }
 
         return message;
+    }
+
+    /// <summary>Switches to <paramref name="settings"/>, keeping what still applies (see <see cref="Reload"/>).</summary>
+    private static void Use(ToolkitSettings settings)
+    {
+        var previous = Settings;
+        Settings = settings;
+        Engine.RetainAliases(Settings.Cycles);
+        foreach (var cycleId in new List<string>(States.Keys))
+        {
+            if (previous.FindCycle(cycleId)?.HasSameItems(Settings.FindCycle(cycleId)) != true)
+            {
+                States.Remove(cycleId);
+            }
+        }
+
+        DiagnosticsLog.Enabled = Settings.DiagnosticsLog;
     }
 
     private static void LogLoad(SettingsLoadResult result, string outcome)

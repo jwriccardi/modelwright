@@ -44,6 +44,7 @@ public class ToolkitRibbon : ExcelRibbon
         <group id='emtFormatGroup' label='Format'>{format}
         </group>
         <group id='emtToolkitGroup' label='Toolkit'>
+          <button id='emtSettings' label='Settings…' screentip='Edit cycles, shortcuts and options' supertip='Edit, reorder and preview the cycles, change shortcuts, and import, export or reset your settings.' onAction='OnSettings' />
           <button id='emtAbout' label='About' screentip='About {name}' onAction='OnAbout' />
           <button id='emtReregisterKeys' label='Re-register shortcuts' screentip='Take back every shortcut from other add-ins' onAction='OnReregisterKeys' />
           <button id='emtOpenSettings' label='Open settings file' screentip='Edit settings.json' onAction='OnOpenSettings' />
@@ -63,6 +64,9 @@ public class ToolkitRibbon : ExcelRibbon
         var actionId = control.Tag;
         ExcelAsyncUtil.QueueAsMacro(() => Commands.RunCycleFromRibbon(actionId));
     }
+
+    /// <summary>Ribbon callback for Settings: the dialog runs as a macro, so its preview can call Excel.</summary>
+    public void OnSettings(IRibbonControl control) => ExcelAsyncUtil.QueueAsMacro(Commands.EmtSettings);
 
     /// <summary>Ribbon callback for the About button.</summary>
     public void OnAbout(IRibbonControl control) => ExcelAsyncUtil.QueueAsMacro(Commands.EmtAbout);

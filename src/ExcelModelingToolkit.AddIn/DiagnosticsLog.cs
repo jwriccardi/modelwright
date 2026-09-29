@@ -34,6 +34,9 @@ internal static class DiagnosticsLog
     private static readonly string FilePath = Path.Combine(LogDirectory, "log.txt");
     private static readonly string BackupPath = Path.Combine(LogDirectory, "log.1.txt");
 
+    /// <summary>The folder that holds the log files (it may not exist yet).</summary>
+    public static string FolderPath => LogDirectory;
+
     /// <summary>True to write; false makes <see cref="Write"/> a no-op.</summary>
     public static bool Enabled { get; set; } = true;
 

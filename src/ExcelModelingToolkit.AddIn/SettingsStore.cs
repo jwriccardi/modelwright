@@ -73,6 +73,56 @@ internal static class SettingsStore
     }
 
     /// <summary>
+    /// Saves <paramref name="settings"/> as the settings file, atomically: the JSON is written to a temporary file in
+    /// the same folder, which then replaces the file with <see cref="File.Replace(string, string, string, bool)"/>,
+    /// keeping the previous file as <c>settings.json.bak</c>. Where the file system cannot replace (some network
+    /// shares), the previous file is copied to the backup, deleted, and the temporary file renamed in its place. A new
+    /// file is simply renamed into place. Returns null on success, else the reason; on failure the previous file is
+    /// left as it was, or can be recovered from the backup. The temporary file is always removed. Never throws.
+    /// </summary>
+    public static string? Save(ToolkitSettings settings)
+    {
+        var tempPath = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            File.WriteAllText(tempPath, settings.ToJson(), Utf8NoBom);
+            if (!File.Exists(FilePath))
+            {
+                File.Move(tempPath, FilePath);
+                return null;
+            }
+
+            var backupPath = FilePath + ".bak";
+            try
+            {
+                File.Replace(tempPath, FilePath, backupPath, ignoreMetadataErrors: true);
+            }
+            catch (Exception ex) when (ex is IOException || ex is PlatformNotSupportedException)
+            {
+                // Replace is unsupported here, or failed part-way (it may have moved the file to the backup already).
+                if (File.Exists(FilePath))
+                {
+                    File.Copy(FilePath, backupPath, overwrite: true);
+                    File.Delete(FilePath);
+                }
+
+                File.Move(tempPath, FilePath);
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"could not save {FilePath}: {ex.Message}";
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+    }
+
+    /// <summary>
     /// Creates the file with the defaults, atomically and without ever overwriting: the JSON goes to a temporary
     /// file that is then renamed, which fails if the file exists (another Excel instance got there first). Returns
     /// true if this call created the file. <paramref name="problem"/> is null on success or when another instance

@@ -121,13 +121,52 @@ public static class Commands
     [ExcelCommand(Name = "EmtOpenSettings")]
     public static void EmtOpenSettings()
     {
+        var problem = OpenSettingsFile();
+        StatusBar.Show(problem is null
+            ? $"{ProductInfo.Name}: opened settings.json. Save your changes, then click Reload settings."
+            : $"{ProductInfo.Name}: {problem}");
+    }
+
+    /// <summary>
+    /// Opens the settings dialog on the current settings. OK saves settings.json and applies it at once, exactly as
+    /// Reload settings would (<see cref="Session.ApplySaved"/>), then re-binds the shortcuts; Cancel changes nothing.
+    /// Runs as a macro (the ribbon queues it), so the dialog's number format preview can call Excel.
+    /// </summary>
+    [ExcelCommand(Name = "EmtSettings")]
+    public static void EmtSettings()
+    {
+        try
+        {
+            var saved = SettingsDialog.Edit(Session.Settings);
+            if (saved is null)
+            {
+                return;
+            }
+
+            Session.ApplySaved(saved);
+            var failures = KeyBindings.Apply(Session.Settings.Keymap);
+            StatusBar.Show(Session.Summarize(
+                $"{ProductInfo.Name}: settings saved, {KeyBindings.Count} shortcuts registered", null, failures));
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("SettingsDialogFailed", ex.ToString());
+            StatusBar.Show($"{ProductInfo.Name}: the settings dialog failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Opens settings.json in the default editor for .json files (Notepad if there is none), creating it first if
+    /// needed. Returns null on success, else the reason. Never throws.
+    /// </summary>
+    internal static string? OpenSettingsFile()
+    {
         try
         {
             var problem = SettingsStore.EnsureExists();
             if (problem is not null)
             {
-                StatusBar.Show($"{ProductInfo.Name}: {problem}");
-                return;
+                return problem;
             }
 
             try
@@ -140,11 +179,11 @@ public static class Commands
                 Process.Start(new ProcessStartInfo("notepad.exe", "\"" + SettingsStore.FilePath + "\"") { UseShellExecute = true })?.Dispose();
             }
 
-            StatusBar.Show($"{ProductInfo.Name}: opened settings.json. Save your changes, then click Reload settings.");
+            return null;
         }
         catch (Exception ex)
         {
-            StatusBar.Show($"{ProductInfo.Name}: could not open {SettingsStore.FilePath}: {ex.Message}");
+            return $"could not open {SettingsStore.FilePath}: {ex.Message}";
         }
     }
 
