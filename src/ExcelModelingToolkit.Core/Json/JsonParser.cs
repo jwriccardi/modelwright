@@ -8,7 +8,8 @@ namespace ExcelModelingToolkit.Core.Json;
 /// <summary>
 /// A strict RFC 8259 JSON parser into <see cref="JsonObject"/>, <see cref="List{T}"/>, <see cref="string"/>,
 /// <see cref="bool"/>, <see cref="JsonNumber"/> and null. Rejects duplicate property names, comments, trailing
-/// commas and nesting deeper than <see cref="MaxDepth"/>. A leading byte order mark is ignored.
+/// commas, unpaired surrogate escapes and nesting deeper than <see cref="MaxDepth"/>. A leading byte order mark
+/// is ignored.
 /// </summary>
 internal sealed class JsonParser
 {
@@ -32,7 +33,7 @@ internal sealed class JsonParser
         }
 
         var parser = new JsonParser(text);
-        if (text.Length > 0 && text[0] == '﻿')
+        if (text.Length > 0 && text[0] == '\uFEFF')
         {
             parser._position = 1;
         }
@@ -186,6 +187,7 @@ internal sealed class JsonParser
                 continue;
             }
 
+            var escapeStart = _position;
             _position++;
             if (_position >= _text.Length)
             {
@@ -216,14 +218,31 @@ internal sealed class JsonParser
                     sb.Append('\t');
                     break;
                 case 'u':
-                    if (_position + 4 >= _text.Length ||
-                        !int.TryParse(_text.Substring(_position + 1, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var code))
+                    var code = ReadHex4();
+                    if (char.IsLowSurrogate(code))
                     {
-                        throw Error("\\u must be followed by four hex digits.");
+                        _position = escapeStart;
+                        throw Error($"\\u{(int)code:X4} is a lone low surrogate; it must follow a high surrogate escape (\\uD800-\\uDBFF).");
                     }
 
-                    sb.Append((char)code);
-                    _position += 4;
+                    if (char.IsHighSurrogate(code))
+                    {
+                        // A character outside the Basic Multilingual Plane: both halves must be escaped, in order.
+                        var low = _position + 2 < _text.Length && _text[_position + 1] == '\\' && _text[_position + 2] == 'u'
+                            ? PeekHex4(_position + 2)
+                            : null;
+                        if (low is null || !char.IsLowSurrogate(low.Value))
+                        {
+                            _position = escapeStart;
+                            throw Error($"\\u{(int)code:X4} is a lone high surrogate; it must be followed by a low surrogate escape (\\uDC00-\\uDFFF).");
+                        }
+
+                        sb.Append(code).Append(low.Value);
+                        _position += 6;
+                        break;
+                    }
+
+                    sb.Append(code);
                     break;
                 default:
                     throw Error($"invalid escape '\\{escape}' in a string.");
@@ -232,6 +251,21 @@ internal sealed class JsonParser
             _position++;
         }
     }
+
+    /// <summary>Reads the four hex digits after the <c>u</c> at the current position, leaving the position on the last digit.</summary>
+    private char ReadHex4()
+    {
+        var code = PeekHex4(_position) ?? throw Error("\\u must be followed by four hex digits.");
+        _position += 4;
+        return code;
+    }
+
+    /// <summary>The character whose four hex digits follow the <c>u</c> at <paramref name="uPosition"/>, or null if there are not four hex digits.</summary>
+    private char? PeekHex4(int uPosition) =>
+        uPosition + 4 < _text.Length &&
+        int.TryParse(_text.Substring(uPosition + 1, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var code)
+            ? (char)code
+            : null;
 
     private JsonNumber ParseNumber()
     {

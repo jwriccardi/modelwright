@@ -296,6 +296,8 @@ These are not v1 scope.
 | Keys stolen by other add-ins (CapIQ re-binds periodically; Macabacus if installed alongside) | Medium / High | "Override" command, and re-registering keys on `WorkbookActivate`. Optional keyboard hook in v2. |
 | Custom undo ordering or corruption bugs | Medium / High | Pure `UndoManager` in Core with thorough unit tests, the §4.4 ordering rule, and clearing the stack on structural changes. |
 | AltGr keyboard layouts have no Ctrl+[ | Low for US/UK users / Medium | Keys can be remapped. The keyboard hook (virtual-key codes) is a v2 option. |
+| Non-US layouts put `;`, `'` and `[` on different physical keys (for example `;` is Shift+comma on a German layout) | Medium for non-US users / Medium | `OnKey` maps through the active layout, so these chords may be unreachable or land on other keys. Users can remap in settings.json now, and in the dialog in 3c. A v2 option is binding by virtual-key code through the hook. |
+| Unloading the add-in while Macabacus is also installed | Medium / Low | `xlcOnKey` without a macro restores *Excel's* default, and the C API can't tell who owns a key. So unloading our add-in also unbinds Macabacus's copies of the shared keys until Macabacus re-registers them (restart Excel or use its Override). Document this in the README coexistence notes (Phase 5). |
 | WPF keyboard focus problems inside Excel | Medium / Medium | Spike K4, with a WinForms fallback. |
 | Mark-of-the-Web, SmartScreen and antivirus friction | High / Medium | Per-user installer, signing, and VirusTotal checks in the release checklist. |
 | Mac and web users left out | Certain / Low for now | JSON settings are portable, so a VBA (Mac) or Office.js (web) port can come later. Recorded as a follow-up. |

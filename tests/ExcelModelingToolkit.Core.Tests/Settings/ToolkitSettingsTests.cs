@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using ExcelModelingToolkit.Core.Formatting;
 using ExcelModelingToolkit.Core.Settings;
 using Xunit;
@@ -27,7 +28,7 @@ public class ToolkitSettingsTests
         var result = ToolkitSettings.FromJson(json);
 
         Assert.Empty(result.Problems);
-        Assert.False(result.UsedDefaults);
+        Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
         AssertEquivalent(defaults, result.Settings);
         Assert.Equal(json, result.Settings.ToJson());
     }
@@ -81,7 +82,7 @@ public class ToolkitSettingsTests
         var result = ToolkitSettings.FromJson(MinimalJson);
 
         Assert.Empty(result.Problems);
-        Assert.False(result.UsedDefaults);
+        Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
         Assert.Equal(ToolkitSettings.DefaultUndoCellCap, result.Settings.UndoCellCap);
         Assert.True(result.Settings.DiagnosticsLog);
         var cycle = Assert.Single(result.Settings.Cycles);
@@ -375,7 +376,7 @@ public class ToolkitSettingsTests
     [Fact]
     public void Byte_order_mark_is_accepted()
     {
-        var result = ToolkitSettings.FromJson("﻿" + MinimalJson);
+        var result = ToolkitSettings.FromJson("\uFEFF" + MinimalJson);
 
         Assert.Empty(result.Problems);
     }
@@ -410,8 +411,114 @@ public class ToolkitSettingsTests
     [Fact]
     public void SettingsLoadResult_rejects_nulls()
     {
-        Assert.Throws<ArgumentNullException>(() => new SettingsLoadResult(null!, Array.Empty<string>(), false));
-        Assert.Throws<ArgumentNullException>(() => new SettingsLoadResult(ToolkitSettings.Defaults(), null!, false));
+        Assert.Throws<ArgumentNullException>(() => new SettingsLoadResult(null!, Array.Empty<string>(), SettingsLoadOutcome.Loaded));
+        Assert.Throws<ArgumentNullException>(() => new SettingsLoadResult(ToolkitSettings.Defaults(), null!, SettingsLoadOutcome.Loaded));
+        Assert.Throws<ArgumentNullException>(() => SettingsLoadResult.Rejected(null!));
+    }
+
+    [Fact]
+    public void Rejected_result_carries_the_defaults_and_the_problems()
+    {
+        var result = SettingsLoadResult.Rejected(new[] { "bad" });
+
+        AssertDefaults(result);
+        Assert.Equal("bad", Assert.Single(result.Problems));
+    }
+
+    [Fact]
+    public void File_bytes_in_utf8_load()
+    {
+        var result = ToolkitSettings.FromFileBytes(Encoding.UTF8.GetBytes(MinimalJson.Replace("\"Font\"", "\"Font – €\"")));
+
+        Assert.Empty(result.Problems);
+        Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
+        Assert.Equal("Font – €", result.Settings.Cycles[0].DisplayName);
+    }
+
+    [Fact]
+    public void File_bytes_with_a_utf8_byte_order_mark_load()
+    {
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(MinimalJson)).ToArray();
+
+        var result = ToolkitSettings.FromFileBytes(bytes);
+
+        Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void File_bytes_in_utf16_with_a_byte_order_mark_load(bool bigEndian)
+    {
+        var encoding = new UnicodeEncoding(bigEndian, byteOrderMark: true);
+        var bytes = encoding.GetPreamble().Concat(encoding.GetBytes(MinimalJson.Replace("\"Font\"", "\"Font –\""))).ToArray();
+
+        var result = ToolkitSettings.FromFileBytes(bytes);
+
+        Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
+        Assert.Equal("Font –", result.Settings.Cycles[0].DisplayName);
+    }
+
+    [Fact]
+    public void File_bytes_that_are_not_utf8_are_rejected_not_garbled()
+    {
+        // "Font é" saved in Windows-1252: 0xE9 alone is not valid UTF-8.
+        var bytes = Encoding.UTF8.GetBytes(MinimalJson.Replace("\"Font\"", "\"Font #\""));
+        bytes[Array.IndexOf(bytes, (byte)'#')] = 0xE9;
+
+        var result = ToolkitSettings.FromFileBytes(bytes);
+
+        AssertDefaults(result);
+        Assert.Equal("settings.json is not valid UTF-8; save it as UTF-8.", Assert.Single(result.Problems));
+    }
+
+    [Fact]
+    public void File_bytes_with_a_utf16_byte_order_mark_but_invalid_utf16_are_rejected()
+    {
+        // A lone low surrogate (0xDC00, little-endian) after the byte order mark.
+        var bytes = new byte[] { 0xFF, 0xFE, 0x00, 0xDC };
+
+        var result = ToolkitSettings.FromFileBytes(bytes);
+
+        AssertDefaults(result);
+        Assert.Equal("settings.json is not valid UTF-16; save it as UTF-8.", Assert.Single(result.Problems));
+    }
+
+    [Fact]
+    public void File_bytes_over_the_size_limit_are_rejected_before_decoding()
+    {
+        var bytes = new byte[ToolkitSettings.MaxFileBytes + 1];
+        bytes[0] = 0xE9; // invalid UTF-8, which would be reported if the bytes were decoded
+
+        var result = ToolkitSettings.FromFileBytes(bytes);
+
+        AssertDefaults(result);
+        Assert.Equal(
+            "settings.json is 1,048,577 bytes; the limit is 1,048,576 bytes (1 MB). It is probably not a settings file.",
+            Assert.Single(result.Problems));
+        Assert.Throws<ArgumentNullException>(() => ToolkitSettings.FromFileBytes(null!));
+    }
+
+    [Fact]
+    public void File_size_check_allows_up_to_one_megabyte()
+    {
+        Assert.Null(ToolkitSettings.CheckFileSize(0));
+        Assert.Null(ToolkitSettings.CheckFileSize(ToolkitSettings.MaxFileBytes));
+        Assert.NotNull(ToolkitSettings.CheckFileSize(ToolkitSettings.MaxFileBytes + 1));
+    }
+
+    [Fact]
+    public void Number_format_code_over_255_characters_is_reported()
+    {
+        var json = "{ \"schemaVersion\": 1, \"keymap\": {}, \"cycles\": [ { \"id\": \"N\", \"displayName\": \"N\", \"kind\": \"numberFormat\", \"items\": [ " +
+            "{ \"name\": \"Long\", \"code\": \"" + new string('0', 256) + "\" } ] } ] }";
+
+        var result = ToolkitSettings.FromJson(json);
+
+        AssertDefaults(result);
+        Assert.Equal(
+            "cycle 'N', item 1: the number format code is 256 characters; Excel accepts at most 255.",
+            Assert.Single(result.Problems));
     }
 
     [Fact]
@@ -430,7 +537,7 @@ public class ToolkitSettingsTests
 
     private static void AssertDefaults(SettingsLoadResult result)
     {
-        Assert.True(result.UsedDefaults);
+        Assert.Equal(SettingsLoadOutcome.Rejected, result.Outcome);
         Assert.NotEmpty(result.Problems);
         Assert.Equal(ToolkitSettings.Defaults().ToJson(), result.Settings.ToJson());
     }

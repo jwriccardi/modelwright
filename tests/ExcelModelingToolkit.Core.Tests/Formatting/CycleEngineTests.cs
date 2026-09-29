@@ -292,6 +292,116 @@ public class CycleEngineTests
     }
 
     [Fact]
+    public void Number_format_read_back_value_learns_an_alias()
+    {
+        var step = _engine.Next(Formats, Format("General"), SelectionA, null); // applies "0"
+
+        var state = _engine.RecordReadBack(Formats, step.State, Format("0_)"));
+
+        Assert.Equal(Format("0_)"), state.LastAppliedValue);
+        Assert.Equal(0, _engine.IndexOf(Formats, Format("0_)")));
+    }
+
+    [Fact]
+    public void Color_read_back_becomes_the_last_applied_value()
+    {
+        // Excel maps the applied blue to a nearby color (e.g. a legacy palette); the next press still continues.
+        var nearBlue = OleColor.FromRgb(0, 0, 250);
+        var step = _engine.Next(Fonts, Color(Black), SelectionA, null); // applies Blue
+
+        var state = _engine.RecordReadBack(Fonts, step.State, Color(nearBlue));
+        var next = _engine.Next(Fonts, Color(nearBlue), SelectionA, state);
+
+        Assert.Equal(Color(nearBlue), state.LastAppliedValue);
+        Assert.Equal(0, state.LastIndex);
+        Assert.Equal(CycleStepReason.SameSelection, next.Reason);
+        Assert.Equal(1, next.Index);
+        Assert.Equal(-1, _engine.IndexOf(Fonts, Color(nearBlue))); // colors learn no aliases
+    }
+
+    [Fact]
+    public void Fill_read_back_of_no_fill_is_recorded()
+    {
+        var step = _engine.Next(Fills, Color(Navy), SelectionA, null); // applies No Fill
+
+        var state = _engine.RecordReadBack(Fills, step.State, Color(OleColor.NoFill));
+
+        Assert.Equal(Color(OleColor.NoFill), state.LastAppliedValue);
+        Assert.Equal(2, state.LastIndex);
+    }
+
+    [Fact]
+    public void Unknown_read_back_keeps_the_state()
+    {
+        var fontStep = _engine.Next(Fonts, Color(Black), SelectionA, null);
+        var formatStep = _engine.Next(Formats, Format("0"), SelectionA, null);
+
+        Assert.Same(fontStep.State, _engine.RecordReadBack(Fonts, fontStep.State, CycleValue.Unknown));
+        Assert.Same(formatStep.State, _engine.RecordReadBack(Formats, formatStep.State, CycleValue.Unknown));
+    }
+
+    [Fact]
+    public void Read_back_value_of_the_wrong_kind_is_rejected()
+    {
+        var fontStep = _engine.Next(Fonts, Color(Blue), SelectionA, null);
+        var formatStep = _engine.Next(Formats, Format("0"), SelectionA, null);
+
+        Assert.Throws<ArgumentException>(() => _engine.RecordReadBack(Fonts, fontStep.State, Format("0")));
+        Assert.Throws<ArgumentException>(() => _engine.RecordReadBack(Formats, formatStep.State, Color(Blue)));
+        Assert.Throws<ArgumentException>(() => _engine.RecordReadBack(Fonts, formatStep.State, Color(Blue)));
+        Assert.Throws<ArgumentNullException>(() => _engine.RecordReadBack(null!, fontStep.State, Color(Blue)));
+        Assert.Throws<ArgumentNullException>(() => _engine.RecordReadBack(Fonts, null!, Color(Blue)));
+    }
+
+    [Fact]
+    public void RetainAliases_keeps_aliases_of_codes_still_in_the_cycle()
+    {
+        var zero = _engine.Next(Formats, Format("General"), SelectionA, null); // applies "0"
+        _engine.RecordReadBack(Formats, zero.State, "zero!");
+        var one = _engine.Next(Formats, Format("0"), SelectionB, null); // applies "0.0"
+        _engine.RecordReadBack(Formats, one.State, "one!");
+
+        // "0" is still there (renamed and moved); "0.0" is gone.
+        var edited = new CycleDefinition("Fmt", "Formats", CycleKind.NumberFormat, new CycleItem[]
+        {
+            new NumberFormatItem("Two", "0.00"),
+            new NumberFormatItem("Nought", "0"),
+        });
+        _engine.RetainAliases(new[] { edited });
+
+        Assert.Equal(1, _engine.IndexOf(edited, Format("zero!")));
+        Assert.Equal(-1, _engine.IndexOf(Formats, Format("one!")));
+    }
+
+    [Fact]
+    public void RetainAliases_keeps_everything_when_the_cycles_are_unchanged()
+    {
+        var step = _engine.Next(Formats, Format("General"), SelectionA, null);
+        _engine.RecordReadBack(Formats, step.State, "zero!");
+
+        _engine.RetainAliases(new[] { Formats, Fonts });
+
+        Assert.Equal(0, _engine.IndexOf(Formats, Format("zero!")));
+    }
+
+    [Fact]
+    public void RetainAliases_drops_removed_cycles_and_cycles_that_changed_kind()
+    {
+        var step = _engine.Next(Formats, Format("General"), SelectionA, null);
+        _engine.RecordReadBack(Formats, step.State, "zero!");
+
+        _engine.RetainAliases(new[] { Fonts });
+        Assert.Equal(-1, _engine.IndexOf(Formats, Format("zero!")));
+
+        _engine.RecordReadBack(Formats, step.State, "zero!");
+        _engine.RetainAliases(new[] { new CycleDefinition("Fmt", "Now a font", CycleKind.FontColor, new CycleItem[] { new ColorItem("Blue", Blue) }) });
+        Assert.Equal(-1, _engine.IndexOf(Formats, Format("zero!")));
+
+        Assert.Throws<ArgumentNullException>(() => _engine.RetainAliases(null!));
+        Assert.Throws<ArgumentException>(() => _engine.RetainAliases(new CycleDefinition[] { null! }));
+    }
+
+    [Fact]
     public void Fill_no_fill_is_matched_and_wraps_to_the_first_item()
     {
         var step = _engine.Next(Fills, Color(OleColor.NoFill), SelectionA, null);

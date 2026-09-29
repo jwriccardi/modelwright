@@ -34,8 +34,8 @@ public sealed class CycleState
     public int LastIndex { get; }
 
     /// <summary>
-    /// The value that was applied: the item's value, or, for number formats, what Excel reported back after
-    /// applying it (see <see cref="CycleEngine.RecordReadBack"/>).
+    /// The value that was applied: the item's value, or what Excel reported back after applying it (see
+    /// <see cref="CycleEngine.RecordReadBack(CycleDefinition, CycleState, CycleValue)"/>).
     /// </summary>
     public CycleValue LastAppliedValue { get; }
 }

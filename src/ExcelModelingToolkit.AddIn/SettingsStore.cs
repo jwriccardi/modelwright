@@ -18,8 +18,10 @@ internal static class SettingsStore
 
     /// <summary>
     /// Loads the settings file. If it does not exist, writes the defaults there (so people can find and edit it)
-    /// and returns them. If it cannot be read or is invalid, returns the defaults with the problems; an invalid
-    /// file is left untouched so the user can fix it. Never throws.
+    /// and returns them (<see cref="SettingsLoadOutcome.CreatedDefaults"/>). If it cannot be read, is larger than
+    /// <see cref="ToolkitSettings.MaxFileBytes"/>, is not valid UTF-8 or is invalid, returns
+    /// <see cref="SettingsLoadOutcome.Rejected"/> with the problems; the file is left untouched so the user can
+    /// fix it. Never throws.
     /// </summary>
     public static SettingsLoadResult Load()
     {
@@ -27,21 +29,27 @@ internal static class SettingsStore
         {
             if (!File.Exists(FilePath))
             {
-                var problem = TryWriteDefaults();
-                return new SettingsLoadResult(
-                    ToolkitSettings.Defaults(),
-                    problem is null ? Array.Empty<string>() : new[] { problem },
-                    usedDefaults: problem is not null);
+                // If another Excel instance creates the file first, read theirs.
+                if (TryCreateDefaults(out var problem) || !File.Exists(FilePath))
+                {
+                    return new SettingsLoadResult(
+                        ToolkitSettings.Defaults(),
+                        problem is null ? Array.Empty<string>() : new[] { problem },
+                        SettingsLoadOutcome.CreatedDefaults);
+                }
             }
 
-            return ToolkitSettings.FromJson(File.ReadAllText(FilePath, Encoding.UTF8));
+            var tooLarge = ToolkitSettings.CheckFileSize(new FileInfo(FilePath).Length);
+            if (tooLarge is not null)
+            {
+                return SettingsLoadResult.Rejected(new[] { tooLarge });
+            }
+
+            return ToolkitSettings.FromFileBytes(File.ReadAllBytes(FilePath));
         }
         catch (Exception ex)
         {
-            return new SettingsLoadResult(
-                ToolkitSettings.Defaults(),
-                new[] { $"could not read {FilePath}: {ex.Message}" },
-                usedDefaults: true);
+            return SettingsLoadResult.Rejected(new[] { $"could not read {FilePath}: {ex.Message}" });
         }
     }
 
@@ -50,7 +58,13 @@ internal static class SettingsStore
     {
         try
         {
-            return File.Exists(FilePath) ? null : TryWriteDefaults();
+            if (File.Exists(FilePath))
+            {
+                return null;
+            }
+
+            TryCreateDefaults(out var problem);
+            return problem;
         }
         catch (Exception ex)
         {
@@ -58,17 +72,47 @@ internal static class SettingsStore
         }
     }
 
-    private static string? TryWriteDefaults()
+    /// <summary>
+    /// Creates the file with the defaults, atomically and without ever overwriting: the JSON goes to a temporary
+    /// file that is then renamed, which fails if the file exists (another Excel instance got there first). Returns
+    /// true if this call created the file. <paramref name="problem"/> is null on success or when another instance
+    /// created the file, else the reason. The temporary file is always removed. Never throws.
+    /// </summary>
+    private static bool TryCreateDefaults(out string? problem)
     {
+        problem = null;
+        var tempPath = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, ToolkitSettings.Defaults().ToJson(), Utf8NoBom);
-            return null;
+            File.WriteAllText(tempPath, ToolkitSettings.Defaults().ToJson(), Utf8NoBom);
+            File.Move(tempPath, FilePath);
+            return true;
         }
         catch (Exception ex)
         {
-            return $"could not create {FilePath}: {ex.Message}";
+            if (!File.Exists(FilePath))
+            {
+                problem = $"could not create {FilePath}: {ex.Message}";
+            }
+
+            return false;
+        }
+        finally
+        {
+            TryDelete(tempPath);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path); // No error if it does not exist.
+        }
+        catch (Exception)
+        {
+            // A leftover temporary file is harmless.
         }
     }
 }

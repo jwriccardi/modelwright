@@ -87,13 +87,26 @@ public static class Commands
         }
     }
 
-    /// <summary>Reloads settings.json, resets the cycles and re-binds the shortcuts.</summary>
+    /// <summary>
+    /// Reloads settings.json and re-binds the shortcuts. If the file is rejected, keeps the previous settings and
+    /// shortcuts and says why.
+    /// </summary>
     [ExcelCommand(Name = "EmtReloadSettings")]
     public static void EmtReloadSettings()
     {
         try
         {
-            var load = Session.LoadSettings();
+            var load = Session.Reload(out var keptPrevious);
+            if (keptPrevious)
+            {
+                var count = load.Problems.Count;
+                var first = count > 0 ? load.Problems[0] : "see the diagnostics log";
+                StatusBar.Show(
+                    $"{ProductInfo.Name}: settings.json has {count} problem{(count == 1 ? string.Empty : "s")}; " +
+                    $"still using the previous settings: {first}");
+                return;
+            }
+
             var failures = KeyBindings.Apply(Session.Settings.Keymap);
             StatusBar.Show(Session.Summarize(
                 $"{ProductInfo.Name}: settings reloaded, {KeyBindings.Count} shortcuts registered", load, failures));

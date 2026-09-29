@@ -12,6 +12,9 @@ internal sealed class JsonObject
 {
     private readonly List<KeyValuePair<string, object?>> _properties = new List<KeyValuePair<string, object?>>();
 
+    // Name -> value, so lookups and duplicate checks are O(1); _properties keeps the document order.
+    private readonly Dictionary<string, object?> _byName = new Dictionary<string, object?>(StringComparer.Ordinal);
+
     /// <summary>The properties, in document order.</summary>
     public IReadOnlyList<KeyValuePair<string, object?>> Properties => _properties;
 
@@ -19,32 +22,20 @@ internal sealed class JsonObject
     /// <exception cref="ArgumentException">A property with this name exists.</exception>
     public void Add(string name, object? value)
     {
-        if (Contains(name))
+        if (_byName.ContainsKey(name))
         {
             throw new ArgumentException($"Duplicate property \"{name}\".", nameof(name));
         }
 
+        _byName.Add(name, value);
         _properties.Add(new KeyValuePair<string, object?>(name, value));
     }
 
     /// <summary>True if a property named <paramref name="name"/> exists (ordinal).</summary>
-    public bool Contains(string name) => TryGet(name, out _);
+    public bool Contains(string name) => _byName.ContainsKey(name);
 
     /// <summary>Gets the value of the property named <paramref name="name"/> (ordinal).</summary>
-    public bool TryGet(string name, out object? value)
-    {
-        foreach (var property in _properties)
-        {
-            if (string.Equals(property.Key, name, StringComparison.Ordinal))
-            {
-                value = property.Value;
-                return true;
-            }
-        }
-
-        value = null;
-        return false;
-    }
+    public bool TryGet(string name, out object? value) => _byName.TryGetValue(name, out value);
 }
 
 /// <summary>A JSON number node, kept as its source text so no precision is lost.</summary>

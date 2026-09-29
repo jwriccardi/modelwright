@@ -77,15 +77,24 @@ internal static class KeyBindings
         ByAction.Clear();
         foreach (var entry in wanted)
         {
-            var error = Register(entry.Value, Macros[entry.Key]);
+            var onKey = entry.Value.ToOnKeyString();
+            var error = Macros.TryGetValue(entry.Key, out var macro)
+                ? Register(entry.Value, macro)
+                : "the add-in has no command for this action";
             if (error is null)
             {
-                Registered.Add(entry.Value.ToOnKeyString());
+                Registered.Add(onKey);
                 ByAction[entry.Key] = entry.Value;
             }
             else
             {
-                Registered.Remove(entry.Value.ToOnKeyString());
+                // A key we held may still run whatever it was bound to before; hand it back to Excel.
+                if (Registered.Contains(onKey))
+                {
+                    Restore(onKey);
+                    Registered.Remove(onKey);
+                }
+
                 failures.Add($"{entry.Value} ({entry.Key}): {error}");
             }
         }
@@ -97,6 +106,24 @@ internal static class KeyBindings
         }
 
         return failures;
+    }
+
+    /// <summary>
+    /// Self-check: the actions in <see cref="ActionIds.All"/> that have no command in the macro map (empty if the
+    /// map is complete). <see cref="Apply"/> skips such actions and reports them as failures.
+    /// </summary>
+    public static IReadOnlyList<string> ActionsWithoutCommand()
+    {
+        var missing = new List<string>();
+        foreach (var actionId in ActionIds.All)
+        {
+            if (!Macros.ContainsKey(actionId))
+            {
+                missing.Add(actionId);
+            }
+        }
+
+        return missing;
     }
 
     /// <summary>Restores Excel's default for every key we bound (AutoClose). Never throws.</summary>

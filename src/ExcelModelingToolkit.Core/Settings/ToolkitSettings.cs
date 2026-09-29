@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using ExcelModelingToolkit.Core.Formatting;
 using ExcelModelingToolkit.Core.Keys;
 
@@ -9,8 +11,8 @@ namespace ExcelModelingToolkit.Core.Settings;
 /// <summary>
 /// The user's settings (docs/PLAN.md section 4.6), stored as JSON with a versioned schema
 /// (<see cref="CurrentSchemaVersion"/>). Immutable. The constructor accepts any non-null contents;
-/// <see cref="Validate"/> reports what is wrong with them, and <see cref="FromJson"/> falls back to
-/// <see cref="Defaults"/> when the file cannot be used.
+/// <see cref="Validate"/> reports what is wrong with them, and <see cref="FromJson"/> rejects a file that
+/// cannot be used (returning <see cref="Defaults"/> with the problems).
 /// </summary>
 public sealed class ToolkitSettings
 {
@@ -19,6 +21,11 @@ public sealed class ToolkitSettings
 
     /// <summary>Default <see cref="UndoCellCap"/>.</summary>
     public const int DefaultUndoCellCap = 10000;
+
+    /// <summary>The largest settings file accepted, in bytes (1 MB). A real file is a few kilobytes.</summary>
+    public const long MaxFileBytes = 1024 * 1024;
+
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly Dictionary<string, string> _keymap;
 
@@ -88,7 +95,8 @@ public sealed class ToolkitSettings
 
     /// <summary>
     /// Parses settings JSON. If the JSON is malformed, has an unsupported <c>schemaVersion</c>, or fails
-    /// <see cref="Validate"/>, returns <see cref="Defaults"/> with the problems (never throws for bad content).
+    /// <see cref="Validate"/>, returns a <see cref="SettingsLoadOutcome.Rejected"/> result carrying
+    /// <see cref="Defaults"/> and the problems (never throws for bad content).
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="json"/> is null.</exception>
     public static SettingsLoadResult FromJson(string json)
@@ -106,9 +114,55 @@ public sealed class ToolkitSettings
         }
 
         return problems.Count == 0
-            ? new SettingsLoadResult(settings!, problems, usedDefaults: false)
-            : new SettingsLoadResult(Defaults(), problems, usedDefaults: true);
+            ? new SettingsLoadResult(settings!, problems, SettingsLoadOutcome.Loaded)
+            : SettingsLoadResult.Rejected(problems);
     }
+
+    /// <summary>
+    /// Reads the settings file's raw bytes: rejects a file larger than <see cref="MaxFileBytes"/>, decodes it as
+    /// strict UTF-8 (a UTF-8 byte order mark is skipped; a UTF-16 one selects strict UTF-16), then parses it with
+    /// <see cref="FromJson"/>. Invalid bytes are rejected rather than replaced, so a file saved in another code
+    /// page cannot silently load with garbled number formats. Never throws for bad content.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="bytes"/> is null.</exception>
+    public static SettingsLoadResult FromFileBytes(byte[] bytes)
+    {
+        if (bytes is null)
+        {
+            throw new ArgumentNullException(nameof(bytes));
+        }
+
+        var tooLarge = CheckFileSize(bytes.LongLength);
+        if (tooLarge is not null)
+        {
+            return SettingsLoadResult.Rejected(new[] { tooLarge });
+        }
+
+        string json;
+        try
+        {
+            json = Decode(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return SettingsLoadResult.Rejected(new[] { InvalidEncodingProblem(bytes) });
+        }
+
+        return FromJson(json);
+    }
+
+    /// <summary>
+    /// The problem to report for a settings file of <paramref name="length"/> bytes, or null if the size is
+    /// acceptable (at most <see cref="MaxFileBytes"/>). Lets the caller check before reading the file.
+    /// </summary>
+    public static string? CheckFileSize(long length) =>
+        length > MaxFileBytes
+            ? string.Format(
+                CultureInfo.InvariantCulture,
+                "settings.json is {0:N0} bytes; the limit is {1:N0} bytes (1 MB). It is probably not a settings file.",
+                length,
+                MaxFileBytes)
+            : null;
 
     /// <summary>Writes the settings as indented, human-editable JSON that <see cref="FromJson"/> reads back.</summary>
     public string ToJson() => SettingsJson.Write(this);
@@ -184,6 +238,33 @@ public sealed class ToolkitSettings
 
         return problems;
     }
+
+    private static string Decode(byte[] bytes)
+    {
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        {
+            return StrictUtf8.GetString(bytes, 3, bytes.Length - 3);
+        }
+
+        if (IsUtf16Bom(bytes, out var bigEndian))
+        {
+            var utf16 = new UnicodeEncoding(bigEndian, byteOrderMark: false, throwOnInvalidBytes: true);
+            return utf16.GetString(bytes, 2, bytes.Length - 2);
+        }
+
+        return StrictUtf8.GetString(bytes);
+    }
+
+    private static bool IsUtf16Bom(byte[] bytes, out bool bigEndian)
+    {
+        bigEndian = bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF;
+        return bigEndian || (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE);
+    }
+
+    private static string InvalidEncodingProblem(byte[] bytes) =>
+        IsUtf16Bom(bytes, out _)
+            ? "settings.json is not valid UTF-16; save it as UTF-8."
+            : "settings.json is not valid UTF-8; save it as UTF-8.";
 
     /// <summary>The keymap's action ids: known actions in <see cref="ActionIds.All"/> order, then any others ordinally.</summary>
     internal IEnumerable<string> OrderedKeymapActions() =>

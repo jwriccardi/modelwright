@@ -8,8 +8,9 @@ namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
 /// Runs a formatting cycle on the selection: a thin COM adapter over <see cref="CycleEngine"/>. Reads the active
-/// cell only, then writes the whole selection with one COM property write. Call in macro context on the main
-/// thread. Any COM write clears Excel's undo history (spike K2c); our own undo arrives in Phase 3b.
+/// cell only, writes the whole selection with one COM property write, then reads the active cell back. Call in
+/// macro context on the main thread. Any COM write clears Excel's undo history (spike K2c); our own undo arrives
+/// in Phase 3b.
 /// </summary>
 internal static class CycleCommand
 {
@@ -36,11 +37,14 @@ internal static class CycleCommand
             StatusBar.Show($"{trace.Label ?? actionId}: failed: {ex.Message}");
         }
 
-        var elapsed = trace.ElapsedMs ?? stopwatch.Elapsed.TotalMilliseconds;
+        // ms: entry to the end of the COM write. totalMs: entry to here (adds the read-back and the status bar).
+        var total = stopwatch.Elapsed.TotalMilliseconds;
+        var elapsed = trace.ElapsedMs ?? total;
         DiagnosticsLog.Write(
             actionId,
             "key=" + source,
             "ms=" + elapsed.ToString("0.0", CultureInfo.InvariantCulture),
+            "totalMs=" + total.ToString("0.0", CultureInfo.InvariantCulture),
             "cells=" + trace.Cells.ToString(CultureInfo.InvariantCulture),
             "item=" + trace.Item,
             result);
@@ -62,7 +66,7 @@ internal static class CycleCommand
         object? workbook = app.ActiveWorkbook;
         if (workbook is null)
         {
-            StatusBar.Show($"{label}: open a workbook first.");
+            StatusBar.Show($"{label}: No editable workbook is active (Protected View?).");
             return "no workbook";
         }
 
@@ -70,6 +74,13 @@ internal static class CycleCommand
         {
             StatusBar.Show($"{label}: select cells first.");
             return "selection is not cells";
+        }
+
+        object activeSheet = app.ActiveSheet;
+        if (FormattingIsProtected(activeSheet))
+        {
+            StatusBar.Show($"{label}: The sheet is protected; formatting is not allowed.");
+            return "sheet protected";
         }
 
         // COM objects are held as object so only the adapter helpers below bind late.
@@ -96,14 +107,17 @@ internal static class CycleCommand
 
         trace.ElapsedMs = stopwatch.Elapsed.TotalMilliseconds;
 
+        // Excel may normalize a number format code or map a color to another; remember what it reports so the
+        // cell is recognized next time (and, for number formats, learn the alias).
         var state = step.State;
-        if (cycle.Kind == CycleKind.NumberFormat)
+        var readBack = ReadBack(activeCell, cycle.Kind);
+        state = Session.Engine.RecordReadBack(cycle, state, readBack);
+        if (!readBack.IsUnknown && readBack != step.Item.Value)
         {
-            // Excel may normalize the code; remember what it reports so the cell is recognized next time.
-            if (ReadValue(activeCell, CycleKind.NumberFormat).NumberFormat is string text)
-            {
-                state = Session.Engine.RecordReadBack(cycle, state, text);
-            }
+            DiagnosticsLog.Write(
+                cycle.Kind == CycleKind.NumberFormat ? "AliasLearned" : "ColorReadBackDiffers",
+                cycle.Id,
+                $"{step.Item.Value} -> {readBack}");
         }
 
         Session.States[cycle.Id] = state;
@@ -121,6 +135,37 @@ internal static class CycleCommand
         catch (XlCallException)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// True if <paramref name="activeSheet"/> is protected and its protection does not allow formatting cells, so
+    /// every write would fail.
+    /// </summary>
+    private static bool FormattingIsProtected(object activeSheet)
+    {
+        dynamic sheet = activeSheet;
+        object protectContents = sheet.ProtectContents;
+        if (!(protectContents is bool isProtected && isProtected))
+        {
+            return false;
+        }
+
+        object allowFormatting = sheet.Protection.AllowFormattingCells;
+        return !(allowFormatting is bool allowed && allowed);
+    }
+
+    /// <summary>The active cell's value right after a write; unknown if it cannot be read (the write still stands).</summary>
+    private static CycleValue ReadBack(object activeCell, CycleKind kind)
+    {
+        try
+        {
+            return ReadValue(activeCell, kind);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("ReadBackFailed", kind.ToString(), ex.Message);
+            return CycleValue.Unknown;
         }
     }
 

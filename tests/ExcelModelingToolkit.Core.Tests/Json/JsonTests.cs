@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using ExcelModelingToolkit.Core.Json;
 using Xunit;
 
@@ -41,6 +42,64 @@ public class JsonTests
     public void Parses_string_escapes(string json, string expected)
     {
         Assert.Equal(expected, JsonParser.Parse(json));
+    }
+
+    [Fact]
+    public void Parses_an_escaped_surrogate_pair()
+    {
+        Assert.Equal("a\U0001F600b", JsonParser.Parse("\"a\\uD83D\\uDE00b\""));
+        Assert.Equal("\U0001F600", JsonParser.Parse("\"\\ud83d\\ude00\""));
+    }
+
+    [Theory]
+    [InlineData("\"ab\\uD83D\"", "line 1, column 4: \\uD83D is a lone high surrogate")]
+    [InlineData("\"ab\\uD83Dx\"", "line 1, column 4: \\uD83D is a lone high surrogate")]
+    [InlineData("\"ab\\uD83D\\u0041\"", "line 1, column 4: \\uD83D is a lone high surrogate")]
+    [InlineData("\"ab\\uD83D\\uD83D\"", "line 1, column 4: \\uD83D is a lone high surrogate")]
+    [InlineData("\"ab\\uD83D\\n\"", "line 1, column 4: \\uD83D is a lone high surrogate")]
+    [InlineData("\"ab\\uDE00\"", "line 1, column 4: \\uDE00 is a lone low surrogate")]
+    [InlineData("\"\\u0041\\uDE00\"", "line 1, column 8: \\uDE00 is a lone low surrogate")]
+    public void Rejects_unpaired_surrogate_escapes_with_a_position(string json, string expected)
+    {
+        var ex = Assert.Throws<FormatException>(() => JsonParser.Parse(json));
+
+        Assert.StartsWith(expected, ex.Message);
+    }
+
+    [Fact]
+    public void Raw_character_outside_the_basic_plane_round_trips()
+    {
+        var root = Assert.IsType<JsonObject>(JsonParser.Parse("{ \"name\": \"chart \U0001F4C8 up\" }"));
+        Assert.True(root.TryGet("name", out var name));
+        Assert.Equal("chart \U0001F4C8 up", name);
+
+        var json = JsonWriter.Write(root);
+
+        Assert.Contains("\U0001F4C8", json); // written as the character itself
+        var parsed = Assert.IsType<JsonObject>(JsonParser.Parse(json));
+        Assert.True(parsed.TryGet("name", out var again));
+        Assert.Equal("chart \U0001F4C8 up", again);
+    }
+
+    [Fact]
+    public void Large_object_keeps_order_and_finds_a_late_duplicate()
+    {
+        const int count = 20000;
+        var json = new StringBuilder("{");
+        for (var i = 0; i < count; i++)
+        {
+            json.Append(i == 0 ? string.Empty : ",").Append("\"p").Append(i).Append("\":").Append(i);
+        }
+
+        var root = Assert.IsType<JsonObject>(JsonParser.Parse(json + "}"));
+        var duplicate = Assert.Throws<FormatException>(() => JsonParser.Parse(json + ",\"p0\":0}"));
+
+        Assert.Equal(count, root.Properties.Count);
+        Assert.Equal("p0", root.Properties[0].Key);
+        Assert.Equal("p19999", root.Properties[count - 1].Key);
+        Assert.True(root.TryGet("p12345", out var value));
+        Assert.Equal("12345", Assert.IsType<JsonNumber>(value).Text);
+        Assert.Contains("duplicate property \"p0\"", duplicate.Message);
     }
 
     [Theory]

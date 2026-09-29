@@ -64,6 +64,59 @@ public class CycleDefinitionTests
     }
 
     [Fact]
+    public void Reports_a_number_format_code_longer_than_excel_accepts()
+    {
+        var longest = new CycleDefinition("N", "N", CycleKind.NumberFormat, new CycleItem[] { new NumberFormatItem("Max", new string('0', 255)) });
+        var tooLong = new CycleDefinition("N", "N", CycleKind.NumberFormat, new CycleItem[]
+        {
+            new NumberFormatItem("Zero", "0"),
+            new NumberFormatItem("Long", new string('#', 256)),
+        });
+
+        Assert.Equal(255, NumberFormatItem.MaxCodeLength);
+        Assert.Empty(longest.Validate());
+        Assert.Equal(
+            "cycle 'N', item 2: the number format code is 256 characters; Excel accepts at most 255.",
+            Assert.Single(tooLong.Validate()));
+    }
+
+    [Fact]
+    public void HasSameItems_compares_id_kind_and_item_values_in_order()
+    {
+        var cycle = new CycleDefinition("N", "Number", CycleKind.NumberFormat, new CycleItem[]
+        {
+            new NumberFormatItem("Zero", "0"),
+            new NumberFormatItem("One", "0.0"),
+        });
+
+        // Names, display name and provisional do not matter.
+        Assert.True(cycle.HasSameItems(new CycleDefinition("N", "Renamed", CycleKind.NumberFormat, new CycleItem[]
+        {
+            new NumberFormatItem("Nought", "0"),
+            new NumberFormatItem("Tenths", "0.0"),
+        }, provisional: true)));
+        Assert.True(cycle.HasSameItems(cycle));
+
+        Assert.False(cycle.HasSameItems(null));
+        Assert.False(cycle.HasSameItems(new CycleDefinition("n", "Number", CycleKind.NumberFormat, cycle.Items)));
+        Assert.False(cycle.HasSameItems(new CycleDefinition("N", "Number", CycleKind.NumberFormat, new CycleItem[]
+        {
+            new NumberFormatItem("One", "0.0"),
+            new NumberFormatItem("Zero", "0"),
+        })));
+        Assert.False(cycle.HasSameItems(new CycleDefinition("N", "Number", CycleKind.NumberFormat, new CycleItem[] { new NumberFormatItem("Zero", "0") })));
+        Assert.False(cycle.HasSameItems(new CycleDefinition("N", "Number", CycleKind.NumberFormat, new CycleItem[]
+        {
+            new NumberFormatItem("Zero", "0"),
+            new NumberFormatItem("One", "0.0_)"),
+        })));
+
+        var font = new CycleDefinition("F", "Font", CycleKind.FontColor, new CycleItem[] { Blue });
+        Assert.False(font.HasSameItems(new CycleDefinition("F", "Font", CycleKind.FillColor, new CycleItem[] { Blue })));
+        Assert.False(font.HasSameItems(new CycleDefinition("F", "Font", CycleKind.FontColor, new CycleItem[] { new ColorItem("Blue", OleColor.FromRgb(0, 0, 254)) })));
+    }
+
+    [Fact]
     public void Constructor_rejects_nulls_and_copies_items()
     {
         var items = new CycleItem[] { Blue };

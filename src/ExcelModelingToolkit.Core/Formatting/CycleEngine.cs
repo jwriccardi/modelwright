@@ -10,9 +10,10 @@ namespace ExcelModelingToolkit.Core.Formatting;
 /// <remarks>
 /// <para>
 /// The engine also remembers number format aliases: what Excel reports back after applying an item can differ
-/// from the item's code (Excel may normalize it). <see cref="RecordReadBack"/> records that text so the cell is
-/// still recognized as that item next time. Aliases are kept per cycle id and item code, for the engine's lifetime.
-/// Create a new engine when the cycle definitions change.
+/// from the item's code (Excel may normalize it). <see cref="RecordReadBack(CycleDefinition, CycleState, CycleValue)"/>
+/// records that text so the cell is still recognized as that item next time. Aliases are kept per cycle id and
+/// item code, for the engine's lifetime. When the cycle definitions change, call <see cref="RetainAliases"/> to
+/// drop the aliases of codes that are gone.
 /// </para>
 /// <para>Not thread-safe; the add-in uses it on Excel's main thread only.</para>
 /// </remarks>
@@ -123,8 +124,7 @@ public sealed class CycleEngine
 
     /// <summary>
     /// Records what Excel reported for the active cell's number format right after applying the item in
-    /// <paramref name="state"/>. If it differs from the item's code, it becomes an alias of that item. Returns
-    /// the state with <see cref="CycleState.LastAppliedValue"/> set to <paramref name="readBack"/>.
+    /// <paramref name="state"/>; see <see cref="RecordReadBack(CycleDefinition, CycleState, CycleValue)"/>.
     /// </summary>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ArgumentException">
@@ -137,11 +137,6 @@ public sealed class CycleEngine
             throw new ArgumentNullException(nameof(cycle));
         }
 
-        if (state is null)
-        {
-            throw new ArgumentNullException(nameof(state));
-        }
-
         if (readBack is null)
         {
             throw new ArgumentNullException(nameof(readBack));
@@ -152,12 +147,51 @@ public sealed class CycleEngine
             throw new ArgumentException($"Cycle '{cycle.Id}' is not a number format cycle.", nameof(cycle));
         }
 
+        return RecordReadBack(cycle, state, CycleValue.FromNumberFormat(readBack));
+    }
+
+    /// <summary>
+    /// Records what Excel reported for the active cell right after applying the item in <paramref name="state"/>.
+    /// Returns the state with <see cref="CycleState.LastAppliedValue"/> set to <paramref name="readBack"/>, so the
+    /// next press on the same selection recognizes the cell even if Excel changed the value (a normalized number
+    /// format code, or a color mapped to the nearest palette entry). For a number format that differs from the
+    /// item's code, the text also becomes an alias of that item. An unknown read-back returns
+    /// <paramref name="state"/> unchanged.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="cycle"/> or <paramref name="state"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// The read-back is not the cycle's kind of value, the state is for another cycle, or its index is out of range.
+    /// </exception>
+    public CycleState RecordReadBack(CycleDefinition cycle, CycleState state, CycleValue readBack)
+    {
+        if (cycle is null)
+        {
+            throw new ArgumentNullException(nameof(cycle));
+        }
+
+        if (state is null)
+        {
+            throw new ArgumentNullException(nameof(state));
+        }
+
+        if (!cycle.Accepts(readBack))
+        {
+            throw new ArgumentException($"Cycle '{cycle.Id}' ({cycle.Kind}) cannot record the value '{readBack}'.", nameof(readBack));
+        }
+
         if (!string.Equals(state.CycleId, cycle.Id, StringComparison.Ordinal) || state.LastIndex >= cycle.Items.Count)
         {
             throw new ArgumentException($"The state is not for an item of cycle '{cycle.Id}'.", nameof(state));
         }
 
-        if (cycle.Items[state.LastIndex] is NumberFormatItem item && !string.Equals(item.Code, readBack, StringComparison.Ordinal))
+        if (readBack.IsUnknown)
+        {
+            return state;
+        }
+
+        if (cycle.Items[state.LastIndex] is NumberFormatItem item &&
+            readBack.IsNumberFormat &&
+            !string.Equals(item.Code, readBack.NumberFormat, StringComparison.Ordinal))
         {
             if (!_aliases.TryGetValue(cycle.Id, out var byCode))
             {
@@ -171,10 +205,72 @@ public sealed class CycleEngine
                 byCode[item.Code] = aliases;
             }
 
-            aliases.Add(readBack);
+            aliases.Add(readBack.NumberFormat!);
         }
 
-        return new CycleState(state.CycleId, state.SelectionKey, state.LastIndex, CycleValue.FromNumberFormat(readBack));
+        return new CycleState(state.CycleId, state.SelectionKey, state.LastIndex, readBack);
+    }
+
+    /// <summary>
+    /// Keeps only the aliases that still apply to <paramref name="cycles"/> (the new definitions after a settings
+    /// reload): those of a number format cycle with the same id whose items still include the aliased code.
+    /// Aliases of removed cycles, of cycles that are no longer number format cycles, and of removed codes are
+    /// dropped.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="cycles"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="cycles"/> contains null.</exception>
+    public void RetainAliases(IEnumerable<CycleDefinition> cycles)
+    {
+        var codesById = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var cycle in cycles ?? throw new ArgumentNullException(nameof(cycles)))
+        {
+            if (cycle is null)
+            {
+                throw new ArgumentException("A cycle cannot be null.", nameof(cycles));
+            }
+
+            if (cycle.Kind != CycleKind.NumberFormat)
+            {
+                continue;
+            }
+
+            if (!codesById.TryGetValue(cycle.Id, out var codes))
+            {
+                codes = new HashSet<string>(StringComparer.Ordinal);
+                codesById[cycle.Id] = codes;
+            }
+
+            foreach (var item in cycle.Items)
+            {
+                if (item is NumberFormatItem format)
+                {
+                    codes.Add(format.Code);
+                }
+            }
+        }
+
+        foreach (var cycleId in new List<string>(_aliases.Keys))
+        {
+            if (!codesById.TryGetValue(cycleId, out var codes))
+            {
+                _aliases.Remove(cycleId);
+                continue;
+            }
+
+            var byCode = _aliases[cycleId];
+            foreach (var code in new List<string>(byCode.Keys))
+            {
+                if (!codes.Contains(code))
+                {
+                    byCode.Remove(code);
+                }
+            }
+
+            if (byCode.Count == 0)
+            {
+                _aliases.Remove(cycleId);
+            }
+        }
     }
 
     private bool IsContinuation(CycleDefinition cycle, CycleValue current, string selectionKey, CycleState? previous)

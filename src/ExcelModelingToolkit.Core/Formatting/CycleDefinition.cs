@@ -58,7 +58,8 @@ public sealed class CycleDefinition
 
     /// <summary>
     /// Checks the cycle: a non-blank id and display name, at least one item, every item of the cycle's kind with a
-    /// non-blank name, no blank number format code, and "no fill" only in a fill cycle. Returns the problems found
+    /// non-blank name, no blank number format code or one longer than <see cref="NumberFormatItem.MaxCodeLength"/>,
+    /// and "no fill" only in a fill cycle. Returns the problems found
     /// (empty if none), each prefixed with the cycle id.
     /// </summary>
     public IReadOnlyList<string> Validate()
@@ -96,6 +97,11 @@ public sealed class CycleDefinition
                     {
                         problems.Add($"{itemLabel}: the number format code is blank.");
                     }
+                    else if (format.Code.Length > NumberFormatItem.MaxCodeLength)
+                    {
+                        problems.Add(
+                            $"{itemLabel}: the number format code is {format.Code.Length} characters; Excel accepts at most {NumberFormatItem.MaxCodeLength}.");
+                    }
 
                     break;
                 case ColorItem color when Kind == CycleKind.FontColor:
@@ -114,6 +120,32 @@ public sealed class CycleDefinition
         }
 
         return problems;
+    }
+
+    /// <summary>
+    /// True if <paramref name="other"/> has the same id (ordinal), kind and item values in the same order, so what
+    /// was learned about this cycle (its last state, number format aliases) still applies to it. Names, display
+    /// name and <see cref="Provisional"/> are ignored.
+    /// </summary>
+    public bool HasSameItems(CycleDefinition? other)
+    {
+        if (other is null ||
+            !string.Equals(Id, other.Id, StringComparison.Ordinal) ||
+            Kind != other.Kind ||
+            Items.Count != other.Items.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < Items.Count; i++)
+        {
+            if (Items[i].Value != other.Items[i].Value)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <inheritdoc />
