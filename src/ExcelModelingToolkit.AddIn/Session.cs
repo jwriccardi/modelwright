@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using ExcelModelingToolkit.Core.Formatting;
 using ExcelModelingToolkit.Core.Settings;
+using ExcelModelingToolkit.Core.Undo;
 
 namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
 /// In-memory state for the Excel session: the settings in use, the cycle engine (with its learned number format
-/// aliases) and each cycle's last <see cref="CycleState"/>. Main thread only; nothing here is persisted.
+/// aliases), each cycle's last <see cref="CycleState"/> and our formatting undo stack. Main thread only; nothing
+/// here is persisted.
 /// </summary>
 internal static class Session
 {
@@ -19,6 +21,12 @@ internal static class Session
 
     /// <summary>Each cycle's state from its previous press, by cycle id.</summary>
     public static Dictionary<string, CycleState> States { get; } = new Dictionary<string, CycleState>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Our undo and redo stacks for the cycles' changes (docs/PLAN.md section 4.4). Kept across settings reloads;
+    /// emptied when the add-in closes.
+    /// </summary>
+    public static UndoManager Undo { get; } = new UndoManager();
 
     /// <summary>
     /// Loads the settings file at startup (writing the defaults on first run; using them if the file is rejected),

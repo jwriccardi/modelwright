@@ -35,7 +35,9 @@ public sealed class ToolkitSettings
     /// Action id (see <see cref="ActionIds"/>) to key string (e.g. <c>Ctrl+Shift+1</c>); an empty string leaves
     /// the action unbound.
     /// </param>
-    /// <param name="undoCellCap">The most cells whose formats one undo snapshot captures (used from Phase 3b).</param>
+    /// <param name="undoCellCap">
+    /// The most format reads one undo snapshot may take (see <see cref="UndoCellCap"/>).
+    /// </param>
     /// <param name="diagnosticsLog">True to write the per-command diagnostics log.</param>
     /// <exception cref="ArgumentNullException"><paramref name="cycles"/> or <paramref name="keymap"/> is null.</exception>
     /// <exception cref="ArgumentException">
@@ -84,7 +86,11 @@ public sealed class ToolkitSettings
     /// <summary>Action id to key string; an empty string means unbound.</summary>
     public IReadOnlyDictionary<string, string> Keymap => _keymap;
 
-    /// <summary>The most cells whose formats one undo snapshot captures (Phase 3b).</summary>
+    /// <summary>
+    /// The most format reads one undo snapshot may take (<see cref="Undo.SnapshotPlanner"/>). A uniform block of
+    /// any size is one read; cells whose formats all differ are read one by one, so this is also the most such
+    /// cells a snapshot records. Beyond it, the change is applied but cannot be undone.
+    /// </summary>
     public int UndoCellCap { get; }
 
     /// <summary>True to write the per-command diagnostics log.</summary>
