@@ -25,6 +25,9 @@ public sealed class ToolkitSettings
     /// <summary>The largest settings file accepted, in bytes (1 MB). A real file is a few kilobytes.</summary>
     public const long MaxFileBytes = 1024 * 1024;
 
+    /// <summary>The settings file's name, used in problem messages unless the caller names another file.</summary>
+    public const string DefaultFileName = "settings.json";
+
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly Dictionary<string, string> _keymap;
@@ -133,14 +136,26 @@ public sealed class ToolkitSettings
     /// page cannot silently load with garbled number formats. Never throws for bad content.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="bytes"/> is null.</exception>
-    public static SettingsLoadResult FromFileBytes(byte[] bytes)
+    public static SettingsLoadResult FromFileBytes(byte[] bytes) => FromFileBytes(bytes, DefaultFileName);
+
+    /// <summary>
+    /// Like <see cref="FromFileBytes(byte[])"/>, naming <paramref name="fileName"/> (e.g. an imported file) instead
+    /// of <see cref="DefaultFileName"/> in the size and encoding problems.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    public static SettingsLoadResult FromFileBytes(byte[] bytes, string fileName)
     {
         if (bytes is null)
         {
             throw new ArgumentNullException(nameof(bytes));
         }
 
-        var tooLarge = CheckFileSize(bytes.LongLength);
+        if (fileName is null)
+        {
+            throw new ArgumentNullException(nameof(fileName));
+        }
+
+        var tooLarge = CheckFileSize(bytes.LongLength, fileName);
         if (tooLarge is not null)
         {
             return SettingsLoadResult.Rejected(new[] { tooLarge });
@@ -153,7 +168,7 @@ public sealed class ToolkitSettings
         }
         catch (DecoderFallbackException)
         {
-            return SettingsLoadResult.Rejected(new[] { InvalidEncodingProblem(bytes) });
+            return SettingsLoadResult.Rejected(new[] { InvalidEncodingProblem(bytes, fileName) });
         }
 
         return FromJson(json);
@@ -163,14 +178,26 @@ public sealed class ToolkitSettings
     /// The problem to report for a settings file of <paramref name="length"/> bytes, or null if the size is
     /// acceptable (at most <see cref="MaxFileBytes"/>). Lets the caller check before reading the file.
     /// </summary>
-    public static string? CheckFileSize(long length) =>
-        length > MaxFileBytes
+    public static string? CheckFileSize(long length) => CheckFileSize(length, DefaultFileName);
+
+    /// <summary>Like <see cref="CheckFileSize(long)"/>, naming <paramref name="fileName"/> in the problem.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="fileName"/> is null.</exception>
+    public static string? CheckFileSize(long length, string fileName)
+    {
+        if (fileName is null)
+        {
+            throw new ArgumentNullException(nameof(fileName));
+        }
+
+        return length > MaxFileBytes
             ? string.Format(
                 CultureInfo.InvariantCulture,
-                "settings.json is {0:N0} bytes; the limit is {1:N0} bytes (1 MB). It is probably not a settings file.",
+                "{0} is {1:N0} bytes; the limit is {2:N0} bytes (1 MB). It is probably not a settings file.",
+                fileName,
                 length,
                 MaxFileBytes)
             : null;
+    }
 
     /// <summary>Writes the settings as indented, human-editable JSON that <see cref="FromJson"/> reads back.</summary>
     public string ToJson() => SettingsJson.Write(this);
@@ -182,8 +209,9 @@ public sealed class ToolkitSettings
     /// <summary>
     /// Checks the settings and returns the problems found (empty if none): an undo cap below 1; each cycle's own
     /// problems (<see cref="CycleDefinition.Validate"/>); duplicate cycle ids (ignoring case); keymap entries for
-    /// unknown actions, keys that <see cref="KeyChord.Parse"/> rejects, a key bound to two actions, and a bound
-    /// cycle action with no cycle of that id.
+    /// unknown actions, keys that <see cref="KeyChord.Parse"/> rejects, a key bound to two actions (also two keys
+    /// pressed the same way on a US keyboard, such as <c>Ctrl+{</c> and <c>Ctrl+Shift+[</c>:
+    /// <see cref="KeyChord.ToUsKeys"/>), and a bound cycle action with no cycle of that id.
     /// </summary>
     public IReadOnlyList<string> Validate()
     {
@@ -204,6 +232,7 @@ public sealed class ToolkitSettings
         }
 
         var chordOwners = new Dictionary<KeyChord, string>();
+        var usKeyOwners = new Dictionary<KeyChord, KeyValuePair<KeyChord, string>>();
         foreach (var actionId in OrderedKeymapActions())
         {
             var key = _keymap[actionId];
@@ -237,10 +266,20 @@ public sealed class ToolkitSettings
             if (chordOwners.TryGetValue(chord, out var owner))
             {
                 problems.Add($"keymap: {chord} is assigned to both '{owner}' and '{actionId}'.");
+                continue;
+            }
+
+            chordOwners.Add(chord, actionId);
+            var usKeys = chord.ToUsKeys();
+            if (usKeyOwners.TryGetValue(usKeys, out var usOwner))
+            {
+                problems.Add(
+                    $"keymap: {usOwner.Key} ('{usOwner.Value}') and {chord} ('{actionId}') are the same keys " +
+                    $"on a US keyboard ({usKeys}).");
             }
             else
             {
-                chordOwners.Add(chord, actionId);
+                usKeyOwners.Add(usKeys, new KeyValuePair<KeyChord, string>(chord, actionId));
             }
         }
 
@@ -269,10 +308,10 @@ public sealed class ToolkitSettings
         return bigEndian || (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE);
     }
 
-    private static string InvalidEncodingProblem(byte[] bytes) =>
+    private static string InvalidEncodingProblem(byte[] bytes, string fileName) =>
         IsUtf16Bom(bytes, out _)
-            ? "settings.json is not valid UTF-16; save it as UTF-8."
-            : "settings.json is not valid UTF-8; save it as UTF-8.";
+            ? fileName + " is not valid UTF-16; save it as UTF-8."
+            : fileName + " is not valid UTF-8; save it as UTF-8.";
 
     /// <summary>The keymap's action ids: known actions in <see cref="ActionIds.All"/> order, then any others ordinally.</summary>
     internal IEnumerable<string> OrderedKeymapActions() =>

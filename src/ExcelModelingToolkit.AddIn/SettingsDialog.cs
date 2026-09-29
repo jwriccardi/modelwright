@@ -5,8 +5,10 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 using ExcelDna.Integration;
 using ExcelModelingToolkit.Core.Formatting;
@@ -27,6 +29,11 @@ namespace ExcelModelingToolkit.AddIn;
 /// main thread inside a macro (<see cref="Commands.EmtSettings"/>), so the number format preview calls Excel
 /// synchronously. While it is open, <see cref="Form.ShowDialog(IWin32Window)"/> disables every Excel window on the
 /// thread. The Ctrl+Z hook passes keys through here, since the focus is not on a worksheet grid.
+/// <para>
+/// Nothing here may throw into Excel: every event handler runs through <see cref="Safe"/>, and while the dialog is
+/// open an unhandled WinForms exception is reported in a message box, never in the ThreadExceptionDialog (whose
+/// Quit button would end Excel's process).
+/// </para>
 /// </remarks>
 internal sealed class SettingsDialog : Form
 {
@@ -35,8 +42,20 @@ internal sealed class SettingsDialog : Form
     /// <summary>Values shown in the number format preview, as Excel's TEXT function renders them.</summary>
     private static readonly object[] PreviewSamples = { 1234.5, -1234.5, 0.0, "Text" };
 
+    /// <summary>The dialog now open, or null: at most one is open at a time.</summary>
+    private static SettingsDialog? _open;
+
+    /// <summary><see cref="Environment.TickCount"/> when the last dialog closed, or null if none has been open.</summary>
+    private static int? _closedAt;
+
     private readonly SettingsDraft _draft;
-    private readonly Func<object, string, string> _renderSample;
+
+    /// <summary>The draft's contents when the dialog opened, to tell whether Cancel would discard changes.</summary>
+    private readonly string _initialJson;
+
+    private readonly Font _formFont;
+    private readonly TabControl _tabs = new TabControl { Dock = DockStyle.Fill };
+    private readonly TabPage _cyclesPage;
 
     // Cycles tab.
     private readonly ListBox _cycleList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
@@ -60,8 +79,15 @@ internal sealed class SettingsDialog : Form
     private readonly Label _colorError = CreateError();
     private readonly GroupBox _previewGroup = new GroupBox { Text = "Preview (rendered by Excel)", Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Font _previewFont;
-    private readonly Label[] _previewResults = PreviewSamples.Select(_ => new Label { AutoSize = true, Anchor = AnchorStyles.Left, UseMnemonic = false }).ToArray();
+    private readonly Label[] _previewResults = PreviewSamples.Select(_ => new Label { AutoSize = false, AutoEllipsis = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false }).ToArray();
+    private readonly Label _localeNote = CreateNote();
     private readonly Control[] _itemEditors;
+
+    /// <summary>The code the preview shows, so it is rendered again only when the code changes.</summary>
+    private string? _previewCode;
+
+    /// <summary>Excel's <c>Application.WorksheetFunction</c> (late-bound COM), fetched once per dialog.</summary>
+    private object? _worksheetFunction;
 
     // Shortcuts tab.
     private readonly ListView _actionList = CreateList();
@@ -81,16 +107,24 @@ internal sealed class SettingsDialog : Form
     // True while controls are being filled from the draft, so their change events do not edit it.
     private bool _loading;
 
-    /// <summary>Creates the dialog; <paramref name="renderSample"/> formats a preview value with a number format code.</summary>
-    private SettingsDialog(SettingsDraft draft, Func<object, string, string> renderSample)
+    /// <summary>
+    /// Creates the dialog. <paramref name="previewMayDiffer"/> shows a note that the number format preview may
+    /// not match the cells (Excel's language or decimal separator is not en-US).
+    /// </summary>
+    private SettingsDialog(SettingsDraft draft, bool previewMayDiffer)
     {
         _draft = draft;
-        _renderSample = renderSample;
+        _initialJson = draft.ContentJson();
         _itemEditors = new Control[] { _nameBox, _codeBox, _colorBox, _pickColorButton, _noFillBox };
-        _previewFont = new Font(FontFamily.GenericMonospace, SystemFonts.MessageBoxFont.SizeInPoints);
+        _formFont = SystemFonts.MessageBoxFont; // A new Font each call: this one is the form's, disposed with it.
+        _previewFont = new Font(FontFamily.GenericMonospace, _formFont.SizeInPoints);
+        _localeNote.Visible = previewMayDiffer;
+        _localeNote.Text =
+            "Excel's TEXT function reads format codes in your Excel language and regional settings, so this " +
+            "preview may differ from the cells, which use the en-US code.";
 
         Text = ProductInfo.Name + " Settings";
-        Font = SystemFonts.MessageBoxFont;
+        Font = _formFont;
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
         StartPosition = FormStartPosition.CenterParent;
@@ -101,38 +135,80 @@ internal sealed class SettingsDialog : Form
         ClientSize = new Size(820, 600);
         MinimumSize = new Size(680, 520);
 
-        var tabs = new TabControl { Dock = DockStyle.Fill };
-        tabs.TabPages.Add(CreateCyclesPage());
-        tabs.TabPages.Add(CreateShortcutsPage());
-        tabs.TabPages.Add(CreateGeneralPage());
+        _cyclesPage = CreateCyclesPage();
+        _tabs.TabPages.Add(_cyclesPage);
+        _tabs.TabPages.Add(CreateShortcutsPage());
+        _tabs.TabPages.Add(CreateGeneralPage());
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8), ColumnCount = 1, RowCount = 2 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.Controls.Add(tabs, 0, 0);
+        root.Controls.Add(_tabs, 0, 0);
         root.Controls.Add(CreateButtonBar(), 0, 1);
         Controls.Add(root);
 
         LoadFromDraft();
+        if (Session.SourceState == SettingsLoadOutcome.Rejected)
+        {
+            SetStatus("settings.json has problems and is not in use; OK will replace it (a backup is kept).", warning: true);
+        }
     }
 
-    /// <summary>The settings saved by OK, or null if the dialog was cancelled.</summary>
-    private ToolkitSettings? SavedSettings { get; set; }
+    /// <summary>The settings saved by OK and how they were saved, or null if the dialog was cancelled.</summary>
+    private (ToolkitSettings Settings, SettingsFileSaveResult Save)? Saved { get; set; }
 
     /// <summary>
     /// Shows the dialog, modal and owned by Excel's active window, editing a copy of <paramref name="current"/>.
-    /// Returns the settings saved to settings.json by OK, or null if the dialog was cancelled. Call in macro context
-    /// on Excel's main thread.
+    /// Returns the settings saved to settings.json by OK with the save's result, or null if the dialog was
+    /// cancelled. If a dialog is already open, brings it to the front and returns null; a request made
+    /// (<paramref name="requestedAt"/>, <see cref="Environment.TickCount"/>) before the last dialog closed is
+    /// ignored (returns null). Call in macro context on Excel's main thread.
     /// </summary>
-    public static ToolkitSettings? Edit(ToolkitSettings current)
+    public static (ToolkitSettings Settings, SettingsFileSaveResult Save)? Edit(ToolkitSettings current, int requestedAt)
     {
+        if (_open is not null)
+        {
+            _open.Activate();
+            return null;
+        }
+
+        if (_closedAt is int closedAt && unchecked(requestedAt - closedAt) < 0)
+        {
+            DiagnosticsLog.Write("SettingsDialogSkipped", "requested before the last dialog closed");
+            return null;
+        }
+
         // Showing a form would otherwise install a WinForms SynchronizationContext on Excel's main thread.
         WindowsFormsSynchronizationContext.AutoInstall = false;
         Application.EnableVisualStyles();
+        try
+        {
+            // Unhandled exceptions go to ThreadException (below), not the ThreadExceptionDialog. Only allowed before
+            // the thread's first WinForms window; after that, ThreadException is used anyway once it has a handler.
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        }
+        catch (InvalidOperationException)
+        {
+            // A window already exists on this thread (an earlier dialog); the handler below still applies.
+        }
 
-        using var dialog = new SettingsDialog(new SettingsDraft(current), RenderSample);
-        return dialog.ShowDialog(new ExcelWindow()) == DialogResult.OK ? dialog.SavedSettings : null;
+        ThreadExceptionEventHandler onThreadException = (sender, e) => ReportError(_open, e.Exception);
+        Application.ThreadException += onThreadException;
+        var previousDpiContext = DpiContext.EnterSystemAware();
+        try
+        {
+            using var dialog = new SettingsDialog(new SettingsDraft(current), PreviewMayDiffer());
+            _open = dialog;
+            return dialog.ShowDialog(new ExcelWindow()) == DialogResult.OK ? dialog.Saved : null;
+        }
+        finally
+        {
+            _open = null;
+            _closedAt = Environment.TickCount;
+            DpiContext.Restore(previousDpiContext);
+            Application.ThreadException -= onThreadException;
+        }
     }
 
     /// <summary>Capture mode takes the next key press, before any control or mnemonic sees it.</summary>
@@ -143,6 +219,37 @@ internal sealed class SettingsDialog : Form
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
+        var handled = true;
+        var key = keyData;
+        Safe(() => handled = CaptureKey(key));
+        return handled;
+    }
+
+    /// <inheritdoc />
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        Safe(() =>
+        {
+            if (DialogResult != DialogResult.OK &&
+                (e.CloseReason == CloseReason.UserClosing || e.CloseReason == CloseReason.None) &&
+                HasUnsavedChanges())
+            {
+                var answer = MessageBox.Show(
+                    this,
+                    "Discard your changes?",
+                    Text,
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button2);
+                e.Cancel = answer != DialogResult.Yes;
+            }
+        });
+        base.OnFormClosing(e);
+    }
+
+    /// <summary>Handles a key press in capture mode; returns true if it was used.</summary>
+    private bool CaptureKey(Keys keyData)
+    {
         var keyCode = (int)(keyData & Keys.KeyCode);
         if ((keyData & Keys.KeyCode) == Keys.Escape && (keyData & Keys.Modifiers) == Keys.None)
         {
@@ -171,17 +278,21 @@ internal sealed class SettingsDialog : Form
             modifiers |= KeyModifiers.Shift;
         }
 
-        var text = KeyCapture.ToKeyString(keyCode, modifiers);
+        // KeyCapture names punctuation keys by their US character; the layout's own character is used where it differs.
+        var text = KeyboardLayout.ToLayoutKeyString(keyCode, modifiers, KeyCapture.ToKeyString(keyCode, modifiers), out var layoutProblem);
         if (text is null)
         {
-            StopCapture(
+            StopCapture(layoutProblem ??
                 "That key can't be part of a shortcut. Use a letter, digit, punctuation key, F1-F12, an arrow, " +
                 "PgUp, PgDn, Home, End, Ins or Del, with Ctrl, Alt and/or Shift.");
             return true;
         }
 
+        var altGrWarning = KeyboardLayout.AltGrWarning(keyCode, modifiers);
         StopCapture(null);
-        _keyBox.Text = text; // Updates the draft and shows any problem.
+        _keyBox.Text = text; // Updates the draft.
+        var problem = SelectedAction is { } actionId ? _draft.KeyProblem(actionId) : null;
+        _keyError.Text = string.Join(" ", new[] { problem, altGrWarning }.Where(m => m is not null));
         return true;
     }
 
@@ -195,6 +306,95 @@ internal sealed class SettingsDialog : Form
         }
 
         base.Dispose(disposing);
+        if (disposing)
+        {
+            _formFont.Dispose(); // After the controls, which use it.
+        }
+    }
+
+    /// <summary>
+    /// Logs <paramref name="ex"/> and shows its message over <paramref name="owner"/> (or Excel, if null). Never
+    /// throws: an error in a settings dialog handler must not reach Excel.
+    /// </summary>
+    private static void ReportError(IWin32Window? owner, Exception ex)
+    {
+        DiagnosticsLog.Write("SettingsDialogError", ex.ToString());
+        try
+        {
+            MessageBox.Show(
+                owner,
+                $"Something went wrong: {ex.Message}\n\nThe dialog is still open; the details are in the diagnostics log.",
+                ProductInfo.Name + " Settings",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        catch (Exception)
+        {
+            // Nothing more can be done; the error is logged.
+        }
+    }
+
+    /// <summary>
+    /// True if Excel's number format preview may not match the cells: its decimal separator is not "." or its
+    /// display language is not English (US). Call in macro context. Any error counts as false.
+    /// </summary>
+    private static bool PreviewMayDiffer()
+    {
+        const int xlDecimalSeparator = 3;
+        const int msoLanguageIDUI = 2;
+        const int englishUs = 1033;
+        try
+        {
+            var separator = GetProperty(ExcelDnaUtil.Application, "International", xlDecimalSeparator);
+            if (!string.Equals(Convert.ToString(separator, CultureInfo.InvariantCulture), ".", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        catch (Exception)
+        {
+            // Unknown: fall through to the language check.
+        }
+
+        try
+        {
+            var languageSettings = GetProperty(ExcelDnaUtil.Application, "LanguageSettings");
+            return Convert.ToInt32(GetProperty(languageSettings, "LanguageID", msoLanguageIDUI), CultureInfo.InvariantCulture) != englishUs;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A late-bound COM property get, with arguments for a parameterized property.</summary>
+    private static object GetProperty(object target, string name, params object[] arguments) =>
+        target.GetType().InvokeMember(name, BindingFlags.GetProperty, null, target, arguments, CultureInfo.InvariantCulture);
+
+    /// <summary>Runs an event handler's work, reporting any exception instead of letting it reach Excel.</summary>
+    private void Safe(Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception ex)
+        {
+            ReportError(this, ex);
+        }
+    }
+
+    /// <summary>Shows <paramref name="text"/> in the bottom bar, in red if it is a <paramref name="warning"/>.</summary>
+    private void SetStatus(string text, bool warning = false)
+    {
+        _status.ForeColor = warning ? Color.Firebrick : SystemColors.ControlText;
+        _status.Text = text;
+    }
+
+    private bool HasUnsavedChanges()
+    {
+        CommitPendingEdits();
+        return !string.Equals(_draft.ContentJson(), _initialJson, StringComparison.Ordinal);
     }
 
     private static string ColorText(OleColor color) =>
@@ -207,9 +407,10 @@ internal sealed class SettingsDialog : Form
     /// <summary>
     /// <paramref name="value"/> formatted with <paramref name="code"/> by Excel's own formatter,
     /// <c>WorksheetFunction.Text</c> (late-bound COM), or a note if Excel rejects the code. TEXT reads the code in
-    /// Excel's display language, so outside en-US the preview can differ from the cell, which uses en-US syntax.
+    /// Excel's display language, so outside en-US the preview can differ from the cell, which uses en-US syntax
+    /// (the dialog then says so under the preview).
     /// </summary>
-    private static string RenderSample(object value, string code)
+    private string RenderSample(object value, string code)
     {
         if (code.Trim().Length == 0)
         {
@@ -218,8 +419,14 @@ internal sealed class SettingsDialog : Form
 
         try
         {
-            dynamic application = ExcelDnaUtil.Application;
-            object result = application.WorksheetFunction.Text(value, code);
+            if (_worksheetFunction is null)
+            {
+                dynamic application = ExcelDnaUtil.Application;
+                _worksheetFunction = application.WorksheetFunction;
+            }
+
+            dynamic worksheetFunction = _worksheetFunction!;
+            object result = worksheetFunction.Text(value, code);
             return Convert.ToString(result, CultureInfo.CurrentCulture) ?? string.Empty;
         }
         catch (Exception)
@@ -295,12 +502,17 @@ internal sealed class SettingsDialog : Form
 
         var preview = CreateTable(2);
         preview.Dock = DockStyle.Top; // A docked-fill child would give the auto-sized group no height.
+        preview.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        preview.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // Long results are cut with an ellipsis.
         for (var i = 0; i < PreviewSamples.Length; i++)
         {
             preview.Controls.Add(new Label { Text = DescribeSample(PreviewSamples[i]), AutoSize = true, Anchor = AnchorStyles.Left, UseMnemonic = false }, 0, i);
             _previewResults[i].Font = _previewFont;
             preview.Controls.Add(_previewResults[i], 1, i);
         }
+
+        preview.Controls.Add(_localeNote, 0, PreviewSamples.Length);
+        preview.SetColumnSpan(_localeNote, 2);
 
         _previewGroup.Controls.Add(preview);
 
@@ -327,24 +539,23 @@ internal sealed class SettingsDialog : Form
         layout.Controls.Add(right, 1, 0);
         layout.SetRowSpan(right, 2);
 
-        _cycleList.SelectedIndexChanged += (s, e) => ShowCycle(0);
-        _itemList.SelectedIndexChanged += (s, e) => ShowItem();
-        _itemList.Resize += (s, e) => _itemValueColumn.Width = -2; // The last column fills the list.
-        _addButton.Click += (s, e) => AddItem();
-        _removeButton.Click += (s, e) => EditItems(c =>
+        _cycleList.SelectedIndexChanged += (s, e) => Safe(() => ShowCycle(0));
+        _itemList.SelectedIndexChanged += (s, e) => Safe(ShowItem);
+        _itemList.Resize += (s, e) => Safe(() => _itemValueColumn.Width = -2); // The last column fills the list.
+        _addButton.Click += (s, e) => Safe(AddItem);
+        _removeButton.Click += (s, e) => Safe(() => EditItems(c =>
         {
             var index = SelectedItem;
             c.RemoveItem(index);
             return Math.Min(index, c.Items.Count - 1);
-        });
-        _upButton.Click += (s, e) => EditItems(c => c.MoveItemUp(SelectedItem));
-        _downButton.Click += (s, e) => EditItems(c => c.MoveItemDown(SelectedItem));
-        _nameBox.TextChanged += (s, e) => EditSelectedItem(c => c.RenameItem(SelectedItem, _nameBox.Text));
-        _codeBox.TextChanged += (s, e) => EditSelectedItem(c => c.SetCode(SelectedItem, _codeBox.Text));
-        _colorBox.TextChanged += (s, e) => ColorTyped();
-        _colorBox.Leave += (s, e) => ShowItem(); // Puts back the item's color if the text was left invalid.
-        _noFillBox.CheckedChanged += (s, e) => NoFillToggled();
-        _pickColorButton.Click += (s, e) => PickColor();
+        }));
+        _upButton.Click += (s, e) => Safe(() => EditItems(c => c.MoveItemUp(SelectedItem)));
+        _downButton.Click += (s, e) => Safe(() => EditItems(c => c.MoveItemDown(SelectedItem)));
+        _nameBox.TextChanged += (s, e) => Safe(() => EditSelectedItem(c => c.RenameItem(SelectedItem, _nameBox.Text)));
+        _codeBox.TextChanged += (s, e) => Safe(() => EditSelectedItem(c => c.SetCode(SelectedItem, _codeBox.Text)));
+        _colorBox.TextChanged += (s, e) => Safe(ColorTyped); // Invalid text stays, with its error, until fixed; OK refuses it.
+        _noFillBox.CheckedChanged += (s, e) => Safe(NoFillToggled);
+        _pickColorButton.Click += (s, e) => Safe(PickColor);
 
         var page = new TabPage("Cycles") { UseVisualStyleBackColor = true };
         page.Controls.Add(layout);
@@ -387,16 +598,16 @@ internal sealed class SettingsDialog : Form
         layout.Controls.Add(note, 0, 4);
         layout.SetColumnSpan(note, 4);
 
-        _actionList.SelectedIndexChanged += (s, e) => ShowAction();
-        _keyBox.TextChanged += (s, e) => KeyTyped();
-        _keyBox.Leave += (s, e) => ShowAction(); // Shows the key in its standard form.
-        _captureButton.Click += (s, e) => StartCapture();
-        _captureButton.Leave += (s, e) => StopCapture(null);
-        _clearKeyButton.Click += (s, e) =>
+        _actionList.SelectedIndexChanged += (s, e) => Safe(ShowAction);
+        _keyBox.TextChanged += (s, e) => Safe(KeyTyped);
+        _keyBox.Leave += (s, e) => Safe(ShowAction); // Shows the key in its standard form.
+        _captureButton.Click += (s, e) => Safe(StartCapture);
+        _captureButton.Leave += (s, e) => Safe(() => StopCapture(null));
+        _clearKeyButton.Click += (s, e) => Safe(() =>
         {
             _keyBox.Text = string.Empty;
             _keyBox.Focus();
-        };
+        });
 
         var page = new TabPage("Shortcuts") { UseVisualStyleBackColor = true };
         page.Controls.Add(layout);
@@ -431,29 +642,29 @@ internal sealed class SettingsDialog : Form
         layout.SetColumnSpan(buttons, 2);
         AddNote(layout, 5, "Settings file: " + SettingsStore.FilePath);
 
-        _undoCapBox.ValueChanged += (s, e) =>
+        _undoCapBox.ValueChanged += (s, e) => Safe(() =>
         {
             if (!_loading)
             {
                 _draft.UndoCellCap = (int)_undoCapBox.Value;
             }
-        };
-        _logBox.CheckedChanged += (s, e) =>
+        });
+        _logBox.CheckedChanged += (s, e) => Safe(() =>
         {
             if (!_loading)
             {
                 _draft.DiagnosticsLog = _logBox.Checked;
             }
-        };
-        openLog.Click += (s, e) => OpenLogFolder();
-        openSettings.Click += (s, e) =>
+        });
+        openLog.Click += (s, e) => Safe(OpenLogFolder);
+        openSettings.Click += (s, e) => Safe(() =>
         {
             var problem = Commands.OpenSettingsFile();
             if (problem is not null)
             {
                 MessageBox.Show(this, problem, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
-        };
+        });
 
         var page = new TabPage("General") { UseVisualStyleBackColor = true };
         page.Controls.Add(layout);
@@ -494,10 +705,10 @@ internal sealed class SettingsDialog : Form
         bar.Controls.Add(ok, 4, 0);
         bar.Controls.Add(cancel, 5, 0);
 
-        import.Click += (s, e) => Import();
-        export.Click += (s, e) => Export();
-        reset.Click += (s, e) => ResetToDefaults();
-        ok.Click += (s, e) => Save();
+        import.Click += (s, e) => Safe(Import);
+        export.Click += (s, e) => Safe(Export);
+        reset.Click += (s, e) => Safe(ResetToDefaults);
+        ok.Click += (s, e) => Safe(Save);
         return bar;
     }
 
@@ -637,7 +848,10 @@ internal sealed class SettingsDialog : Form
             var key = color.Color.ToString();
             if (!_swatches.Images.ContainsKey(key))
             {
-                _swatches.Images.Add(key, CreateSwatch(color.Color));
+                // With its handle created, the image list copies the bitmap, so it can be disposed at once.
+                _ = _swatches.Handle;
+                using var swatch = CreateSwatch(color.Color);
+                _swatches.Images.Add(key, swatch);
             }
 
             row.ImageKey = key;
@@ -712,18 +926,14 @@ internal sealed class SettingsDialog : Form
     private void UpdatePreview()
     {
         var item = SelectedCycle is { } cycle && SelectedItem >= 0 ? cycle.Items[SelectedItem] : null;
-        if (item is NumberFormatItem format)
+        var code = (item as NumberFormatItem)?.Code;
+        if (!string.Equals(code, _previewCode, StringComparison.Ordinal))
         {
+            // Each render is a call into Excel, so only when the code changes.
+            _previewCode = code;
             for (var i = 0; i < PreviewSamples.Length; i++)
             {
-                _previewResults[i].Text = _renderSample(PreviewSamples[i], format.Code);
-            }
-        }
-        else
-        {
-            foreach (var result in _previewResults)
-            {
-                result.Text = string.Empty;
+                _previewResults[i].Text = code is null ? string.Empty : RenderSample(PreviewSamples[i], code);
             }
         }
 
@@ -770,6 +980,14 @@ internal sealed class SettingsDialog : Form
         FillItems(index);
         _nameBox.Focus();
         _nameBox.SelectAll();
+        var same = cycle.IndexOfSameValue(index);
+        if (same >= 0)
+        {
+            SetStatus(
+                $"Item {same + 1} ({cycle.Items[same].Name}) has the same {(cycle.Kind == CycleKind.NumberFormat ? "code" : "color")}: " +
+                "the cycle resumes after the first copy. Give the new item its own value.",
+                warning: true);
+        }
     }
 
     /// <summary>Applies a list edit (remove or move) and selects the item index it returns.</summary>
@@ -994,8 +1212,9 @@ internal sealed class SettingsDialog : Form
         IReadOnlyList<string> problems;
         try
         {
-            var tooLarge = ToolkitSettings.CheckFileSize(new FileInfo(open.FileName).Length);
-            problems = tooLarge is not null ? new[] { tooLarge } : _draft.ImportFile(File.ReadAllBytes(open.FileName));
+            var fileName = Path.GetFileName(open.FileName);
+            var tooLarge = ToolkitSettings.CheckFileSize(new FileInfo(open.FileName).Length, fileName);
+            problems = tooLarge is not null ? new[] { tooLarge } : _draft.ImportFile(File.ReadAllBytes(open.FileName), fileName);
         }
         catch (Exception ex)
         {
@@ -1009,7 +1228,7 @@ internal sealed class SettingsDialog : Form
         }
 
         LoadFromDraft();
-        _status.Text = $"Imported {Path.GetFileName(open.FileName)}. Click OK to save and apply.";
+        SetStatus($"Imported {Path.GetFileName(open.FileName)}. Click OK to save and apply.");
     }
 
     private void Export()
@@ -1038,7 +1257,7 @@ internal sealed class SettingsDialog : Form
         try
         {
             File.WriteAllText(save.FileName, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            _status.Text = $"Exported to {Path.GetFileName(save.FileName)}.";
+            SetStatus($"Exported to {Path.GetFileName(save.FileName)}.");
         }
         catch (Exception ex)
         {
@@ -1062,11 +1281,21 @@ internal sealed class SettingsDialog : Form
 
         _draft.ResetToDefaults();
         LoadFromDraft();
-        _status.Text = "Defaults restored. Click OK to save and apply, or Cancel to keep your settings.";
+        SetStatus("Defaults restored. Click OK to save and apply, or Cancel to keep your settings.");
     }
 
     private void Save()
     {
+        if (_colorError.Text.Length > 0)
+        {
+            // A color typed but not valid: the item still has its old color, which OK would silently keep.
+            SetStatus("Fix the color (or pick one) before clicking OK.", warning: true);
+            _tabs.SelectedTab = _cyclesPage;
+            _colorBox.Focus();
+            _colorBox.SelectAll();
+            return;
+        }
+
         CommitPendingEdits();
         var settings = _draft.ToSettings(out var problems);
         if (problems.Count > 0)
@@ -1075,14 +1304,33 @@ internal sealed class SettingsDialog : Form
             return;
         }
 
-        var saveProblem = SettingsStore.Save(settings);
-        if (saveProblem is not null)
+        // Never overwrite silently a file edited by hand since we read it, or one that was rejected.
+        if (SettingsStore.Exists() &&
+            (Session.SourceState == SettingsLoadOutcome.Rejected || SettingsStore.HasChangedSince(Session.SourceHash)))
         {
-            MessageBox.Show(this, $"The settings were not saved: {saveProblem}", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            var answer = MessageBox.Show(
+                this,
+                "settings.json was changed outside this dialog (or has problems and isn't in use). Replace it with " +
+                "these settings? The current file will be kept as a backup.\n\nChoose No to return; you can Cancel " +
+                "and use Reload settings instead.",
+                Text,
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (answer != DialogResult.Yes)
+            {
+                return;
+            }
+        }
+
+        var save = SettingsStore.Save(settings);
+        if (!save.Succeeded)
+        {
+            MessageBox.Show(this, $"The settings were not saved: {save.Problem}", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        SavedSettings = settings;
+        Saved = (settings, save);
         DialogResult = DialogResult.OK;
     }
 
@@ -1106,6 +1354,41 @@ internal sealed class SettingsDialog : Form
         }
 
         MessageBox.Show(this, text.ToString(), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+
+    /// <summary>
+    /// The thread's DPI awareness while the dialog exists: system-aware, so WinForms (.NET Framework) lays the
+    /// dialog out once at the system DPI and Windows scales it on other monitors, rather than a per-monitor-aware
+    /// Excel thread leaving it unscaled or clipped on a monitor at another DPI.
+    /// </summary>
+    private static class DpiContext
+    {
+        private static readonly IntPtr SystemAware = new IntPtr(-2); // DPI_AWARENESS_CONTEXT_SYSTEM_AWARE
+
+        /// <summary>Makes the thread system-aware. Returns the previous context, or zero if it was not changed.</summary>
+        public static IntPtr EnterSystemAware()
+        {
+            try
+            {
+                return SetThreadDpiAwarenessContext(SystemAware);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return IntPtr.Zero; // Before Windows 10 1607 a thread cannot change its awareness.
+            }
+        }
+
+        /// <summary>Puts back the context <see cref="EnterSystemAware"/> returned.</summary>
+        public static void Restore(IntPtr previous)
+        {
+            if (previous != IntPtr.Zero)
+            {
+                SetThreadDpiAwarenessContext(previous);
+            }
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
     }
 
     /// <summary>Excel's active window (else its main window), as the dialog's owner.</summary>

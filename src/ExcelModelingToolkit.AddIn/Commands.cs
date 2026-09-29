@@ -99,8 +99,8 @@ public static class Commands
             var load = Session.Reload(out var keptPrevious);
             if (keptPrevious)
             {
-                var count = load.Problems.Count;
-                var first = count > 0 ? load.Problems[0] : "see the diagnostics log";
+                var count = load.Result.Problems.Count;
+                var first = count > 0 ? load.Result.Problems[0] : "see the diagnostics log";
                 StatusBar.Show(
                     $"{ProductInfo.Name}: settings.json has {count} problem{(count == 1 ? string.Empty : "s")}; " +
                     $"still using the previous settings: {first}");
@@ -130,20 +130,28 @@ public static class Commands
     /// <summary>
     /// Opens the settings dialog on the current settings. OK saves settings.json and applies it at once, exactly as
     /// Reload settings would (<see cref="Session.ApplySaved"/>), then re-binds the shortcuts; Cancel changes nothing.
-    /// Runs as a macro (the ribbon queues it), so the dialog's number format preview can call Excel.
+    /// Runs as a macro (the ribbon queues it, see <see cref="ShowSettings"/>), so the dialog's number format preview
+    /// can call Excel.
     /// </summary>
     [ExcelCommand(Name = "EmtSettings")]
-    public static void EmtSettings()
+    public static void EmtSettings() => ShowSettings(Environment.TickCount);
+
+    /// <summary>
+    /// <see cref="EmtSettings"/>, requested at <paramref name="requestedAt"/> (<see cref="Environment.TickCount"/>):
+    /// a request made before the last settings dialog closed (a second click queued while it was open) is ignored,
+    /// and one made while a dialog is open brings that dialog to the front.
+    /// </summary>
+    internal static void ShowSettings(int requestedAt)
     {
         try
         {
-            var saved = SettingsDialog.Edit(Session.Settings);
+            var saved = SettingsDialog.Edit(Session.Settings, requestedAt);
             if (saved is null)
             {
                 return;
             }
 
-            Session.ApplySaved(saved);
+            Session.ApplySaved(saved.Value.Settings, saved.Value.Save);
             var failures = KeyBindings.Apply(Session.Settings.Keymap);
             StatusBar.Show(Session.Summarize(
                 $"{ProductInfo.Name}: settings saved, {KeyBindings.Count} shortcuts registered", null, failures));

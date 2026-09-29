@@ -13,10 +13,10 @@ namespace ExcelModelingToolkit.Core.Settings;
 /// <remarks>
 /// <para>
 /// <b>Provisional cycles.</b> A provisional cycle (<see cref="CycleDefinition.Provisional"/>) ships placeholder
-/// items until the owner's real Macabacus list is captured. Any change to its items (adding, removing, moving,
-/// renaming, or a new code or color) clears <see cref="Provisional"/>: the list is now the user's own, so it must
-/// no longer be marked (and must not be replaced) as a placeholder. An edit that changes nothing (the same name,
-/// code or color, or a move at the end of the list) leaves the flag alone.
+/// items until the owner's real Macabacus list is captured. <see cref="Provisional"/> stays true only while the
+/// items are exactly the ones the cycle was loaded with (the same names and values, in the same order): once they
+/// differ, the list is the user's own, so it must no longer be marked (and must not be replaced) as a placeholder.
+/// An edit that is undone by hand (renamed back, moved back) leaves the cycle provisional.
 /// </para>
 /// </remarks>
 public sealed class CycleDraft
@@ -32,13 +32,16 @@ public sealed class CycleDraft
 
     private readonly List<CycleItem> _items;
 
+    /// <summary>The items the cycle was loaded with, if it was provisional; else null.</summary>
+    private readonly CycleItem[]? _provisionalItems;
+
     internal CycleDraft(CycleDefinition cycle)
     {
         Id = cycle.Id;
         DisplayName = cycle.DisplayName;
         Kind = cycle.Kind;
-        Provisional = cycle.Provisional;
         _items = new List<CycleItem>(cycle.Items);
+        _provisionalItems = cycle.Provisional ? _items.ToArray() : null;
     }
 
     /// <summary>The cycle's id, also the action id of its command (see <see cref="CycleDefinition.Id"/>).</summary>
@@ -51,10 +54,10 @@ public sealed class CycleDraft
     public CycleKind Kind { get; }
 
     /// <summary>
-    /// True while the items are still the shipped placeholders; cleared by the first edit of the items (see the
-    /// remarks on <see cref="CycleDraft"/>).
+    /// True while a provisional cycle's items are still the ones it was loaded with, by name and value (see the
+    /// remarks on <see cref="CycleDraft"/>). Always false for a cycle that was not provisional.
     /// </summary>
-    public bool Provisional { get; private set; }
+    public bool Provisional => _provisionalItems is not null && HasItems(_provisionalItems);
 
     /// <summary>The items, in cycle order.</summary>
     public IReadOnlyList<CycleItem> Items => _items;
@@ -82,7 +85,6 @@ public sealed class CycleDraft
             _ => new ColorItem(NewColorName, OleColor.FromRgb(0, 0, 0)),
         };
         _items.Insert(index, item);
-        Edited();
         return index;
     }
 
@@ -92,7 +94,6 @@ public sealed class CycleDraft
     {
         CheckIndex(index);
         _items.RemoveAt(index);
-        Edited();
     }
 
     /// <summary>
@@ -202,22 +203,50 @@ public sealed class CycleDraft
         }
     }
 
+    /// <summary>
+    /// The index of the first other item whose value (number format code or color) equals that of the item at
+    /// <paramref name="index"/>, or -1. The cycle engine stops at the first item matching the cell, so a later copy
+    /// is only reached by cycling past it.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not an item index.</exception>
+    public int IndexOfSameValue(int index)
+    {
+        CheckIndex(index);
+        for (var i = 0; i < _items.Count; i++)
+        {
+            if (i != index && _items[i].Value == _items[index].Value)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     /// <summary>The cycle as it now stands (not validated).</summary>
     public CycleDefinition ToDefinition() => new CycleDefinition(Id, DisplayName, Kind, _items, Provisional);
 
-    private void Replace(int index, CycleItem item)
-    {
-        _items[index] = item;
-        Edited();
-    }
+    private void Replace(int index, CycleItem item) => _items[index] = item;
 
-    private void Swap(int a, int b)
-    {
-        (_items[a], _items[b]) = (_items[b], _items[a]);
-        Edited();
-    }
+    private void Swap(int a, int b) => (_items[a], _items[b]) = (_items[b], _items[a]);
 
-    private void Edited() => Provisional = false;
+    private bool HasItems(CycleItem[] items)
+    {
+        if (items.Length != _items.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < items.Length; i++)
+        {
+            if (!string.Equals(items[i].Name, _items[i].Name, StringComparison.Ordinal) || items[i].Value != _items[i].Value)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private void CheckIndex(int index)
     {

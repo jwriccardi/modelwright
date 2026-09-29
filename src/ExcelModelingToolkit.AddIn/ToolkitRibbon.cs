@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
@@ -65,8 +66,15 @@ public class ToolkitRibbon : ExcelRibbon
         ExcelAsyncUtil.QueueAsMacro(() => Commands.RunCycleFromRibbon(actionId));
     }
 
-    /// <summary>Ribbon callback for Settings: the dialog runs as a macro, so its preview can call Excel.</summary>
-    public void OnSettings(IRibbonControl control) => ExcelAsyncUtil.QueueAsMacro(Commands.EmtSettings);
+    /// <summary>
+    /// Ribbon callback for Settings: the dialog runs as a macro, so its preview can call Excel. The click time lets
+    /// a second click, queued while the dialog was open, be ignored once it has closed.
+    /// </summary>
+    public void OnSettings(IRibbonControl control)
+    {
+        var clickedAt = Environment.TickCount;
+        ExcelAsyncUtil.QueueAsMacro(() => Commands.ShowSettings(clickedAt));
+    }
 
     /// <summary>Ribbon callback for the About button.</summary>
     public void OnAbout(IRibbonControl control) => ExcelAsyncUtil.QueueAsMacro(Commands.EmtAbout);

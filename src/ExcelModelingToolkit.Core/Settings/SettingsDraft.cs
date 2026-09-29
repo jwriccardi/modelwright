@@ -17,7 +17,10 @@ public sealed class SettingsDraft
     private readonly List<CycleDraft> _cycles = new List<CycleDraft>();
     private readonly Dictionary<string, string> _keymap = new Dictionary<string, string>(StringComparer.Ordinal);
 
-    /// <summary>Creates a draft holding a copy of <paramref name="settings"/>.</summary>
+    /// <summary>
+    /// Creates a draft holding a copy of <paramref name="settings"/>, with each key that <see cref="KeyChord.Parse"/>
+    /// accepts in its display form, as <see cref="SetKey"/> stores it.
+    /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="settings"/> is null.</exception>
     public SettingsDraft(ToolkitSettings settings)
     {
@@ -70,8 +73,7 @@ public sealed class SettingsDraft
             throw new ArgumentException($"'{actionId}' is not an action.", nameof(actionId));
         }
 
-        var text = key.Trim();
-        _keymap[actionId] = TryParse(text, out var chord, out _) ? chord!.ToDisplayString() : text;
+        _keymap[actionId] = Canonical(key.Trim());
     }
 
     /// <summary>Leaves <paramref name="actionId"/> unbound (an empty key string, which the file keeps).</summary>
@@ -81,8 +83,9 @@ public sealed class SettingsDraft
 
     /// <summary>
     /// What is wrong with <paramref name="actionId"/>'s key, for showing next to it while editing, or null if
-    /// nothing is (an unbound action is fine): the <see cref="KeyChord.Parse"/> error, or the other action that has
-    /// the same key.
+    /// nothing is (an unbound action is fine): the <see cref="KeyChord.Parse"/> error, the other action that has
+    /// the same key, or the other action whose key is pressed the same way on a US keyboard (e.g. <c>Ctrl+{</c> and
+    /// <c>Ctrl+Shift+[</c>; see <see cref="KeyChord.ToUsKeys"/>).
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="actionId"/> is null.</exception>
     public string? KeyProblem(string actionId)
@@ -98,17 +101,26 @@ public sealed class SettingsDraft
             return error;
         }
 
+        string? sameUsKeys = null;
         foreach (var other in ShortcutActions)
         {
-            if (!string.Equals(other, actionId, StringComparison.Ordinal) &&
-                TryParse(GetKey(other), out var otherChord, out _) &&
-                otherChord == chord)
+            if (string.Equals(other, actionId, StringComparison.Ordinal) || !TryParse(GetKey(other), out var otherChord, out _))
+            {
+                continue;
+            }
+
+            if (otherChord == chord)
             {
                 return $"{chord} is also assigned to {ActionDisplayName(other)}.";
             }
+
+            if (sameUsKeys is null && otherChord!.ToUsKeys() == chord!.ToUsKeys())
+            {
+                sameUsKeys = $"{chord} is pressed with the same keys as {otherChord} ({ActionDisplayName(other)}) on a US keyboard.";
+            }
         }
 
-        return null;
+        return sameUsKeys;
     }
 
     /// <summary>
@@ -167,10 +179,18 @@ public sealed class SettingsDraft
 
     /// <summary>
     /// Like <see cref="ImportJson"/>, from a file's raw bytes: size and encoding are checked as for the settings
-    /// file (<see cref="ToolkitSettings.FromFileBytes"/>).
+    /// file (<see cref="ToolkitSettings.FromFileBytes(byte[], string)"/>), and those problems name
+    /// <paramref name="fileName"/>.
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="bytes"/> is null.</exception>
-    public IReadOnlyList<string> ImportFile(byte[] bytes) => Import(ToolkitSettings.FromFileBytes(bytes));
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    public IReadOnlyList<string> ImportFile(byte[] bytes, string fileName = ToolkitSettings.DefaultFileName) =>
+        Import(ToolkitSettings.FromFileBytes(bytes, fileName));
+
+    /// <summary>
+    /// The draft as settings-file JSON whatever its validity, for telling whether anything was edited (two drafts
+    /// with the same contents give the same text).
+    /// </summary>
+    public string ContentJson() => ToSettings(out _).ToJson();
 
     /// <summary>Replaces the draft's contents with the factory defaults (<see cref="ToolkitSettings.Defaults"/>).</summary>
     public void ResetToDefaults() => Load(ToolkitSettings.Defaults());
@@ -193,12 +213,15 @@ public sealed class SettingsDraft
         _keymap.Clear();
         foreach (var entry in settings.Keymap)
         {
-            _keymap.Add(entry.Key, entry.Value);
+            _keymap.Add(entry.Key, Canonical(entry.Value)); // As SetKey stores it, so re-entering a key changes nothing.
         }
 
         UndoCellCap = settings.UndoCellCap;
         DiagnosticsLog = settings.DiagnosticsLog;
     }
+
+    /// <summary>A key that <see cref="KeyChord.Parse"/> accepts in its display form; any other text unchanged.</summary>
+    private static string Canonical(string key) => TryParse(key, out var chord, out _) ? chord!.ToDisplayString() : key;
 
     private static bool TryParse(string key, out KeyChord? chord, out string? error)
     {

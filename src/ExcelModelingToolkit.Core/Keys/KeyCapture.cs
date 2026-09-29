@@ -17,7 +17,9 @@ namespace ExcelModelingToolkit.Core.Keys;
 /// <c>VK_OEM_MINUS</c> <c>-</c>, <c>VK_OEM_PERIOD</c> <c>.</c>, <c>VK_OEM_2</c> <c>/</c>, <c>VK_OEM_3</c> <c>`</c>,
 /// <c>VK_OEM_4</c> <c>[</c>, <c>VK_OEM_5</c> <c>\</c>, <c>VK_OEM_6</c> <c>]</c>, <c>VK_OEM_7</c> <c>'</c>. Other
 /// layouts assign these virtual-key codes to keys of their own choosing, so there the captured name follows the
-/// virtual-key code, not the character printed on the key.
+/// virtual-key code, not the character printed on the key. This class stays US-only (it has no access to the
+/// active keyboard layout); a caller that has, such as the add-in's Capture button, substitutes the layout's
+/// character for a punctuation key and warns about Ctrl+Alt (AltGr) combinations that type a character.
 /// </para>
 /// <para>
 /// The unshifted character is always used, with Shift as a modifier: Ctrl+Shift+[ is <c>Ctrl+Shift+[</c>, never

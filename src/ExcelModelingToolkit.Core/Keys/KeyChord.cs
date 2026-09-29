@@ -18,7 +18,8 @@ namespace ExcelModelingToolkit.Core.Keys;
 /// </para>
 /// <para>
 /// <c>Ctrl+Shift+\</c> and <c>Ctrl+|</c> are different chords, as they are to Excel's <c>OnKey</c>
-/// (<c>^+\</c> and <c>^|</c>). The <c>+</c> key itself is written <c>Ctrl++</c>.
+/// (<c>^+\</c> and <c>^|</c>), but on a US keyboard they are pressed with the same keys;
+/// <see cref="ToUsKeys"/> finds such pairs. The <c>+</c> key itself is written <c>Ctrl++</c>.
 /// </para>
 /// </remarks>
 public sealed class KeyChord : IEquatable<KeyChord>
@@ -28,6 +29,12 @@ public sealed class KeyChord : IEquatable<KeyChord>
 
     /// <summary>Characters that <c>OnKey</c> requires inside braces, because they are otherwise syntax.</summary>
     private const string BracedInOnKey = "[]{}()+^%~";
+
+    /// <summary>US keyboard shifted punctuation, and (same position in <see cref="UsUnshifted"/>) its key.</summary>
+    private const string UsShifted = "~!@#$%^&*()_+{}|:\"<>?";
+
+    /// <summary>The unshifted character of the key that types each <see cref="UsShifted"/> character.</summary>
+    private const string UsUnshifted = "`1234567890-=[]\\;',./";
 
     /// <summary>Canonical named key (display form) -> OnKey code.</summary>
     private static readonly Dictionary<string, string> NamedKeys = CreateNamedKeys();
@@ -173,6 +180,18 @@ public sealed class KeyChord : IEquatable<KeyChord>
         }
 
         return sb.Append(Key).ToString();
+    }
+
+    /// <summary>
+    /// The keys this chord is pressed with on a US keyboard: a shifted punctuation key becomes Shift plus the key's
+    /// unshifted character (<c>Ctrl+{</c> and <c>Ctrl+Shift+{</c> give <c>Ctrl+Shift+[</c>, <c>Ctrl++</c> gives
+    /// <c>Ctrl+Shift+=</c>); any other chord is returned unchanged. Two chords with equal results are the same
+    /// key press there, so they must not be bound to different actions.
+    /// </summary>
+    public KeyChord ToUsKeys()
+    {
+        var index = Key.Length == 1 ? UsShifted.IndexOf(Key[0]) : -1;
+        return index < 0 ? this : new KeyChord(Modifiers | KeyModifiers.Shift, UsUnshifted[index].ToString());
     }
 
     /// <summary>Same as <see cref="ToDisplayString"/>.</summary>

@@ -436,6 +436,152 @@ public class SettingsDraftTests
         Assert.Equal(json, original.ToJson());
     }
 
+    [Fact]
+    public void Edits_undone_by_hand_keep_provisional()
+    {
+        var draft = DefaultDraft();
+        var percent = Cycle(draft, ActionIds.PercentCycle);
+        var first = (NumberFormatItem)percent.Items[0];
+        var before = draft.ContentJson();
+
+        percent.RenameItem(0, "Mine");
+        Assert.False(percent.Provisional);
+        percent.RenameItem(0, first.Name);
+        Assert.True(percent.Provisional);
+
+        percent.SetCode(0, "0.0%");
+        Assert.False(percent.Provisional);
+        percent.SetCode(0, first.Code);
+        Assert.True(percent.Provisional);
+
+        percent.MoveItemDown(0);
+        Assert.False(percent.Provisional);
+        percent.MoveItemUp(1);
+        Assert.True(percent.Provisional);
+
+        percent.AddItem(1);
+        Assert.False(percent.Provisional);
+        percent.RemoveItem(1);
+        Assert.True(percent.Provisional);
+
+        Assert.Equal(before, draft.ContentJson());
+        Assert.Equal(4, CountOf(Json(draft), "\"provisional\": true"));
+    }
+
+    [Fact]
+    public void Same_values_under_another_name_are_not_the_provisional_items()
+    {
+        var percent = Cycle(DefaultDraft(), ActionIds.PercentCycle);
+        var first = percent.Items[0].Name;
+
+        percent.RenameItem(0, first.ToUpperInvariant());
+
+        Assert.False(percent.Provisional);
+    }
+
+    [Fact]
+    public void A_cycle_that_was_not_provisional_never_becomes_provisional()
+    {
+        var number = Cycle(DefaultDraft(), ActionIds.NumberCycle);
+
+        Assert.False(number.Provisional);
+        number.RenameItem(0, "Mine");
+        number.RenameItem(0, ToolkitSettings.Defaults().FindCycle(ActionIds.NumberCycle)!.Items[0].Name);
+
+        Assert.False(number.Provisional);
+    }
+
+    [Fact]
+    public void Content_json_tells_whether_anything_changed()
+    {
+        var draft = DefaultDraft();
+        var before = draft.ContentJson();
+
+        draft.UndoCellCap = 0; // invalid contents are still written
+        Assert.NotEqual(before, draft.ContentJson());
+        Assert.Contains("\"undoCellCap\": 0", draft.ContentJson());
+
+        draft.UndoCellCap = ToolkitSettings.DefaultUndoCellCap;
+        Assert.Equal(before, draft.ContentJson());
+    }
+
+    [Fact]
+    public void Keys_from_the_settings_are_stored_in_display_form()
+    {
+        var keymap = new Dictionary<string, string>
+        {
+            [ActionIds.FillColorCycle] = "shift+control+k",
+            [ActionIds.DateCycle] = "Ctrl+Nope",
+            [ActionIds.About] = string.Empty,
+        };
+
+        var draft = new SettingsDraft(new ToolkitSettings(ToolkitSettings.Defaults().Cycles, keymap));
+
+        Assert.Equal("Ctrl+Shift+K", draft.GetKey(ActionIds.FillColorCycle));
+        Assert.Equal("Ctrl+Nope", draft.GetKey(ActionIds.DateCycle));
+        Assert.Equal(string.Empty, draft.GetKey(ActionIds.About));
+
+        var before = draft.ContentJson();
+        draft.SetKey(ActionIds.FillColorCycle, "Ctrl+Shift+K"); // re-entering the key changes nothing
+        Assert.Equal(before, draft.ContentJson());
+    }
+
+    [Fact]
+    public void Key_problems_name_a_key_pressed_the_same_way_on_a_us_keyboard()
+    {
+        var draft = DefaultDraft();
+
+        draft.SetKey(ActionIds.DateCycle, "Ctrl+{");
+        draft.SetKey(ActionIds.About, "Ctrl+Shift+[");
+
+        Assert.Equal("Ctrl+{ is pressed with the same keys as Ctrl+Shift+[ (About) on a US keyboard.", draft.KeyProblem(ActionIds.DateCycle));
+        Assert.Equal("Ctrl+Shift+[ is pressed with the same keys as Ctrl+{ (Date) on a US keyboard.", draft.KeyProblem(ActionIds.About));
+        draft.ToSettings(out var problems);
+        Assert.Contains("keymap: Ctrl+{ ('DateCycle') and Ctrl+Shift+[ ('About') are the same keys on a US keyboard (Ctrl+Shift+[).", problems);
+
+        draft.SetKey(ActionIds.NumberCycle, "Ctrl+Shift+[");
+
+        // An exact duplicate is named first.
+        Assert.Equal("Ctrl+Shift+[ is also assigned to Number.", draft.KeyProblem(ActionIds.About));
+
+        draft.SetKey(ActionIds.NumberCycle, "Ctrl+Shift+1");
+        draft.SetKey(ActionIds.About, "Ctrl+[");
+
+        Assert.Null(draft.KeyProblem(ActionIds.DateCycle));
+        Assert.Null(draft.KeyProblem(ActionIds.About));
+    }
+
+    [Fact]
+    public void File_import_problems_name_the_file()
+    {
+        var draft = DefaultDraft();
+
+        var problems = draft.ImportFile(new byte[] { 0x7B, 0xFF, 0x7D }, "team-settings.json");
+
+        Assert.Equal("team-settings.json is not valid UTF-8; save it as UTF-8.", Assert.Single(problems));
+        Assert.Throws<ArgumentNullException>(() => draft.ImportFile(new byte[0], null!));
+    }
+
+    [Fact]
+    public void Finds_another_item_with_the_same_value()
+    {
+        var draft = DefaultDraft();
+        var number = Cycle(draft, ActionIds.NumberCycle);
+        var font = Cycle(draft, ActionIds.FontColorCycle);
+
+        Assert.All(Enumerable.Range(0, number.Items.Count), i => Assert.Equal(-1, number.IndexOfSameValue(i)));
+
+        number.AddItem(4);
+        number.AddItem(5); // two "General" items
+        font.AddItem(0); // black, like the last item
+
+        Assert.Equal(5, number.IndexOfSameValue(4));
+        Assert.Equal(4, number.IndexOfSameValue(5));
+        Assert.Equal(font.Items.Count - 1, font.IndexOfSameValue(0));
+        Assert.Equal(0, font.IndexOfSameValue(font.Items.Count - 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => number.IndexOfSameValue(6));
+    }
+
     private static int CountOf(string text, string value)
     {
         var count = 0;
