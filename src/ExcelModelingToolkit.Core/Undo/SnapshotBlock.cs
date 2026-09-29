@@ -24,8 +24,8 @@ public sealed class SnapshotBlock
         }
 
         Range = range;
-        Captured = captured;
-        Applied = applied;
+        Captured = Interned(captured);
+        Applied = Interned(applied);
     }
 
     /// <summary>The cells.</summary>
@@ -54,4 +54,12 @@ public sealed class SnapshotBlock
 
     /// <summary><c>address captured -> applied</c>.</summary>
     public override string ToString() => $"{Address} {Captured} -> {Applied}";
+
+    /// <summary>
+    /// <paramref name="value"/> with its number format code interned: the undo stacks can hold many thousands of
+    /// blocks, and a workbook uses few distinct codes, so they share one string per code (strings read over COM are
+    /// new instances each time).
+    /// </summary>
+    private static CycleValue Interned(CycleValue value) =>
+        value.NumberFormat is string code ? CycleValue.FromNumberFormat(string.Intern(code)) : value;
 }

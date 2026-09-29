@@ -87,9 +87,11 @@ public sealed class ToolkitSettings
     public IReadOnlyDictionary<string, string> Keymap => _keymap;
 
     /// <summary>
-    /// The most format reads one undo snapshot may take (<see cref="Undo.SnapshotPlanner"/>). A uniform block of
-    /// any size is one read; cells whose formats all differ are read one by one, so this is also the most such
-    /// cells a snapshot records. Beyond it, the change is applied but cannot be undone.
+    /// The most format reads one undo snapshot may take (<see cref="Undo.SnapshotPlanner"/>); it caps reads, not
+    /// cells. A uniform region of any size costs one read (a whole column too); a mixed one is halved until each
+    /// piece is uniform, so cells whose formats all differ cost up to about two reads each, and k uniform regions
+    /// about k * log2(cells). Beyond the cap, the change is applied but cannot be undone (Ctrl+Z stops there and
+    /// says so).
     /// </summary>
     public int UndoCellCap { get; }
 

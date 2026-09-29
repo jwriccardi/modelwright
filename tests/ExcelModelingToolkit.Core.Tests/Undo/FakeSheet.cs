@@ -14,6 +14,7 @@ internal sealed class FakeSheet : IFormatReader
     private readonly CycleValue _default;
     private readonly List<(CellRect Rect, CycleValue Value)> _paint = new List<(CellRect, CycleValue)>();
     private readonly HashSet<CellRect> _mixedCells = new HashSet<CellRect>();
+    private readonly List<CellRect> _unrestorable = new List<CellRect>();
 
     public FakeSheet(CycleValue defaultValue) => _default = defaultValue;
 
@@ -32,9 +33,32 @@ internal sealed class FakeSheet : IFormatReader
         return this;
     }
 
+    /// <summary>
+    /// Gives <paramref name="rect"/> a format the reader cannot restore (a pattern fill): a read inside it throws
+    /// <see cref="UnrestorableFormatException"/>, and a read that also covers other cells is mixed.
+    /// </summary>
+    public FakeSheet Unrestorable(CellRect rect)
+    {
+        _unrestorable.Add(rect);
+        return this;
+    }
+
     public CycleValue ReadUniform(CellRect range)
     {
         Reads.Add(range);
+        foreach (var rect in _unrestorable)
+        {
+            if (rect.Intersect(range) == range)
+            {
+                throw new UnrestorableFormatException("pattern or gradient fill");
+            }
+
+            if (rect.Intersect(range) is not null)
+            {
+                return CycleValue.Unknown;
+            }
+        }
+
         return Value(range);
     }
 

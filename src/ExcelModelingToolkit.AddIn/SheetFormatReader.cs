@@ -3,7 +3,7 @@ using ExcelModelingToolkit.Core.Undo;
 
 namespace ExcelModelingToolkit.AddIn;
 
-/// <summary>Reads one format property of rectangles on one worksheet over COM (<see cref="CellFormats.Read"/>).</summary>
+/// <summary>Reads one format property of rectangles on one worksheet over COM, for undo (<see cref="CellFormats.ReadForUndo"/>).</summary>
 internal sealed class SheetFormatReader : IFormatReader
 {
     private readonly object _worksheet;
@@ -21,6 +21,6 @@ internal sealed class SheetFormatReader : IFormatReader
     {
         dynamic sheet = _worksheet;
         object cells = sheet.Range(range.Address);
-        return CellFormats.Read(cells, _kind);
+        return CellFormats.ReadForUndo(cells, _kind);
     }
 }

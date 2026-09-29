@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ExcelModelingToolkit.Core.Formatting;
 using ExcelModelingToolkit.Core.Undo;
 using Xunit;
@@ -8,35 +9,51 @@ namespace ExcelModelingToolkit.Core.Tests.Undo;
 
 public class UndoManagerTests
 {
-    private static FormatSnapshot Snapshot(string label, string workbook = "Book1.xlsx", string sheet = "Sheet1") =>
-        FormatSnapshot.Create(label, CycleKind.NumberFormat, workbook, sheet, new[]
-        {
-            new SnapshotBlock(new CellRect(1, 1, 1, 1), CycleValue.FromNumberFormat("General"), CycleValue.FromNumberFormat("0.0")),
-        });
+    private static FormatSnapshot Snapshot(string label, string workbook = "Book1.xlsx", string sheet = "Sheet1", int blocks = 1) =>
+        FormatSnapshot.Create(label, CycleKind.NumberFormat, workbook, sheet, Enumerable.Range(1, blocks).Select(row =>
+            new SnapshotBlock(new CellRect(row, 1, 1, 1), CycleValue.FromNumberFormat("General"), CycleValue.FromNumberFormat("0.0"))));
+
+    private static FormatSnapshot Barrier(string label, string reason = "too many formats") =>
+        FormatSnapshot.Unavailable(label, CycleKind.NumberFormat, "Book1.xlsx", "Sheet1", reason);
 
     [Theory]
-    [InlineData(UndoKey.Undo, false, true, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Undo, false, false, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Undo, false, null, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Undo, true, true, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Undo, true, null, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Undo, true, false, UndoDecision.HandleOurs)]
-    [InlineData(UndoKey.Redo, false, true, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Redo, false, false, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Redo, false, null, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Redo, true, true, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Redo, true, null, UndoDecision.PassToExcel)]
-    [InlineData(UndoKey.Redo, true, false, UndoDecision.HandleOurs)]
-    public void Decide_handles_ours_only_when_we_have_one_and_excel_has_none(
-        UndoKey key, bool ourStackNonEmpty, bool? nativeAvailable, UndoDecision expected)
+    // Ctrl+Z: Excel's newer history goes first; our stale redo is dropped when it does.
+    [InlineData(UndoKey.Undo, 0, 0, null, null, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Undo, 0, 0, false, false, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Undo, 0, 0, true, false, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Undo, 1, 0, false, null, UndoDecision.HandleOurs)]
+    [InlineData(UndoKey.Undo, 1, 0, false, true, UndoDecision.HandleOurs)]
+    [InlineData(UndoKey.Undo, 1, 0, true, false, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Undo, 1, 0, null, false, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Undo, 1, 2, true, false, UndoDecision.PassToExcelAndClearRedo)]
+    [InlineData(UndoKey.Undo, 0, 2, true, null, UndoDecision.PassToExcelAndClearRedo)]
+    [InlineData(UndoKey.Undo, 0, 2, false, false, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Undo, 1, 2, false, false, UndoDecision.HandleOurs)]
+    [InlineData(UndoKey.Undo, 1, 2, null, true, UndoDecision.PassToExcel)]
+    // Ctrl+Y: ours only when Excel has no history at all; any history makes our redo stale.
+    [InlineData(UndoKey.Redo, 0, 0, false, false, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Redo, 3, 0, true, true, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Redo, 0, 1, false, false, UndoDecision.HandleOurs)]
+    [InlineData(UndoKey.Redo, 2, 1, false, false, UndoDecision.HandleOurs)]
+    [InlineData(UndoKey.Redo, 0, 1, true, false, UndoDecision.PassToExcelAndClearRedo)]
+    [InlineData(UndoKey.Redo, 0, 1, false, true, UndoDecision.PassToExcelAndClearRedo)]
+    [InlineData(UndoKey.Redo, 0, 1, null, true, UndoDecision.PassToExcelAndClearRedo)]
+    [InlineData(UndoKey.Redo, 0, 1, true, null, UndoDecision.PassToExcelAndClearRedo)]
+    [InlineData(UndoKey.Redo, 0, 1, null, false, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Redo, 0, 1, false, null, UndoDecision.PassToExcel)]
+    [InlineData(UndoKey.Redo, 0, 1, null, null, UndoDecision.PassToExcel)]
+    public void Decide_follows_the_ordering_and_staleness_rules(
+        UndoKey key, int ourUndo, int ourRedo, bool? nativeUndo, bool? nativeRedo, UndoDecision expected)
     {
-        Assert.Equal(expected, UndoManager.Decide(key, ourStackNonEmpty, nativeAvailable));
+        Assert.Equal(expected, UndoManager.Decide(key, ourUndo, ourRedo, nativeUndo, nativeRedo));
     }
 
     [Fact]
-    public void Decide_rejects_an_undefined_key()
+    public void Decide_rejects_an_undefined_key_and_negative_counts()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => UndoManager.Decide((UndoKey)7, true, false));
+        Assert.Throws<ArgumentOutOfRangeException>(() => UndoManager.Decide((UndoKey)7, 1, 0, false, false));
+        Assert.Throws<ArgumentOutOfRangeException>(() => UndoManager.Decide(UndoKey.Undo, -1, 0, false, false));
+        Assert.Throws<ArgumentOutOfRangeException>(() => UndoManager.Decide(UndoKey.Redo, 0, -1, false, false));
     }
 
     [Fact]
@@ -46,13 +63,17 @@ public class UndoManagerTests
 
         Assert.Equal(UndoManager.DefaultMaxDepth, manager.MaxDepth);
         Assert.Equal(100, manager.MaxDepth);
+        Assert.Equal(UndoManager.DefaultMaxBlocks, manager.MaxBlocks);
+        Assert.Equal(200000, manager.MaxBlocks);
         Assert.Equal(0, manager.UndoCount);
         Assert.Equal(0, manager.RedoCount);
+        Assert.Equal(0, manager.BlockCount);
         Assert.Null(manager.Peek(UndoKey.Undo));
         Assert.Null(manager.Peek(UndoKey.Redo));
         Assert.Null(manager.Undo());
         Assert.Null(manager.Redo());
         Assert.Null(manager.Discard(UndoKey.Undo));
+        Assert.Equal(0, manager.ClearRedo());
     }
 
     [Fact]
@@ -127,21 +148,106 @@ public class UndoManagerTests
     }
 
     [Fact]
-    public void Push_rejects_null_and_unavailable_snapshots()
+    public void Push_beyond_the_block_budget_evicts_the_oldest_snapshots()
     {
-        var manager = new UndoManager();
+        var manager = new UndoManager(maxBlocks: 5);
+        var a = Snapshot("a", blocks: 2);
+        var b = Snapshot("b", blocks: 2);
+        var c = Snapshot("c", blocks: 2);
+        manager.Push(a);
+        manager.Push(b);
+        Assert.Equal(4, manager.BlockCount);
 
-        Assert.Throws<ArgumentNullException>(() => manager.Push(null!));
-        var error = Assert.Throws<ArgumentException>(() => manager.Push(
-            FormatSnapshot.Unavailable("Number", CycleKind.NumberFormat, "Book1.xlsx", "Sheet1", "too many formats")));
-        Assert.Contains("too many formats", error.Message);
-        Assert.Equal(0, manager.UndoCount);
+        manager.Push(c);
+
+        Assert.Equal(2, manager.UndoCount);
+        Assert.Equal(4, manager.BlockCount);
+        Assert.Same(c, manager.Undo());
+        Assert.Same(b, manager.Undo());
+        Assert.Null(manager.Undo());
+        Assert.Equal(4, manager.BlockCount); // on the redo stack now
     }
 
     [Fact]
-    public void Constructor_rejects_a_depth_below_one()
+    public void The_newest_snapshot_is_kept_even_if_it_alone_exceeds_the_budget()
+    {
+        var manager = new UndoManager(maxBlocks: 5);
+        manager.Push(Snapshot("small", blocks: 1));
+        manager.Push(Barrier("barrier"));
+        var big = Snapshot("big", blocks: 7);
+
+        manager.Push(big);
+
+        Assert.Equal(1, manager.UndoCount);
+        Assert.Same(big, manager.Peek(UndoKey.Undo));
+        Assert.Equal(7, manager.BlockCount);
+    }
+
+    [Fact]
+    public void Barriers_cost_no_blocks_and_stay_within_the_budget()
+    {
+        var manager = new UndoManager(maxBlocks: 2);
+        manager.Push(Snapshot("a", blocks: 2));
+        manager.Push(Barrier("b"));
+
+        Assert.Equal(2, manager.UndoCount);
+        Assert.Equal(2, manager.BlockCount);
+    }
+
+    [Fact]
+    public void Push_accepts_a_barrier_and_clears_the_redo_stack()
+    {
+        var manager = new UndoManager();
+        manager.Push(Snapshot("a"));
+        manager.Undo();
+        var barrier = Barrier("b");
+
+        manager.Push(barrier);
+
+        Assert.Equal(0, manager.RedoCount);
+        Assert.Same(barrier, manager.Peek(UndoKey.Undo));
+        Assert.Throws<ArgumentNullException>(() => manager.Push(null!));
+    }
+
+    [Fact]
+    public void A_barrier_cannot_be_undone_only_discarded()
+    {
+        var manager = new UndoManager();
+        var a = Snapshot("a");
+        manager.Push(a);
+        var barrier = Barrier("b");
+        manager.Push(barrier);
+
+        var error = Assert.Throws<InvalidOperationException>(() => manager.Undo());
+        Assert.Contains("barrier", error.Message);
+        Assert.Equal(2, manager.UndoCount);
+        Assert.Equal(0, manager.RedoCount);
+
+        Assert.Same(barrier, manager.Discard(UndoKey.Undo));
+        Assert.Same(a, manager.Undo());
+    }
+
+    [Fact]
+    public void ClearRedo_empties_only_the_redo_stack()
+    {
+        var manager = new UndoManager();
+        manager.Push(Snapshot("a"));
+        manager.Push(Snapshot("b"));
+        manager.Push(Snapshot("c"));
+        manager.Undo();
+        manager.Undo();
+
+        Assert.Equal(2, manager.ClearRedo());
+
+        Assert.Equal(0, manager.RedoCount);
+        Assert.Equal(1, manager.UndoCount);
+    }
+
+    [Fact]
+    public void Constructor_rejects_a_depth_or_budget_below_one()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new UndoManager(0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new UndoManager(maxBlocks: 0));
     }
 
     [Fact]
@@ -179,6 +285,20 @@ public class UndoManagerTests
         Assert.Equal(1, manager.UndoCount);
         Assert.Equal(0, manager.RedoCount);
         Assert.Equal("b1", manager.Peek(UndoKey.Undo)!.Label);
+    }
+
+    [Fact]
+    public void InvalidateWorkbook_matches_the_full_name_so_a_same_name_file_elsewhere_is_kept()
+    {
+        var manager = new UndoManager();
+        manager.Push(Snapshot("here", @"C:\Deals\Model.xlsx"));
+        manager.Push(Snapshot("there", @"C:\Archive\Model.xlsx"));
+        manager.Push(Barrier("barrier"));
+
+        Assert.Equal(1, manager.InvalidateWorkbook(@"c:\deals\MODEL.xlsx"));
+
+        Assert.Equal(new[] { "barrier", "there" }, new[] { manager.Discard(UndoKey.Undo)!.Label, manager.Discard(UndoKey.Undo)!.Label });
+        Assert.Equal(0, manager.UndoCount);
     }
 
     [Fact]
@@ -297,9 +417,78 @@ public class UndoManagerTests
         Assert.Equal("we undid two", excel.Press(UndoKey.Undo));
     }
 
+    [Fact]
+    public void Ctrl_z_stops_at_an_unrecorded_change_and_does_not_touch_the_older_one()
+    {
+        var excel = new SimulatedExcel();
+        excel.Cycle(Snapshot("A"));
+        excel.Unrecorded("B", "too many formats");
+
+        Assert.Equal("Can't undo: B could not be recorded (too many formats)", excel.Press(UndoKey.Undo));
+        Assert.Equal(1, excel.Manager.UndoCount);
+        Assert.Equal("A", excel.Manager.Peek(UndoKey.Undo)!.Label);
+        Assert.Equal(0, excel.Manager.RedoCount);
+
+        Assert.Equal("we undid A", excel.Press(UndoKey.Undo));
+        Assert.Equal("we redid A", excel.Press(UndoKey.Redo));
+    }
+
+    [Fact]
+    public void An_unrecorded_change_clears_our_redo()
+    {
+        var excel = new SimulatedExcel();
+        excel.Cycle(Snapshot("A"));
+        Assert.Equal("we undid A", excel.Press(UndoKey.Undo));
+        excel.Unrecorded("B", "pattern or gradient fill");
+
+        Assert.Equal(0, excel.Manager.RedoCount);
+        Assert.Equal("Excel had nothing to redo", excel.Press(UndoKey.Redo));
+        Assert.Equal("Can't undo: B could not be recorded (pattern or gradient fill)", excel.Press(UndoKey.Undo));
+        Assert.Equal("Excel had nothing to undo", excel.Press(UndoKey.Undo));
+    }
+
+    [Fact]
+    public void Our_undo_then_typing_then_ctrl_y_drops_our_stale_redo_and_passes()
+    {
+        var excel = new SimulatedExcel();
+        excel.Cycle(Snapshot("A"));
+        Assert.Equal("we undid A", excel.Press(UndoKey.Undo));
+        excel.Type();
+
+        Assert.Equal("Excel had nothing to redo", excel.Press(UndoKey.Redo));
+        Assert.Equal(0, excel.Manager.RedoCount);
+
+        // Our redo of A must not come back once the typing is undone.
+        Assert.Equal("Excel undid typing", excel.Press(UndoKey.Undo));
+        Assert.Equal("Excel redid typing", excel.Press(UndoKey.Redo));
+        Assert.Equal("Excel had nothing to redo", excel.Press(UndoKey.Redo));
+    }
+
+    [Fact]
+    public void Our_undo_then_typing_then_native_ctrl_z_then_two_ctrl_y()
+    {
+        var excel = new SimulatedExcel();
+        excel.Cycle(Snapshot("A"));
+        excel.Cycle(Snapshot("B"));
+        Assert.Equal("we undid B", excel.Press(UndoKey.Undo));
+        excel.Type();
+
+        // Excel's undo is newer than our restore: it goes first, and our redo of B is stale.
+        Assert.Equal("Excel undid typing", excel.Press(UndoKey.Undo));
+        Assert.Equal(0, excel.Manager.RedoCount);
+
+        Assert.Equal("Excel redid typing", excel.Press(UndoKey.Redo));
+        Assert.Equal("Excel had nothing to redo", excel.Press(UndoKey.Redo));
+
+        // Older history is intact.
+        Assert.Equal("Excel undid typing", excel.Press(UndoKey.Undo));
+        Assert.Equal("we undid A", excel.Press(UndoKey.Undo));
+    }
+
     /// <summary>
-    /// Excel's native undo and redo as counts, per spike K2c: every COM write (our cycle, and our restore) wipes
-    /// both; typing adds an undo entry and clears redo. Keys go through <see cref="UndoManager.Decide"/>.
+    /// Excel's native undo and redo as counts, per spike K2c: every COM write (our cycle, recorded or not, and our
+    /// restore) wipes both; typing adds an undo entry and clears redo. Keys go through
+    /// <see cref="UndoManager.Decide"/>, and a barrier is handled like the add-in's UndoCommand does.
     /// </summary>
     private sealed class SimulatedExcel
     {
@@ -322,12 +511,27 @@ public class UndoManagerTests
             WipeNative();
         }
 
+        public void Unrecorded(string label, string reason) => Cycle(Barrier(label, reason));
+
         public string Press(UndoKey key)
         {
-            var native = Unknown ? (bool?)null : (key == UndoKey.Undo ? _nativeUndo : _nativeRedo) > 0;
-            var decision = UndoManager.Decide(key, Manager.Count(key) > 0, native);
+            var nativeUndo = Unknown ? (bool?)null : _nativeUndo > 0;
+            var nativeRedo = Unknown ? (bool?)null : _nativeRedo > 0;
+            var decision = UndoManager.Decide(key, Manager.UndoCount, Manager.RedoCount, nativeUndo, nativeRedo);
+            if (decision == UndoDecision.PassToExcelAndClearRedo)
+            {
+                Manager.ClearRedo();
+            }
+
             if (decision == UndoDecision.HandleOurs)
             {
+                var top = Manager.Peek(key)!;
+                if (!top.IsAvailable)
+                {
+                    Manager.Discard(key);
+                    return $"Can't undo: {top.Label} could not be recorded ({top.UnavailableReason})";
+                }
+
                 var snapshot = key == UndoKey.Undo ? Manager.Undo() : Manager.Redo();
                 WipeNative();
                 return (key == UndoKey.Undo ? "we undid " : "we redid ") + snapshot!.Label;

@@ -8,4 +8,10 @@ public enum UndoDecision
 
     /// <summary>Swallow the key and undo or redo our own last formatting change.</summary>
     HandleOurs,
+
+    /// <summary>
+    /// Let the key through, and first empty our redo stack (<see cref="UndoManager.ClearRedo"/>): Excel has history
+    /// newer than our last restore, so our redo entries are stale.
+    /// </summary>
+    PassToExcelAndClearRedo,
 }

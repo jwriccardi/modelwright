@@ -9,12 +9,15 @@ namespace ExcelModelingToolkit.Core.Undo;
 /// What one cycle changed, for undo and redo: the property (<see cref="Kind"/>), the workbook and sheet, and the
 /// blocks of cells with their value before (<see cref="SnapshotBlock.Captured"/>) and after
 /// (<see cref="SnapshotBlock.Applied"/>). Or, when the formats could not be captured, an unavailable snapshot
-/// with the reason. Immutable.
+/// with the reason: a barrier on the undo stack, which records that a change was made there that cannot be undone
+/// (so an undo never reaches past it to older changes without saying so). Immutable.
 /// </summary>
 public sealed class FormatSnapshot
 {
     /// <summary>The longest address string <c>Worksheet.Range</c> accepts.</summary>
     public const int MaxAddressLength = 255;
+
+    private static readonly char[] PathSeparators = { '\\', '/' };
 
     private FormatSnapshot(
         string label,
@@ -39,8 +42,14 @@ public sealed class FormatSnapshot
     /// <summary>The property the cycle changed.</summary>
     public CycleKind Kind { get; }
 
-    /// <summary>The workbook's name (<c>Workbook.Name</c>).</summary>
+    /// <summary>
+    /// The workbook's full name (<c>Workbook.FullName</c>: its path and file name, or just <c>Book1</c> if never
+    /// saved). It identifies the workbook: one with the same file name from another folder is a different workbook.
+    /// </summary>
     public string Workbook { get; }
+
+    /// <summary>The workbook's file name (<c>Workbook.Name</c>): <see cref="Workbook"/> after its last <c>\</c> or <c>/</c>.</summary>
+    public string WorkbookName => Workbook.Substring(Workbook.LastIndexOfAny(PathSeparators) + 1);
 
     /// <summary>The worksheet's name.</summary>
     public string Sheet { get; }
@@ -57,7 +66,11 @@ public sealed class FormatSnapshot
     /// <summary>Why the formats could not be captured, or null.</summary>
     public string? UnavailableReason { get; }
 
-    /// <summary>A snapshot of <paramref name="blocks"/>, which must all have known captured and applied values of <paramref name="kind"/>.</summary>
+    /// <summary>
+    /// A snapshot of <paramref name="blocks"/>, which must all have known captured and applied values of
+    /// <paramref name="kind"/> (for a font color, <see cref="CycleValue.Automatic"/> counts). <paramref name="workbook"/>
+    /// is the workbook's full name (see <see cref="Workbook"/>).
+    /// </summary>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ArgumentException">
     /// There are no blocks, a block is null, or a block's applied value is unknown or not of <paramref name="kind"/>.
@@ -88,7 +101,10 @@ public sealed class FormatSnapshot
         return new FormatSnapshot(label, kind, workbook, sheet, list, null);
     }
 
-    /// <summary>A snapshot that cannot be undone, with the reason (e.g. the capture cap was reached).</summary>
+    /// <summary>
+    /// A snapshot that cannot be undone (a barrier), with the reason (e.g. the capture cap was reached).
+    /// <paramref name="workbook"/> is the workbook's full name (see <see cref="Workbook"/>).
+    /// </summary>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public static FormatSnapshot Unavailable(string label, CycleKind kind, string workbook, string sheet, string reason) =>
         new FormatSnapshot(
@@ -156,5 +172,7 @@ public sealed class FormatSnapshot
     private static bool IsValueOf(CycleKind kind, CycleValue value) =>
         kind == CycleKind.NumberFormat
             ? value.IsNumberFormat
-            : value.IsColor && !(kind == CycleKind.FontColor && value.Color!.Value.IsNoFill);
+            : kind == CycleKind.FontColor
+                ? value.IsAutomatic || (value.IsColor && !value.Color!.Value.IsNoFill)
+                : value.IsColor;
 }

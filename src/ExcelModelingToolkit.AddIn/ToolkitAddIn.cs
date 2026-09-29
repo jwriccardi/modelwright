@@ -4,8 +4,9 @@ using ExcelDna.Integration;
 namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
-/// Add-in lifetime: loads the settings, registers their keyboard shortcuts and installs the Ctrl+Z / Ctrl+Y hook
-/// on load; removes the hook, empties our undo stacks and restores Excel's defaults for our keys on unload.
+/// Add-in lifetime: loads the settings, registers their keyboard shortcuts, installs the Ctrl+Z / Ctrl+Y hook and
+/// connects the Excel events that invalidate undo history on load; disconnects them, removes the hook, empties our
+/// undo stacks and restores Excel's defaults for our keys on unload.
 /// </summary>
 public sealed class ToolkitAddIn : IExcelAddIn
 {
@@ -22,6 +23,9 @@ public sealed class ToolkitAddIn : IExcelAddIn
             {
                 message += ". Ctrl+Z / Ctrl+Y cannot undo our formatting; use the Undo formatting button";
             }
+
+            // Without the events, undo history is still checked cell by cell before each restore.
+            ExcelEvents.Connect();
 
             // Self-check: every action must have a command. A missing one is skipped (not bound), never fatal.
             var missing = KeyBindings.ActionsWithoutCommand();
@@ -43,6 +47,7 @@ public sealed class ToolkitAddIn : IExcelAddIn
     /// <inheritdoc />
     public void AutoClose()
     {
+        ExcelEvents.Disconnect();
         UndoKeyHook.Uninstall();
         Session.Undo.Clear();
         KeyBindings.Clear();

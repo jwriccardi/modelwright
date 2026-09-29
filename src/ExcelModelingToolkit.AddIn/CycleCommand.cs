@@ -110,11 +110,14 @@ internal static class CycleCommand
 
         trace.ElapsedMs = stopwatch.Elapsed.TotalMilliseconds;
 
+        // The write is done: record it for undo first, so nothing below can skip that. Undo checks that the cells
+        // still hold what Excel reports, so the read-back form is recorded.
+        var readBack = ReadBack(activeCell, cycle.Kind);
+        var undoNote = RecordUndo(actionId, cycle, activeSheet, capture, readBack);
+
         // Excel may normalize a number format code or map a color to another; remember what it reports so the
         // cell is recognized next time (and, for number formats, learn the alias).
-        var state = step.State;
-        var readBack = ReadBack(activeCell, cycle.Kind);
-        state = Session.Engine.RecordReadBack(cycle, state, readBack);
+        var state = Session.Engine.RecordReadBack(cycle, step.State, readBack);
         if (!readBack.IsUnknown && readBack != step.Item.Value)
         {
             DiagnosticsLog.Write(
@@ -124,9 +127,6 @@ internal static class CycleCommand
         }
 
         Session.States[cycle.Id] = state;
-
-        // Undo checks that the cells still hold what Excel reports, so record the read-back form when there is one.
-        var undoNote = RecordUndo(actionId, cycle, activeSheet, capture, readBack.IsUnknown ? step.Item.Value : readBack);
         StatusBar.Show($"{label}: {step.Item.Name} ({step.Index + 1}/{cycle.Items.Count}){undoNote}");
         return "ok " + step.Reason;
     }
@@ -164,23 +164,46 @@ internal static class CycleCommand
     }
 
     /// <summary>
-    /// Pushes the undo snapshot for a completed write (every block now holds <paramref name="applied"/>). Returns
-    /// the status-bar suffix: empty, or why this change cannot be undone. Never throws.
+    /// Pushes the undo snapshot for a completed write (every block now holds <paramref name="applied"/>, the
+    /// active cell's read-back). If the change cannot be recorded (the capture failed, the read-back is unknown,
+    /// or the snapshot could not be made), pushes a barrier instead, so Ctrl+Z stops there rather than reach past
+    /// this change to older ones. Either way our redo stack is cleared. Returns the status-bar suffix: empty, or
+    /// why this change cannot be undone. Never throws.
     /// </summary>
     private static string RecordUndo(string actionId, CycleDefinition cycle, object activeSheet, SnapshotPlan capture, CycleValue applied)
     {
-        var reason = capture.UnavailableReason;
+        var workbook = "(unknown workbook)";
+        var sheetName = "(unknown sheet)";
+        string? reason = null;
+        try
+        {
+            dynamic sheet = activeSheet;
+            string? name = sheet.Name;
+            string? fullName = sheet.Parent.FullName;
+            if (name is null || fullName is null)
+            {
+                reason = "could not identify the sheet";
+            }
+            else
+            {
+                sheetName = name;
+                workbook = fullName;
+            }
+        }
+        catch (Exception ex)
+        {
+            reason = "could not identify the sheet: " + ex.Message;
+        }
+
+        reason ??= capture.UnavailableReason ?? (applied.IsUnknown ? "the applied format could not be read back" : null);
         if (reason is null)
         {
             try
             {
-                dynamic sheet = activeSheet;
-                string sheetName = sheet.Name;
-                string workbookName = sheet.Parent.Name;
                 Session.Undo.Push(FormatSnapshot.Create(
                     cycle.DisplayName,
                     cycle.Kind,
-                    workbookName,
+                    workbook,
                     sheetName,
                     capture.Blocks.Select(b => b.WithApplied(applied))));
                 return string.Empty;
@@ -188,10 +211,11 @@ internal static class CycleCommand
             catch (Exception ex)
             {
                 reason = ex.Message;
-                DiagnosticsLog.Write("UndoCapture", actionId, "not recorded: " + ex.Message);
             }
         }
 
+        Session.Undo.Push(FormatSnapshot.Unavailable(cycle.DisplayName, cycle.Kind, workbook, sheetName, reason));
+        DiagnosticsLog.Write("UndoCapture", actionId, "not recorded, barrier pushed: " + reason);
         return $" (undo unavailable: {reason})";
     }
 

@@ -12,19 +12,23 @@ namespace ExcelModelingToolkit.Core.Undo;
 /// <remarks>
 /// <para>
 /// Each area of the selection is read whole first. If it is mixed, it is split into its part inside the sheet's
-/// used range and the bands outside it.
+/// used range and the bands outside it, and each is read whole. A mixed rectangle is then halved and each half
+/// read the same way (recursive bisection), so k uniform regions in n cells cost about k * log2(n) reads:
 /// </para>
 /// <list type="bullet">
-/// <item><b>Inside the used range</b>, where formats vary from line to line: read the whole part; if it is mixed,
-/// read it row by row; a mixed row is halved until each piece is uniform (at worst, cell by cell).</item>
-/// <item><b>Outside the used range</b>, where cells only carry row or column formats: read each band whole; if it
-/// is mixed, split it into lines along its shorter side (a band under a whole-column selection splits into its
-/// few columns, not its million rows), then halve mixed lines as above.</item>
+/// <item><b>Inside the used range</b> a mixed rectangle is cut across its longer side (a tall block into a top and
+/// a bottom half).</item>
+/// <item><b>Outside the used range</b>, where cells only carry row or column formats, a mixed band is cut across
+/// its shorter side (a band under a whole-column selection into its few columns, not its million rows), so the
+/// halves soon line up with those formats.</item>
 /// </list>
 /// <para>
-/// So a uniform whole column costs one read. Every read counts against the cap; when the next read would exceed
-/// it, the plan is unavailable. A single cell that reads as mixed (rich text in several font colors) cannot be
-/// restored exactly, so it also makes the plan unavailable.
+/// A single row or column is always halved along its length. So a uniform whole column costs one read, and n cells
+/// whose values all differ cost at most 2n - 1 reads. The weak case is a tall area inside the used range whose
+/// columns each have their own format: it is cut into rows first, so it costs about two reads per row (a long one
+/// reaches the cap). Every read counts against the cap; when the next read would
+/// exceed it, the plan is unavailable. A single cell that reads as mixed (rich text in several font colors), or a
+/// cell the reader cannot restore (<see cref="UnrestorableFormatException"/>), also makes the plan unavailable.
 /// </para>
 /// </remarks>
 public static class SnapshotPlanner
@@ -60,22 +64,22 @@ public static class SnapshotPlanner
             var inner = usedRange is CellRect used ? area.Intersect(used) : area;
             if (inner == area)
             {
-                run.Block(area, byRows: true);
+                run.Read(area, acrossShorter: false);
             }
             else if (!run.Whole(area))
             {
                 // Mixed, and partly or wholly outside the used range.
                 if (inner is CellRect inside)
                 {
-                    run.Block(inside, byRows: true);
+                    run.Read(inside, acrossShorter: false);
                     foreach (var band in area.Subtract(inside))
                     {
-                        run.Block(band, ShorterSide(band));
+                        run.Read(band, acrossShorter: true);
                     }
                 }
                 else
                 {
-                    run.Split(area, ShorterSide(area));
+                    run.Split(area, acrossShorter: true);
                 }
             }
 
@@ -87,9 +91,6 @@ public static class SnapshotPlanner
 
         return SnapshotPlan.Captured(run.Blocks, run.Reads);
     }
-
-    /// <summary>True to split <paramref name="rect"/> into rows (it is no taller than it is wide), false for columns.</summary>
-    private static bool ShorterSide(CellRect rect) => rect.RowCount <= rect.ColumnCount;
 
     /// <summary>One capture: the blocks so far, the reads made, and the first failure.</summary>
     private sealed class Run
@@ -109,12 +110,12 @@ public static class SnapshotPlanner
 
         public string? Failure { get; private set; }
 
-        /// <summary>Reads <paramref name="rect"/>; if mixed, reads it line by line (rows or columns).</summary>
-        public void Block(CellRect rect, bool byRows)
+        /// <summary>Reads <paramref name="rect"/> whole; if it is mixed, halves it (see <see cref="Split"/>).</summary>
+        public void Read(CellRect rect, bool acrossShorter)
         {
             if (!Whole(rect))
             {
-                Split(rect, byRows);
+                Split(rect, acrossShorter);
             }
         }
 
@@ -124,53 +125,27 @@ public static class SnapshotPlanner
         /// </summary>
         public bool Whole(CellRect rect) => !TryRead(rect, out var value) || Settle(rect, value);
 
-        /// <summary>Reads a mixed rectangle line by line (rows or columns); a single row or column is halved.</summary>
-        public void Split(CellRect rect, bool byRows)
+        /// <summary>
+        /// Halves a mixed rectangle (of two cells or more) and reads each half. A single row or column is halved
+        /// along its length; otherwise the cut goes across the longer side (rows first when square), or across the
+        /// shorter side if <paramref name="acrossShorter"/> (a band outside the used range).
+        /// </summary>
+        public void Split(CellRect rect, bool acrossShorter)
         {
-            if (rect.RowCount == 1 || rect.ColumnCount == 1)
+            var cutRows = rect.ColumnCount == 1 ||
+                (rect.RowCount > 1 &&
+                 (acrossShorter ? rect.RowCount <= rect.ColumnCount : rect.RowCount >= rect.ColumnCount));
+            if (cutRows)
             {
-                Halve(rect);
-                return;
-            }
-
-            var lines = byRows ? rect.RowCount : rect.ColumnCount;
-            for (var i = 0; i < lines && Failure is null; i++)
-            {
-                Line(byRows
-                    ? new CellRect(rect.Row + i, rect.Column, 1, rect.ColumnCount)
-                    : new CellRect(rect.Row, rect.Column + i, rect.RowCount, 1));
-            }
-        }
-
-        /// <summary>Reads a single row or column; if mixed, halves it.</summary>
-        private void Line(CellRect line)
-        {
-            if (TryRead(line, out var value) && !Settle(line, value))
-            {
-                Halve(line);
-            }
-        }
-
-        /// <summary>Splits a mixed row or column (of two cells or more) in two and reads each half.</summary>
-        private void Halve(CellRect line)
-        {
-            if (line.RowCount > 1)
-            {
-                var top = line.RowCount / 2;
-                Line(new CellRect(line.Row, line.Column, top, 1));
-                if (Failure is null)
-                {
-                    Line(new CellRect(line.Row + top, line.Column, line.RowCount - top, 1));
-                }
+                var top = rect.RowCount / 2;
+                Read(new CellRect(rect.Row, rect.Column, top, rect.ColumnCount), acrossShorter);
+                Read(new CellRect(rect.Row + top, rect.Column, rect.RowCount - top, rect.ColumnCount), acrossShorter);
             }
             else
             {
-                var left = line.ColumnCount / 2;
-                Line(new CellRect(line.Row, line.Column, 1, left));
-                if (Failure is null)
-                {
-                    Line(new CellRect(line.Row, line.Column + left, 1, line.ColumnCount - left));
-                }
+                var left = rect.ColumnCount / 2;
+                Read(new CellRect(rect.Row, rect.Column, rect.RowCount, left), acrossShorter);
+                Read(new CellRect(rect.Row, rect.Column + left, rect.RowCount, rect.ColumnCount - left), acrossShorter);
             }
         }
 
@@ -195,6 +170,10 @@ public static class SnapshotPlanner
             return false;
         }
 
+        /// <summary>
+        /// Reads <paramref name="rect"/> into <paramref name="value"/>. False, with <see cref="Failure"/> set, if
+        /// the run has failed, the cap is reached, or the cells cannot be restored.
+        /// </summary>
         private bool TryRead(CellRect rect, out CycleValue value)
         {
             value = CycleValue.Unknown;
@@ -213,7 +192,16 @@ public static class SnapshotPlanner
             }
 
             Reads++;
-            value = _reader.ReadUniform(rect);
+            try
+            {
+                value = _reader.ReadUniform(rect);
+            }
+            catch (UnrestorableFormatException ex)
+            {
+                Failure = ex.Message;
+                return false;
+            }
+
             return true;
         }
     }

@@ -12,8 +12,8 @@ namespace ExcelModelingToolkit.AddIn;
 /// Ctrl+Z and Ctrl+Y for our formatting undo (docs/PLAN.md section 4.4): a thread keyboard hook
 /// (<c>WH_KEYBOARD</c>) on Excel's main thread, the design proven in spikes K2b and K4. For each press it asks
 /// <see cref="UndoManager.Decide"/> whether the key is ours or Excel's. If it is Excel's, the key passes through
-/// untouched; if ours, it is swallowed (with its repeats and key-up) and <see cref="UndoCommand"/> runs after the
-/// hook returns.
+/// untouched (after dropping our redo stack if Excel's history shows it is stale); if ours, it is swallowed (with
+/// its repeats and key-up) and <see cref="UndoCommand"/> runs after the hook returns.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,10 +22,16 @@ namespace ExcelModelingToolkit.AddIn;
 /// buttons act on ours.
 /// </para>
 /// <para>
+/// Holding Ctrl+Z (or Ctrl+Y) down undoes (or redoes) one step when the key is ours: the auto-repeats are
+/// swallowed with the press. Release and press again for the next step.
+/// </para>
+/// <para>
 /// Excel's state is queried inside the hook (the decision must be made before the key is passed on), with
-/// <c>CommandBars.GetEnabledMso("Undo")</c> or <c>("Redo")</c>. The state is unknown, so the key passes, while a
-/// cell is being edited, when the keyboard focus is not on a worksheet grid (a dialog, the formula bar, the VBA
-/// editor, a task pane), or if the query fails. All other work, including the log lines, is posted to a hidden
+/// <c>CommandBars.GetEnabledMso("Undo")</c> and <c>("Redo")</c>. The state is unknown, so the key passes, while the
+/// mouse is captured, a menu is open or a window is being moved or sized (no COM call is made then), while a cell
+/// is being edited, when the keyboard focus is not on a worksheet grid (a dialog, the formula bar, the VBA editor,
+/// a task pane), or if the query fails. A press that arrives while the hook is already running
+/// (the query can pump messages) passes untouched. All other work, including the log lines, is posted to a hidden
 /// window on the main thread so the hook returns at once.
 /// </para>
 /// </remarks>
@@ -39,6 +45,11 @@ internal static class UndoKeyHook
     private const int VkY = 0x59;
     private const int VkZ = 0x5A;
 
+    /// <summary>GUITHREADINFO flags: a window is being moved or sized, or a menu (menu bar or popup) is active.</summary>
+    private const int GuiInMoveSize = 0x2;
+    private const int GuiInMenuMode = 0x4;
+    private const int GuiPopupMenuMode = 0x10;
+
     /// <summary>Window class of a worksheet grid window, which has the keyboard focus while cells are selected.</summary>
     private const string GridWindowClass = "EXCEL7";
 
@@ -46,6 +57,11 @@ internal static class UndoKeyHook
     private static NativeMethods.HookProc? _proc;
     private static IntPtr _hook;
     private static Control? _poster;
+    private static uint _thread;
+    private static bool _unloadSubscribed;
+
+    // True while Proc runs: a key that arrives meanwhile (a COM call can pump messages) passes untouched.
+    private static bool _inProc;
 
     // The key whose press we swallowed: its auto-repeats and key-up are swallowed too. Zero when none.
     private static int _swallowedKey;
@@ -59,20 +75,31 @@ internal static class UndoKeyHook
         Uninstall();
         try
         {
+            if (!_unloadSubscribed)
+            {
+                // Excel can unload the add-in's AppDomain without AutoClose (e.g. when it exits): unhook then too.
+                AppDomain.CurrentDomain.DomainUnload += (sender, e) => Uninstall();
+                _unloadSubscribed = true;
+            }
+
+            // Creating a Control would otherwise install a WinForms SynchronizationContext on Excel's main thread,
+            // changing how every awaiting add-in in this AppDomain resumes.
+            WindowsFormsSynchronizationContext.AutoInstall = false;
+
             // The hidden window must be created on the main thread: BeginInvoke then runs work there.
             var poster = new Control();
             poster.CreateControl();
             _ = poster.Handle;
             _poster = poster;
 
-            var thread = NativeMethods.GetCurrentThreadId();
+            _thread = NativeMethods.GetCurrentThreadId();
             _proc = Proc;
-            _hook = NativeMethods.SetWindowsHookEx(WhKeyboard, _proc, IntPtr.Zero, thread);
+            _hook = NativeMethods.SetWindowsHookEx(WhKeyboard, _proc, IntPtr.Zero, _thread);
             var error = Marshal.GetLastWin32Error();
             DiagnosticsLog.Write(
                 "UndoHook",
                 _hook != IntPtr.Zero ? "installed" : "failed",
-                "thread=" + thread.ToString(CultureInfo.InvariantCulture),
+                "thread=" + _thread.ToString(CultureInfo.InvariantCulture),
                 "win32Error=" + error.ToString(CultureInfo.InvariantCulture));
             if (_hook == IntPtr.Zero)
             {
@@ -90,7 +117,7 @@ internal static class UndoKeyHook
         }
     }
 
-    /// <summary>Removes the hook and the hidden window (AutoClose). Never throws.</summary>
+    /// <summary>Removes the hook and the hidden window (AutoClose, or the AppDomain unloading). Never throws.</summary>
     public static void Uninstall()
     {
         try
@@ -116,6 +143,12 @@ internal static class UndoKeyHook
 
     private static IntPtr Proc(int code, IntPtr wParam, IntPtr lParam)
     {
+        if (_inProc)
+        {
+            return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
+        }
+
+        _inProc = true;
         try
         {
             if (code == HcAction && _poster is not null)
@@ -135,44 +168,66 @@ internal static class UndoKeyHook
                     return new IntPtr(1);
                 }
 
-                if ((key == VkZ || key == VkY) && !keyUp && !repeat &&
-                    IsDown(VkControl) && !IsDown(VkMenu) && !IsDown(VkShift) &&
-                    Handle(key == VkZ ? UndoKey.Undo : UndoKey.Redo))
+                if (!keyUp && !repeat)
                 {
-                    _swallowedKey = key;
-                    return new IntPtr(1);
+                    // A fresh press ends any swallowed key whose key-up we never saw (focus moved, say).
+                    _swallowedKey = 0;
+                    if ((key == VkZ || key == VkY) &&
+                        IsDown(VkControl) && !IsDown(VkMenu) && !IsDown(VkShift) &&
+                        Handle(key == VkZ ? UndoKey.Undo : UndoKey.Redo))
+                    {
+                        _swallowedKey = key;
+                        return new IntPtr(1);
+                    }
                 }
             }
         }
         catch (Exception ex)
         {
-            Post(() => DiagnosticsLog.Write("UndoHook", "error", ex.ToString()));
+            Log("UndoHook", "error", ex.ToString());
+        }
+        finally
+        {
+            _inProc = false;
         }
 
         return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
     }
 
-    /// <summary>Decides one press and logs it. True if it is ours: the restore has been posted and the key must be swallowed.</summary>
+    /// <summary>
+    /// Decides one press and logs it. Drops our redo stack if Excel's history shows it is stale. True if the key is
+    /// ours: the restore has been posted and the key must be swallowed.
+    /// </summary>
     private static bool Handle(UndoKey key)
     {
-        var count = Session.Undo.Count(key);
-        bool? native = null;
-        var context = "context=stack empty, not queried";
-        if (count > 0)
+        var undo = Session.Undo.UndoCount;
+        var redo = Session.Undo.RedoCount;
+        bool? nativeUndo = null;
+        bool? nativeRedo = null;
+        bool? nativeRepeat = null;
+        string context;
+        if (key == UndoKey.Undo ? undo + redo > 0 : redo > 0)
         {
-            native = NativeAvailable(key, out context);
+            (nativeUndo, nativeRedo, nativeRepeat) = NativeState(out context);
+        }
+        else
+        {
+            context = "context=stacks empty, not queried";
         }
 
-        var decision = UndoManager.Decide(key, count > 0, native);
-        var fields = new[]
-        {
+        var decision = UndoManager.Decide(key, undo, redo, nativeUndo, nativeRedo);
+        var dropped = decision == UndoDecision.PassToExcelAndClearRedo ? Session.Undo.ClearRedo() : 0;
+        Log(
+            "UndoKey",
             key == UndoKey.Undo ? "Z" : "Y",
-            "stack=" + count.ToString(CultureInfo.InvariantCulture),
-            "native=" + (native is bool enabled ? (enabled ? "true" : "false") : "unknown"),
+            "undo=" + undo.ToString(CultureInfo.InvariantCulture),
+            "redo=" + redo.ToString(CultureInfo.InvariantCulture),
+            "nativeUndo=" + NativeUndoState.Describe(nativeUndo),
+            "nativeRedo=" + NativeUndoState.Describe(nativeRedo),
+            "nativeRepeat=" + NativeUndoState.Describe(nativeRepeat),
             "decision=" + decision,
-            context,
-        };
-        Post(() => DiagnosticsLog.Write("UndoKey", fields));
+            "droppedRedo=" + dropped.ToString(CultureInfo.InvariantCulture),
+            context);
         if (decision != UndoDecision.HandleOurs)
         {
             return false;
@@ -184,35 +239,49 @@ internal static class UndoKeyHook
     }
 
     /// <summary>
-    /// Whether Excel's own Undo (or Redo) is enabled, or null when unknown: a cell is being edited, the focus is
-    /// not on a worksheet grid, or the query failed. <paramref name="context"/> says which, for the log.
+    /// Excel's own Undo and Redo states (and Repeat's, when logging), each null when unknown: the mouse is captured,
+    /// a menu is open or a window is being moved or sized, a cell is being edited, the focus is not on a worksheet
+    /// grid, or the query failed. <paramref name="context"/> says which, for the log.
     /// </summary>
-    private static bool? NativeAvailable(UndoKey key, out string context)
+    private static (bool? Undo, bool? Redo, bool? Repeat) NativeState(out string context)
     {
         try
         {
+            // Checked before any COM call: Excel is in a modal loop of its own.
+            if (NativeMethods.GetCapture() != IntPtr.Zero)
+            {
+                context = "context=mouse captured";
+                return (null, null, null);
+            }
+
+            var info = new NativeMethods.GuiThreadInfo { Size = Marshal.SizeOf(typeof(NativeMethods.GuiThreadInfo)) };
+            if (NativeMethods.GetGUIThreadInfo(_thread, ref info) &&
+                (info.Flags & (GuiInMenuMode | GuiPopupMenuMode | GuiInMoveSize)) != 0)
+            {
+                context = "context=menu or move/size, flags=0x" + info.Flags.ToString("x", CultureInfo.InvariantCulture);
+                return (null, null, null);
+            }
+
             if (ExcelDnaUtil.IsInFormulaEditMode())
             {
                 context = "context=editing a cell";
-                return null;
+                return (null, null, null);
             }
 
             var focus = FocusClass();
             if (!string.Equals(focus, GridWindowClass, StringComparison.Ordinal))
             {
                 context = "context=focus " + focus;
-                return null;
+                return (null, null, null);
             }
 
-            dynamic app = ExcelDnaUtil.Application;
-            object enabled = app.CommandBars.GetEnabledMso(key == UndoKey.Undo ? "Undo" : "Redo");
             context = "context=grid";
-            return enabled is bool value ? value : (bool?)null;
+            return NativeUndoState.Query(withRepeat: DiagnosticsLog.Enabled);
         }
         catch (Exception ex)
         {
             context = "context=query failed: " + ex.Message;
-            return null;
+            return (null, null, null);
         }
     }
 
@@ -227,6 +296,15 @@ internal static class UndoKeyHook
 
         var name = new StringBuilder(64);
         return NativeMethods.GetClassName(focus, name, name.Capacity) > 0 ? name.ToString() : "(unknown)";
+    }
+
+    /// <summary>Writes a diagnostics log line after the hook returns; nothing is posted when logging is off.</summary>
+    private static void Log(string eventName, params string[] fields)
+    {
+        if (DiagnosticsLog.Enabled)
+        {
+            Post(() => DiagnosticsLog.Write(eventName, fields));
+        }
     }
 
     /// <summary>Runs <paramref name="work"/> on the main thread after the hook returns. False if it could not be posted.</summary>
@@ -274,7 +352,32 @@ internal static class UndoKeyHook
         [DllImport("user32.dll")]
         public static extern IntPtr GetFocus();
 
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetCapture();
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetGUIThreadInfo(uint idThread, ref GuiThreadInfo pgui);
+
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        /// <summary>GUITHREADINFO.</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct GuiThreadInfo
+        {
+            public int Size;
+            public int Flags;
+            public IntPtr Active;
+            public IntPtr Focus;
+            public IntPtr Capture;
+            public IntPtr MenuOwner;
+            public IntPtr MoveSize;
+            public IntPtr Caret;
+            public int CaretLeft;
+            public int CaretTop;
+            public int CaretRight;
+            public int CaretBottom;
+        }
     }
 }

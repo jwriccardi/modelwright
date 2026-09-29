@@ -118,15 +118,31 @@ public class SnapshotPlannerTests
     }
 
     [Fact]
-    public void Mixed_block_inside_the_used_range_is_read_row_by_row()
+    public void Mixed_block_inside_the_used_range_is_halved_across_its_longer_side()
+    {
+        var sheet = new FakeSheet(General).Paint(A1("A3:B3"), OneDecimal);
+
+        var plan = Plan(sheet, "A1:Z100", 10000, "A1:B4");
+
+        AssertCaptures(plan, sheet, "A1:B4");
+        Assert.Equal(new[] { "$A$1:$B$4", "$A$1:$B$2", "$A$3:$B$4", "$A$3:$B$3", "$A$4:$B$4" }, sheet.Reads.Select(r => r.Address));
+        Assert.Equal(new[] { "$A$1:$B$2", "$A$3:$B$3", "$A$4:$B$4" }, plan.Blocks.Select(b => b.Address));
+    }
+
+    [Fact]
+    public void A_wide_mixed_block_is_halved_into_columns()
     {
         var sheet = new FakeSheet(General).Paint(A1("A2:C2"), OneDecimal);
 
         var plan = Plan(sheet, "A1:Z100", 10000, "A1:C3");
 
         AssertCaptures(plan, sheet, "A1:C3");
-        Assert.Equal(new[] { "$A$1:$C$3", "$A$1:$C$1", "$A$2:$C$2", "$A$3:$C$3" }, sheet.Reads.Select(r => r.Address));
-        Assert.Equal(new[] { "$A$1:$C$1", "$A$2:$C$2", "$A$3:$C$3" }, plan.Blocks.Select(b => b.Address));
+
+        // A1:C3 (square: rows first), A1:C1, then A2:C3 is wider than tall: A2:A3 (A2, A3), B2:C3 (B2:C2, B3:C3).
+        Assert.Equal(
+            new[] { "$A$1:$C$3", "$A$1:$C$1", "$A$2:$C$3", "$A$2:$A$3", "$A$2", "$A$3", "$B$2:$C$3", "$B$2:$C$2", "$B$3:$C$3" },
+            sheet.Reads.Select(r => r.Address));
+        Assert.Equal(new[] { "$A$1:$C$1", "$A$2", "$A$3", "$B$2:$C$2", "$B$3:$C$3" }, plan.Blocks.Select(b => b.Address));
     }
 
     [Fact]
@@ -166,7 +182,8 @@ public class SnapshotPlannerTests
         Assert.Contains(plan.Blocks, b => b.Address == "$A$3:$A$1048576" && b.Captured == General);
         Assert.Contains(plan.Blocks, b => b.Address == "$B$3:$B$1048576" && b.Captured == Percent);
         Assert.Contains(plan.Blocks, b => b.Address == "$C$3:$C$1048576" && b.Captured == General);
-        Assert.Equal(16, plan.Reads); // A:C, A1:C2, 2 rows x (row, A, B:C, B, C), band, its 3 columns
+        // A:C; A1:C2 (wide: A1:A2, B1:C2 -> B1:C1 (B1, C1), B2:C2 (B2, C2)); the band below (A, B:C -> B, C).
+        Assert.Equal(15, plan.Reads);
     }
 
     [Fact]
@@ -183,7 +200,7 @@ public class SnapshotPlannerTests
     }
 
     [Fact]
-    public void Mixed_area_entirely_outside_the_used_range_is_split_along_its_shorter_side()
+    public void Mixed_area_entirely_outside_the_used_range_is_halved_across_its_shorter_side()
     {
         var sheet = new FakeSheet(General).Paint(A1("K:K"), Percent);
 
@@ -191,7 +208,7 @@ public class SnapshotPlannerTests
 
         AssertCaptures(plan, sheet, "J20:L100000");
         Assert.Equal(new[] { "$J$20:$J$100000", "$K$20:$K$100000", "$L$20:$L$100000" }, plan.Blocks.Select(b => b.Address));
-        Assert.Equal(4, plan.Reads);
+        Assert.Equal(5, plan.Reads); // J20:L100000, J, K:L, K, L
     }
 
     [Fact]
@@ -249,12 +266,97 @@ public class SnapshotPlannerTests
     [Fact]
     public void A_capture_that_needs_exactly_the_cap_is_available()
     {
-        var sheet = new FakeSheet(General).Paint(A1("A2:C2"), OneDecimal);
+        var sheet = new FakeSheet(General).Paint(A1("A3:B3"), OneDecimal);
 
-        var plan = Plan(sheet, "A1:Z100", 4, "A1:C3");
+        var plan = Plan(sheet, "A1:Z100", 5, "A1:B4");
 
-        AssertCaptures(plan, sheet, "A1:C3");
-        Assert.Equal(4, plan.Reads);
+        AssertCaptures(plan, sheet, "A1:B4");
+        Assert.Equal(5, plan.Reads);
+
+        var over = Plan(new FakeSheet(General).Paint(A1("A3:B3"), OneDecimal), "A1:Z100", 4, "A1:B4");
+        Assert.False(over.IsAvailable);
+        Assert.Equal(4, over.Reads);
+    }
+
+    [Fact]
+    public void Cells_that_all_differ_cost_two_reads_per_cell_less_one()
+    {
+        var sheet = new FakeSheet(General);
+        for (var row = 1; row <= 4; row++)
+        {
+            for (var column = 1; column <= 4; column++)
+            {
+                sheet.Paint(new CellRect(row, column, 1, 1), CycleValue.FromNumberFormat("0." + new string('0', (row * 4) + column)));
+            }
+        }
+
+        var plan = Plan(sheet, "A1:Z100", 10000, "A1:D4");
+
+        AssertCaptures(plan, sheet, "A1:D4");
+        Assert.Equal(16, plan.Blocks.Count);
+        Assert.All(plan.Blocks, b => Assert.True(b.Range.IsSingleCell));
+        Assert.Equal(31, plan.Reads); // a full binary tree over 16 cells: 2n - 1
+
+        Assert.True(Plan(sheet, "A1:Z100", 31, "A1:D4").IsAvailable);
+        var capped = Plan(sheet, "A1:Z100", 30, "A1:D4");
+        Assert.False(capped.IsAvailable);
+        Assert.Equal(30, capped.Reads);
+    }
+
+    [Fact]
+    public void Whole_columns_over_a_long_used_range_with_distinct_header_rows_cost_few_reads()
+    {
+        var sheet = new FakeSheet(General)
+            .Paint(A1("C1:E1"), OneDecimal)
+            .Paint(A1("C2:E2"), Percent)
+            .Paint(A1("D3"), CycleValue.FromNumberFormat("0.00"));
+
+        var plan = Plan(sheet, "A1:H20000", 10000, "C:E");
+
+        AssertCaptures(plan, sheet, "C:E");
+        Assert.True(plan.Reads < 60, $"{plan.Reads} reads"); // row by row would be over 20,000
+        Assert.Contains(plan.Blocks, b => b.Address == "$C$20001:$E$1048576" && b.Captured == General);
+        Assert.Contains(plan.Blocks, b => b.Address == "$C$10001:$E$20000" && b.Captured == General);
+    }
+
+    [Fact]
+    public void Whole_sheet_with_distinct_column_formats_stays_bounded()
+    {
+        // Ctrl+A on a sheet whose columns A to H each have their own format; data in A1:H50.
+        var sheet = new FakeSheet(General);
+        for (var column = 1; column <= 8; column++)
+        {
+            sheet.Paint(new CellRect(1, column, CellRect.MaxRows, 1), CycleValue.FromNumberFormat("0." + new string('0', column)));
+        }
+
+        var plan = SnapshotPlanner.Plan(
+            new[] { new CellRect(1, 1, CellRect.MaxRows, CellRect.MaxColumns) },
+            A1("A1:H50"),
+            10000,
+            sheet);
+
+        Assert.True(plan.IsAvailable, plan.UnavailableReason);
+        Assert.Equal((long)CellRect.MaxRows * CellRect.MaxColumns, plan.CellCount);
+        Assert.All(plan.Blocks, b => Assert.Equal(sheet.Value(b.Range), b.Captured));
+        Assert.Contains(plan.Blocks, b => b.Address == "$I$1:$XFD$50" && b.Captured == General);
+        Assert.Contains(plan.Blocks, b => b.Address == "$A$51:$A$1048576");
+        // Bounded by the used range (400 cells: at most 799 reads) plus a few dozen for the bands; the sheet has
+        // 17 billion cells. Cut into rows first, almost every piece of the used range stays mixed down to its cells.
+        Assert.True(plan.Reads < 2 * 400 + 60, $"{plan.Reads} reads");
+    }
+
+    [Fact]
+    public void A_cell_the_reader_cannot_restore_makes_the_plan_unavailable()
+    {
+        var sheet = new FakeSheet(General).Unrestorable(A1("B2"));
+
+        var plan = Plan(sheet, "A1:Z100", 10000, "A1:C3");
+
+        Assert.False(plan.IsAvailable);
+        Assert.Equal("pattern or gradient fill", plan.UnavailableReason);
+        Assert.Empty(plan.Blocks);
+        Assert.Equal(sheet.Reads.Count, plan.Reads);
+        Assert.Equal(A1("B2"), sheet.Reads.Last());
     }
 
     [Fact]

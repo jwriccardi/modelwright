@@ -79,9 +79,62 @@ public class FormatSnapshotTests
     }
 
     [Fact]
+    public void Font_snapshots_accept_automatic_and_other_kinds_do_not()
+    {
+        var automatic = CycleValue.Automatic;
+        var snapshot = FormatSnapshot.Create("Font", CycleKind.FontColor, "B", "S", new[] { Block("A1", automatic, Blue) });
+
+        Assert.Equal(automatic, snapshot.Blocks[0].Captured);
+        Assert.Equal(automatic, Assert.Single(snapshot.WriteGroups(UndoKey.Undo)).Value);
+        Assert.Throws<ArgumentException>(() => FormatSnapshot.Create("Fill", CycleKind.FillColor, "B", "S", new[] { Block("A1", automatic, Blue) }));
+        Assert.Throws<ArgumentException>(() => FormatSnapshot.Create("N", CycleKind.NumberFormat, "B", "S", new[] { Block("A1", automatic, Applied) }));
+    }
+
+    [Fact]
+    public void Automatic_and_explicit_black_stay_separate_blocks_when_undone()
+    {
+        var black = CycleValue.FromColor(OleColor.FromRgb(0, 0, 0));
+        var snapshot = FormatSnapshot.Create("Font", CycleKind.FontColor, "B", "S", new[]
+        {
+            Block("A1", CycleValue.Automatic, Blue),
+            Block("A2", black, Blue),
+        });
+
+        var groups = snapshot.WriteGroups(UndoKey.Undo);
+
+        Assert.Equal(2, groups.Count);
+        Assert.Equal(CycleValue.Automatic, groups[0].Value);
+        Assert.Equal(black, groups[1].Value);
+    }
+
+    [Theory]
+    [InlineData(@"C:\Deals\Model.xlsx", "Model.xlsx")]
+    [InlineData("https://contoso.sharepoint.com/sites/x/Shared Documents/Model.xlsx", "Model.xlsx")]
+    [InlineData("Book1", "Book1")]
+    public void WorkbookName_is_the_file_name_of_the_full_name(string fullName, string name)
+    {
+        var snapshot = FormatSnapshot.Unavailable("N", CycleKind.NumberFormat, fullName, "S", "reason");
+
+        Assert.Equal(fullName, snapshot.Workbook);
+        Assert.Equal(name, snapshot.WorkbookName);
+    }
+
+    [Fact]
     public void Block_captured_value_must_be_known()
     {
         Assert.Throws<ArgumentException>(() => Block("A1", CycleValue.Unknown, Applied));
+    }
+
+    [Fact]
+    public void Blocks_share_one_string_per_number_format_code()
+    {
+        // Strings read over COM are new instances each time.
+        var first = new SnapshotBlock(new CellRect(1, 1, 1, 1), CycleValue.FromNumberFormat(new string("0.0%x".ToCharArray(), 0, 4)), CycleValue.Unknown);
+        var second = new SnapshotBlock(new CellRect(2, 1, 1, 1), CycleValue.FromNumberFormat(new string("0.0%y".ToCharArray(), 0, 4)), CycleValue.Unknown)
+            .WithApplied(CycleValue.FromNumberFormat(new string("0.0%z".ToCharArray(), 0, 4)));
+
+        Assert.Same(first.Captured.NumberFormat, second.Captured.NumberFormat);
+        Assert.Same(first.Captured.NumberFormat, second.Applied.NumberFormat);
     }
 
     [Fact]

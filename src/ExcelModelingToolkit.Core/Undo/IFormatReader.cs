@@ -9,5 +9,8 @@ public interface IFormatReader
     /// The value every cell of <paramref name="range"/> holds, or <see cref="CycleValue.Unknown"/> if they differ
     /// (mixed). A single cell can also be mixed, e.g. rich text in several font colors.
     /// </summary>
+    /// <exception cref="UnrestorableFormatException">
+    /// Every cell of <paramref name="range"/> holds a format that could not be restored exactly (e.g. a pattern fill).
+    /// </exception>
     CycleValue ReadUniform(CellRect range);
 }
