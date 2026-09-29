@@ -8,7 +8,7 @@
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
 | K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. **K2c:** any COM write wipes the history, so arbitrary formats get Macabacus parity at best with Excel-DNA alone. A hybrid with Office.js (K2d) could beat it. |
 | K4 — Trace window focus | ✅ **Passed with variants B (WinForms, focused) and C (hook, Excel keeps focus)**, including cross-workbook navigation. Variant A (WPF) is rejected. The F2 check on C is pending. |
-| K1 — Office.js named keys | 🟡 **K1b:** one invalid key rejects the whole shortcuts file. Office's parser **accepts `Semicolon`, `Comma`, `Period` and `F2`**, but no name found yet for `[`, `]`, `'` or `\`. |
+| K1 — Office.js named keys | ✅ **K1c: Office.js CAN bind the exact Macabacus punctuation keys** through undocumented key names (runtime `replaceShortcuts`). All 8 probes were accepted and fired. **ADR-0001 is reopened for decision.** |
 
 ## K3 details
 
@@ -248,6 +248,38 @@ All three add-ins loaded:
 - **No accepted name has been found yet for `[`, `]`, `'` or `\`.** These are Trace In/Out (Ctrl+Shift+[ ]), Font cycle (Ctrl+'), Last Audited Cell (Ctrl+Shift+\) and Show All (Ctrl+Alt+[ ]).
 - Any Office.js keymap must be validated one key at a time. Otherwise a single bad key silently disables *all* shortcuts.
 - **Owner note:** a sideloaded add-in had to be started manually from Home › Add-ins in each Excel session, because the runtime isn't auto-started. The product would use `Office.addin.setStartupBehavior(load)`.
+
+
+## K1c (23:24–23:27): named punctuation keys, physical key-press test
+
+**How it was run.** The Single add-in registered 8 probe actions on safe defaults (Ctrl+Alt+Shift+1…8). At runtime, each was re-keyed with `replaceShortcuts` to the first candidate name Office accepted. The owner then pressed the **physical Macabacus keys**, and each probe fired in order.
+
+| Probe | Macabacus key | Accepted name | Office stored | Fired |
+|---|---|---|---|---|
+| P1 | Ctrl+; | `Ctrl+Semicolon` | `Ctrl+;` | ✅ 23:26:19 |
+| P2 | Ctrl+, | `Ctrl+Comma` | `Ctrl+,` | ✅ 23:26:32 |
+| P3 | Ctrl+. | `Ctrl+Period` | `Ctrl+.` | ✅ 23:26:39 |
+| P4 | **Ctrl+Shift+[** (Trace In) | `Ctrl+Shift+LeftBracket` | `Ctrl+Shift+[` | ✅ 23:26:44 |
+| P5 | **Ctrl+'** (Font cycle) | `Ctrl+SingleQuote` (`Apostrophe` rejected) | `Ctrl+'` | ✅ 23:26:48 |
+| P6 | Ctrl+Shift+\ (Last Audited Cell) | `Ctrl+Shift+Backslash` | `Ctrl+Shift+\` | ✅ 23:26:51 |
+| P7 | Ctrl+Shift+] (Trace Out) | `Ctrl+Shift+RightBracket` | `Ctrl+Shift+]` | ✅ 23:26:55 |
+| P8 | Ctrl+Alt+[ (Show All Precedents) | `Ctrl+Alt+LeftBracket` | `Ctrl+Alt+[` | ✅ 23:26:58 |
+| ctrl | Ctrl+Alt+Shift+L | (manifest) | — | ✅ 23:27:02 |
+
+The shortcuts were reverted to defaults afterwards (23:27:08).
+
+**Other names checked with `areShortcutsInUse`:**
+- **Accepted:** Slash, Backquote, Space, Tab, Enter, Home, End, PageUp, PageDown, Left, Right, Backspace, F12.
+- **Rejected:** Minus, Equal, Plus, Grave, Tilde, PgUp, Insert, Delete, Escape.
+- So Macabacus keys such as Ctrl+Alt+= / - and Alt+Shift+Ins / Del have no Office.js mapping yet.
+
+**Caveats:**
+- These names are **undocumented**. Microsoft could change them; a CI check and a runtime self-test would catch that.
+- Using them in the **manifest** file (rather than at runtime) is **untested**. File validation rejects the whole file if any entry is bad.
+- Runtime customization is stored in roaming settings **only for signed-in users**, not for anonymous users.
+- Each key that overrides a built-in (for example Ctrl+; for insert date) shows a one-time conflict prompt.
+
+**Consequence.** The original reason for leaving Office.js (ADR-0001 → ADR-0002) no longer holds for the v1 keys.
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
