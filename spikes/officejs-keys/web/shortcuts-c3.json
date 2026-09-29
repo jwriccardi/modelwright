@@ -1,0 +1,106 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/office-js/extended-manifest.schema.json",
+  "actions": [
+    {
+      "id": "ControlL",
+      "type": "ExecuteFunction",
+      "name": "Control: Ctrl+Alt+Shift+L"
+    },
+    {
+      "id": "P1",
+      "type": "ExecuteFunction",
+      "name": "Probe P1: Ctrl+;  (Blue-Black toggle)"
+    },
+    {
+      "id": "P2",
+      "type": "ExecuteFunction",
+      "name": "Probe P2: Ctrl+,  (Increase decimals)"
+    },
+    {
+      "id": "P3",
+      "type": "ExecuteFunction",
+      "name": "Probe P3: Ctrl+.  (Decrease decimals)"
+    },
+    {
+      "id": "P4",
+      "type": "ExecuteFunction",
+      "name": "Probe P4: Ctrl+Shift+[  (Trace In)"
+    },
+    {
+      "id": "P5",
+      "type": "ExecuteFunction",
+      "name": "Probe P5: Ctrl+'  (Font color cycle)"
+    },
+    {
+      "id": "P6",
+      "type": "ExecuteFunction",
+      "name": "Probe P6: Ctrl+Shift+\\  (Last Audited Cell)"
+    },
+    {
+      "id": "P7",
+      "type": "ExecuteFunction",
+      "name": "Probe P7: Ctrl+Shift+]  (Trace Out)"
+    },
+    {
+      "id": "P8",
+      "type": "ExecuteFunction",
+      "name": "Probe P8: Ctrl+Alt+[  (Show All Precedents)"
+    }
+  ],
+  "shortcuts": [
+    {
+      "action": "ControlL",
+      "key": {
+        "default": "Ctrl+Alt+Shift+L"
+      }
+    },
+    {
+      "action": "P1",
+      "key": {
+        "default": "Ctrl+Alt+Shift+1"
+      }
+    },
+    {
+      "action": "P2",
+      "key": {
+        "default": "Ctrl+Alt+Shift+2"
+      }
+    },
+    {
+      "action": "P3",
+      "key": {
+        "default": "Ctrl+Alt+Shift+3"
+      }
+    },
+    {
+      "action": "P4",
+      "key": {
+        "default": "Ctrl+Alt+Shift+4"
+      }
+    },
+    {
+      "action": "P5",
+      "key": {
+        "default": "Ctrl+Alt+Shift+5"
+      }
+    },
+    {
+      "action": "P6",
+      "key": {
+        "default": "Ctrl+Alt+Shift+6"
+      }
+    },
+    {
+      "action": "P7",
+      "key": {
+        "default": "Ctrl+Alt+Shift+7"
+      }
+    },
+    {
+      "action": "P8",
+      "key": {
+        "default": "Ctrl+Alt+Shift+8"
+      }
+    }
+  ]
+}

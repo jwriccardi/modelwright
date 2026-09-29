@@ -1,0 +1,9 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/office-js/extended-manifest.schema.json",
+  "actions": [
+    { "id": "ControlL", "type": "ExecuteFunction", "name": "Control: Ctrl+Alt+Shift+L (only shortcut in this file)" }
+  ],
+  "shortcuts": [
+    { "action": "ControlL", "key": { "default": "Ctrl+Alt+Shift+L" } }
+  ]
+}

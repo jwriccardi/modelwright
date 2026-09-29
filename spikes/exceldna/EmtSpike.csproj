@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- THROWAWAY spike (K2/K3/K4). Not production code. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>EmtSpike</RootNamespace>
+    <AssemblyName>EmtSpike</AssemblyName>
+    <Nullable>disable</Nullable>
+
+    <!-- Excel-DNA -->
+    <ExcelAddInName>EMT Spike</ExcelAddInName>
+    <ExcelAddInExplicitExports>true</ExcelAddInExplicitExports>
+    <ExcelDnaCreate32BitAddIn>false</ExcelDnaCreate32BitAddIn>
+    <ExcelDnaCreate64BitAddIn>true</ExcelDnaCreate64BitAddIn>
+    <RunExcelDnaPack>true</RunExcelDnaPack>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ExcelDna.AddIn" Version="1.9.0" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="WindowsFormsIntegration" />
+  </ItemGroup>
+
+</Project>

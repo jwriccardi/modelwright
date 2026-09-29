@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/office-js/extended-manifest.schema.json",
+  "actions": [
+    { "id": "ControlL", "type": "ExecuteFunction", "name": "Control: Ctrl+Alt+Shift+L (baseline, should work)" },
+    { "id": "CandBracketLeftShift", "type": "ExecuteFunction", "name": "Candidate: Ctrl+Shift+BracketLeft (only candidate in this file)" }
+  ],
+  "shortcuts": [
+    { "action": "ControlL", "key": { "default": "Ctrl+Alt+Shift+L" } },
+    { "action": "CandBracketLeftShift", "key": { "default": "Ctrl+Shift+BracketLeft" } }
+  ]
+}

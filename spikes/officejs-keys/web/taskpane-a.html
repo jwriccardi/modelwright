@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+  <title>EMT K1 Named Keys</title>
+  <link rel="stylesheet" href="taskpane-style.css" />
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+  <h1 id="addin-name">EMT K1 Named Keys</h1>
+
+  <h2>Diagnostics</h2>
+  <dl>
+    <dt>Office.context.diagnostics</dt>
+    <dd id="diagnostics">(loading...)</dd>
+    <dt>Requirement sets</dt>
+    <dd id="requirement-sets">(loading...)</dd>
+  </dl>
+
+  <h2>Office.actions.getShortcuts()</h2>
+  <pre id="get-shortcuts">(loading...)</pre>
+
+  <h2>Office.actions.areShortcutsInUse(candidates)</h2>
+  <pre id="in-use">(loading...)</pre>
+
+  <h2>Office.actions.replaceShortcuts(candidates)</h2>
+  <pre id="replace-shortcuts">(loading...)</pre>
+
+  <h2>Errors</h2>
+  <div id="errors"></div>
+
+  <h2>Actions registered from shortcuts-a.json</h2>
+  <table class="actions">
+    <thead><tr><th>action id</th><th>key string</th></tr></thead>
+    <tbody id="actions-tbody"></tbody>
+  </table>
+
+  <h2>Fired log (press keys in the Excel grid to test)</h2>
+  <ul id="log"></ul>
+
+  <script src="taskpane-common.js"></script>
+  <script>
+    window.EMT_K1_CONFIG = {
+      name: "EMT K1 Named Keys",
+      actions: [
+        { id: "Control1", key: "Ctrl+Alt+Shift+K" },
+        { id: "Control2", key: "Ctrl+Alt+Up" },
+        { id: "CandBracketLeftShift", key: "Ctrl+Shift+BracketLeft" },
+        { id: "CandBracketLeft", key: "Ctrl+BracketLeft" },
+        { id: "CandBracketRight", key: "Ctrl+BracketRight" },
+        { id: "CandQuote", key: "Ctrl+Quote" },
+        { id: "CandSemicolon", key: "Ctrl+Semicolon" },
+        { id: "CandComma", key: "Ctrl+Comma" },
+        { id: "CandPeriod", key: "Ctrl+Period" },
+        { id: "CandOemComma", key: "Ctrl+OemComma" },
+        { id: "CandOemPeriod", key: "Ctrl+OemPeriod" },
+        { id: "CandOem1", key: "Ctrl+Oem1" },
+        { id: "CandOem4", key: "Ctrl+Oem4" },
+        { id: "CandOem7", key: "Ctrl+Oem7" },
+        { id: "CandOpenBracketShift", key: "Ctrl+Shift+OpenBracket" },
+        { id: "CandF2", key: "Ctrl+F2" },
+        { id: "CandOemSemicolon", key: "Ctrl+OemSemicolon" },
+        { id: "CandOemQuotes", key: "Ctrl+OemQuotes" },
+        { id: "CandOemOpenBrackets", key: "Ctrl+OemOpenBrackets" }
+      ],
+      inUseCheckKeys: [
+        "Ctrl+Shift+BracketLeft",
+        "Ctrl+BracketLeft",
+        "Ctrl+Quote",
+        "Ctrl+Semicolon",
+        "Ctrl+Comma",
+        "Ctrl+Period",
+        "Ctrl+Oem1",
+        "Ctrl+Oem4",
+        "Ctrl+Oem7"
+      ],
+      replaceCandidates: [
+        { action: "CandBracketLeftShift", key: "Ctrl+Shift+BracketLeft" },
+        { action: "CandOem4", key: "Ctrl+Oem4" }
+      ]
+    };
+    window.emtK1Init();
+  </script>
+</body>
+</html>

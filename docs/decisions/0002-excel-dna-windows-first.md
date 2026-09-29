@@ -1,6 +1,6 @@
 # ADR-0002 — Excel-DNA (C#), Windows desktop first
 
-- **Status:** Proposed (2026-09-28). It replaces [ADR-0001](0001-platform-architecture.md). It will be accepted after the owner approves it and decision spikes K1–K3 pass.
+- **Status:** **Accepted (2026-09-28)**, after decision spikes K1–K4 and the owner's rulings: exact Macabacus keys are required (D0), Macabacus-parity undo is acceptable for v1 (D10), and cross-workbook trace is **essential** (D11). It replaces [ADR-0001](0001-platform-architecture.md).
 - **Context:**
   - [research/02](../research/02-architecture-options.md)
   - [research/05](../research/05-keys-and-undo.md)
@@ -64,6 +64,6 @@ Only the settings files carry over to that later version; its code would be sepa
 
 ## Follow-ups (decision spikes, throwaway code, which the owner must approve)
 
-- **K1.** 10-minute Office.js test: do `Ctrl+Shift+BracketLeft` / `Quote` / `Semicolon` register and fire on Windows? **If yes, reopen ADR-0001.**
-- **K2.** Excel-DNA test: does `CommandBars.ExecuteMso` for number format, font color and fill keep Excel's native undo stack, when called directly and when deferred with `OnTime`?
-- **K3.** Excel-DNA test: do all the keys in research/05 §1 bind and fire, with Macabacus disabled? Measure key-to-format latency; target p95 ≤ 50 ms.
+- **K1 (done).** Office.js *can* bind the exact v1 punctuation keys through undocumented names (`Semicolon`, `Comma`, `Period`, `LeftBracket`, `RightBracket`, `SingleQuote`, `Backslash`) with runtime `replaceShortcuts`. ADR-0001 was reconsidered and **stays superseded**, because Office.js can't navigate into other workbooks, which the owner ruled essential (D11). Office.js is the proven path for v2 (Mac/web, native undo).
+- **K2 (done).** Built-in commands dispatched outside macro context keep native undo, but only for fixed formats. Any COM write wipes the history. v1 therefore matches Macabacus with a custom undo stack. A hybrid with Office.js for full native undo is recorded as a v2 candidate (PLAN §4.4).
+- **K3 (passed).** Every Macabacus key tested binds through `xlcOnKey`. p95 is 9.8 ms on a 4,770-cell selection.

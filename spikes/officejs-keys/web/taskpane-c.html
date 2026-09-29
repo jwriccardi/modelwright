@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+  <title>EMT K1 Single</title>
+  <link rel="stylesheet" href="taskpane-style.css" />
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+  <h1 id="addin-name">EMT K1 Single</h1>
+
+  <h2>Diagnostics</h2>
+  <dl>
+    <dt>Office.context.diagnostics</dt>
+    <dd id="diagnostics">(loading...)</dd>
+    <dt>Requirement sets</dt>
+    <dd id="requirement-sets">(loading...)</dd>
+  </dl>
+
+  <h2>K1c: press these keys in the grid</h2>
+  <p>Each row shows the key string Office accepted for it (or none). Click a cell, press each key once, and watch the fired log.</p>
+  <pre id="probe-results">(probing...)</pre>
+  <button id="revert-btn" type="button">Revert all shortcuts to defaults</button>
+
+  <h2>Office.actions.getShortcuts()</h2>
+  <pre id="get-shortcuts">(loading...)</pre>
+
+  <h2>Office.actions.areShortcutsInUse(candidates)</h2>
+  <pre id="in-use">(loading...)</pre>
+
+  <h2>Office.actions.replaceShortcuts(candidates)</h2>
+  <pre id="replace-shortcuts">(loading...)</pre>
+
+  <h2>Errors</h2>
+  <div id="errors"></div>
+
+  <h2>Actions registered from shortcuts-c.json</h2>
+  <p><em>Note: this add-in exists purely as a control for whole-file rejection. It has only the
+  baseline control key plus a single named-key candidate (Ctrl+Shift+BracketLeft). If add-in A's
+  file (which mixes many candidates) fails to load any shortcuts, but this one-candidate file
+  loads fine, that isolates the failure to a specific bad entry rather than the whole file.</em></p>
+  <table class="actions">
+    <thead><tr><th>action id</th><th>key string</th></tr></thead>
+    <tbody id="actions-tbody"></tbody>
+  </table>
+
+  <h2>Fired log (press keys in the Excel grid to test)</h2>
+  <ul id="log"></ul>
+
+  <script src="taskpane-common.js"></script>
+  <script>
+    window.EMT_K1_CONFIG = {
+  "name": "EMT K1 Single",
+  "actions": [
+    {
+      "id": "ControlL",
+      "key": "Ctrl+Alt+Shift+L"
+    },
+    {
+      "id": "P1",
+      "key": "Ctrl+Alt+Shift+1"
+    },
+    {
+      "id": "P2",
+      "key": "Ctrl+Alt+Shift+2"
+    },
+    {
+      "id": "P3",
+      "key": "Ctrl+Alt+Shift+3"
+    },
+    {
+      "id": "P4",
+      "key": "Ctrl+Alt+Shift+4"
+    },
+    {
+      "id": "P5",
+      "key": "Ctrl+Alt+Shift+5"
+    },
+    {
+      "id": "P6",
+      "key": "Ctrl+Alt+Shift+6"
+    },
+    {
+      "id": "P7",
+      "key": "Ctrl+Alt+Shift+7"
+    },
+    {
+      "id": "P8",
+      "key": "Ctrl+Alt+Shift+8"
+    }
+  ],
+  "inUseCheckKeys": [
+    "Ctrl+Alt+Minus",
+    "Ctrl+Alt+Equal",
+    "Ctrl+Alt+Plus",
+    "Ctrl+Alt+Slash",
+    "Ctrl+Alt+Backquote",
+    "Ctrl+Alt+Grave",
+    "Ctrl+Alt+Tilde",
+    "Ctrl+Alt+Space",
+    "Ctrl+Alt+Tab",
+    "Ctrl+Alt+Enter",
+    "Ctrl+Alt+Home",
+    "Ctrl+Alt+End",
+    "Ctrl+Alt+PageUp",
+    "Ctrl+Alt+PgUp",
+    "Ctrl+Alt+PageDown",
+    "Ctrl+Alt+Insert",
+    "Ctrl+Alt+Delete",
+    "Ctrl+Alt+Left",
+    "Ctrl+Alt+Right",
+    "Ctrl+Alt+Backspace",
+    "Ctrl+Alt+Escape",
+    "Ctrl+Alt+F12"
+  ],
+  "replaceCandidates": [],
+  "probeTargets": [
+    {
+      "action": "P1",
+      "label": "Ctrl+;  (Blue-Black toggle)",
+      "candidates": [
+        "Ctrl+Semicolon"
+      ]
+    },
+    {
+      "action": "P2",
+      "label": "Ctrl+,  (Increase decimals)",
+      "candidates": [
+        "Ctrl+Comma"
+      ]
+    },
+    {
+      "action": "P3",
+      "label": "Ctrl+.  (Decrease decimals)",
+      "candidates": [
+        "Ctrl+Period",
+        "Ctrl+Dot"
+      ]
+    },
+    {
+      "action": "P4",
+      "label": "Ctrl+Shift+[  (Trace In)",
+      "candidates": [
+        "Ctrl+Shift+LeftBracket",
+        "Ctrl+Shift+OpenBracket",
+        "Ctrl+Shift+BracketOpen",
+        "Ctrl+Shift+SquareBracketLeft",
+        "Ctrl+Shift+LeftSquareBracket",
+        "Ctrl+Shift+OpenSquareBracket",
+        "Ctrl+Shift+LBracket",
+        "Ctrl+Shift+Bracket",
+        "Ctrl+Shift+BraceLeft",
+        "Ctrl+Shift+LeftBrace",
+        "Ctrl+Shift+OpenBrace"
+      ]
+    },
+    {
+      "action": "P5",
+      "label": "Ctrl+'  (Font color cycle)",
+      "candidates": [
+        "Ctrl+Apostrophe",
+        "Ctrl+SingleQuote",
+        "Ctrl+Quotes",
+        "Ctrl+QuoteSingle",
+        "Ctrl+Tick",
+        "Ctrl+Apos",
+        "Ctrl+Quotation"
+      ]
+    },
+    {
+      "action": "P6",
+      "label": "Ctrl+Shift+\\  (Last Audited Cell)",
+      "candidates": [
+        "Ctrl+Shift+Backslash",
+        "Ctrl+Shift+BackSlash",
+        "Ctrl+Shift+Pipe",
+        "Ctrl+Shift+Oem5",
+        "Ctrl+Shift+ReverseSolidus"
+      ]
+    },
+    {
+      "action": "P7",
+      "label": "Ctrl+Shift+]  (Trace Out)",
+      "candidates": [
+        "Ctrl+Shift+RightBracket",
+        "Ctrl+Shift+CloseBracket",
+        "Ctrl+Shift+BracketClose",
+        "Ctrl+Shift+SquareBracketRight",
+        "Ctrl+Shift+RightSquareBracket",
+        "Ctrl+Shift+CloseSquareBracket",
+        "Ctrl+Shift+RBracket",
+        "Ctrl+Shift+BraceRight",
+        "Ctrl+Shift+RightBrace",
+        "Ctrl+Shift+CloseBrace"
+      ]
+    },
+    {
+      "action": "P8",
+      "label": "Ctrl+Alt+[  (Show All Precedents)",
+      "candidates": [
+        "Ctrl+Alt+LeftBracket",
+        "Ctrl+Alt+OpenBracket",
+        "Ctrl+Alt+BracketOpen",
+        "Ctrl+Alt+SquareBracketLeft",
+        "Ctrl+Alt+LeftSquareBracket",
+        "Ctrl+Alt+LBracket",
+        "Ctrl+Alt+BraceLeft",
+        "Ctrl+Alt+LeftBrace",
+        "Ctrl+Alt+OpenBrace"
+      ]
+    }
+  ]
+};
+    window.emtK1Init();
+  </script>
+</body>
+</html>
