@@ -7,7 +7,7 @@
 | A1 — Load the add-in | ✅ Passed. Loaded in 251 ms; the ribbon tab appeared. |
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
 | K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. **K2c:** any COM write wipes the history, so arbitrary formats get Macabacus parity at best with Excel-DNA alone. A hybrid with Office.js (K2d) could beat it. |
-| K4 — Trace window focus | 🟡 Run 1: works within a workbook; focus lost on jumping to another workbook. Fixed in build K4b; retest pending. |
+| K4 — Trace window focus | ✅ **Passed with variants B (WinForms, focused) and C (hook, Excel keeps focus)**, including cross-workbook navigation. Variant A (WPF) is rejected. The F2 check on C is pending. |
 | K1 — Office.js named keys | Pending (runbook Part B) |
 
 ## K3 details
@@ -186,6 +186,21 @@ Excel was on Automatic calculation, with `=RAND()` present in the workbook.
 - After each Goto, if Excel's active window changed, the trace window is **re-owned** to the new workbook window (`GWLP_HWNDPARENT`) and raised to the top. The hook variant is raised *without* activation.
 - Focused variants take focus back automatically after a workbook switch.
 - Trace refuses to open on a cell with no formula, and says so in the status bar.
+
+
+## K4, run 2 (22:11–22:12, build K4b)
+
+| Variant | Result |
+|---|---|
+| A: WPF, focused | ❌ Opened twice; **no navigation events at all**, so the keys never reached the WPF list. Hosting WPF on Excel's thread without a WPF dispatcher loop is unreliable. **Rejected.** |
+| **B: WinForms, focused** | ✅ Full up/down passes, 3 sessions. Same workbook: 4–36 ms per step. **Jump into another workbook:** 41–94 ms. The window is re-owned to the new workbook window and focus is taken back (`react->fg`) every time. Enter and Esc behave correctly. |
+| **C: window doesn't take focus, plus thread keyboard hook** | ✅ Full passes. **The hook kept receiving keys while EMT_Fixture_B's window was in front.** It's thread-local, so any Excel window will do. Re-owning kept the window visible. Same workbook: 6–19 ms per step; cross-workbook: 78–108 ms. Enter closed it and kept the selection. The F2 pass-through hasn't been exercised yet. |
+| Hidden sheet row (all variants) | `Application.Goto` fails, as expected. The product shows a badge (optionally, "Unhide rows & columns"). |
+
+**Decision.**
+- **Variant C is the target design for Trace In:** Macabacus's own model, and the only one that allows F2 editing in Point mode with the window open.
+- **Variant B is the fallback**, if the hook proves fragile alongside other add-ins (Macabacus documents conflicts with Workshare and Anaplan).
+- **The UI toolkit is WinForms**, because WPF failed on Excel's thread. Alternatively, WPF on its own STA thread; revisit only if WinForms styling is inadequate.
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
