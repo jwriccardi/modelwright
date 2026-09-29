@@ -125,6 +125,7 @@ namespace EmtSpike
 
                 RegisterCoverageMacros();
                 RegisterAll("AutoOpen");
+                K2b.Install();
                 sw.Stop();
                 Log.Write("autoOpen", new
                 {
@@ -172,6 +173,7 @@ namespace EmtSpike
                 }
             }
             KeyHook.Uninstall("AutoClose");
+            K2b.Uninstall();
             K2.CloseHiddenWorkbook();
             Log.Write("autoClose");
         }

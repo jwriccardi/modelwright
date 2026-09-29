@@ -22,6 +22,7 @@ namespace EmtSpike
           <button id='k2_5' label='5 Copy + PasteSpecial formats' onAction='OnAction' />
           <button id='k2_6' label='6 Copy + ExecuteMso PasteFormatting' onAction='OnAction' />
           <button id='k2_7' label='7 xlcFormatNumber (C API)' onAction='OnAction' />
+          <button id='k2_10' label='10 ExecuteMso Bold (ribbon, no macro)' onAction='OnAction' />
           <button id='k2_0' label='Log undo snapshot' onAction='OnAction' />
         </group>
         <group id='gK4' label='K4 Trace'>
@@ -46,6 +47,7 @@ namespace EmtSpike
             string id = control.Id;
             try
             {
+                if (id == "k2_10") { K2b.RibbonBold(); return; } // K2b: deliberately NOT in macro context
                 ExcelAsyncUtil.QueueAsMacro(() => Commands.Ribbon(id));
             }
             catch (Exception ex)

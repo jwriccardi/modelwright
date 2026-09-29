@@ -23,7 +23,9 @@ namespace EmtSpike
             return new { boldWas = b?.ToString(), set = !bold };
         });
 
-        public static object MsoBoldDirect() => Variant("K2.2", () =>
+        public static object MsoBoldDirect() => MsoBold("K2.2");
+
+        public static object MsoBold(string variant) => Variant(variant, () =>
         {
             Xl.App.CommandBars.ExecuteMso("Bold");
             return "ExecuteMso(Bold) direct";
@@ -70,12 +72,14 @@ namespace EmtSpike
             return "Copy + PasteSpecial(xlPasteFormats) + CutCopyMode=false";
         });
 
-        public static object CopyPasteMso() => Variant("K2.6", () =>
+        public static object CopyPasteMso() => CopyPasteMso("K2.6");
+
+        public static object CopyPasteMso(string variant) => Variant(variant, () =>
         {
             dynamic app = Xl.App;
             dynamic src = SourceCell();
             src.Copy();
-            UndoProbe.Snapshot("afterCopy", "K2.6");
+            UndoProbe.Snapshot("afterCopy", variant);
 
             var probes = new List<object>();
             string used = null;
@@ -91,7 +95,7 @@ namespace EmtSpike
                 try { app.CommandBars.ExecuteMso(id); used = id; break; }
                 catch (Exception ex) { probes.Add(new { id, executeError = ex.Message }); }
             }
-            UndoProbe.Snapshot("afterPasteMso", "K2.6");
+            UndoProbe.Snapshot("afterPasteMso", variant);
             app.CutCopyMode = false;
             return new { used, probes };
         });
