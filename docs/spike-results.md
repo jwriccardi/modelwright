@@ -6,7 +6,7 @@
 |---|---|
 | A1 — Load the add-in | ✅ Passed. Loaded in 251 ms; the ribbon tab appeared. |
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
-| K2 — Native undo | 🟡 Native multi-level undo works for our actions, **except in workbooks with volatile formulas** (only one level there). Probe K2b next. |
+| K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. How to apply arbitrary formats this way is still open (K2c). |
 | K4 — Trace window focus | Pending (runbook A4) |
 | K1 — Office.js named keys | Pending (runbook Part B) |
 
@@ -121,6 +121,28 @@ So the AltGr theory is **disproved for Ctrl+Alt+[ and `Ctrl+Alt+\`**. Ctrl+Alt+p
 | Number formats | `xlcFormatNumber` | No clipboard involved. Cleanest. |
 | Font and fill RGB | copy from a pre-formatted cell in the hidden add-in workbook + `ExecuteMso("PasteFormatting")` | Overwrites the clipboard. It also pastes *all* formats unless the template cell copies the target's other properties. |
 | Font and fill | C API `xlcFormatFont` / `xlcPatterns` | These take **palette indexes (1–56), not RGB**. Untested. |
+
+
+## K2b: outside macro context (21:17–21:23, build `bin\K2b\`)
+
+Excel was on Automatic calculation, with `=RAND()` present in the workbook.
+
+| Variant | How it's triggered | Owner's Ctrl+Z observation |
+|---|---|---|
+| K2.8 | **Thread keyboard hook** (Ctrl+Alt+Shift+Z) → `BeginInvoke` to a hidden WinForms control → `ExecuteMso("Bold")` | ✅ **Bold ×3, then Ctrl+Z ×3: all three undone** |
+| K2.10 | Ribbon callback runs `ExecuteMso("Bold")` directly (no `QueueAsMacro`) | ✅ **all three undone** |
+| K2.9 | Hook → copy the hidden template cell (0.0%) → `ExecuteMso("PasteFormatting")` | ✅ Typed `1`, `2`, applied the format, Ctrl+Z ×2: **the 1st undid our format change, the 2nd undid the typing of "2"**. So the **earlier history is kept.** (The owner described the 1st undo as "removed the bold"; which formatting was visible is being clarified.) |
+
+**Conclusion.**
+- **Macro context is what breaks undo.** Built-in commands dispatched from Excel's normal message loop are recorded exactly like user actions: multi-level, and no history lost, even with volatile formulas.
+- **Architecture consequence:** catch keys with a thread keyboard hook (which also allows the exact Macabacus keys), post the work to the message loop, and apply formatting through built-in commands.
+
+**Side finding.** Creating the hidden template workbook at startup wiped undo (`hiddenWb:afterCreate enabled=False`). That's harmless at startup, when there's nothing to undo yet, but the product should create any template workbook only at load.
+
+**Still open (K2c):**
+- (a) Does a COM write from the message-loop context (e.g. `Font.Color`) wipe the history, and is it undoable?
+- (b) Can a COM write to the *hidden template* (to clone the target's formats before pasting) be done without wiping the history?
+- (c) Paste Formatting copies *all* formats and overwrites the clipboard. On a mixed selection it makes everything uniform.
 
 ## Side findings
 - **Undo list can't be read.** Reading Excel's undo *list* through `CommandBars("Standard").Controls("&Undo")` or `FindControl(128)` fails with E_FAIL on this build. `GetEnabledMso("Undo")` works (it returned `false` at startup, as expected). So K2 relies on the Undo-enabled flag plus the owner's Ctrl+Z observations.
