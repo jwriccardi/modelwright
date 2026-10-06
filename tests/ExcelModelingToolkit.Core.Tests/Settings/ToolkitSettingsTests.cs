@@ -40,7 +40,8 @@ public class ToolkitSettingsTests
         var settings = new ToolkitSettings(
             new[]
             {
-                new CycleDefinition("NumberCycle", "Numbers \"quoted\" \\ tab\t", CycleKind.NumberFormat, new CycleItem[]
+                // Not a default cycle's id: a provisional default cycle would be brought up to date (SettingsUpgradeTests).
+                new CycleDefinition("MyNumbers", "Numbers \"quoted\" \\ tab\t", CycleKind.NumberFormat, new CycleItem[]
                 {
                     new NumberFormatItem("Slash", "m/d/yyyy"),
                     new NumberFormatItem("Unicode", "0.0\"€\";(0.0\"€\");\"–\""),
@@ -51,18 +52,27 @@ public class ToolkitSettingsTests
                     new ColorItem("Gray", OleColor.FromRgb(128, 128, 128)),
                 }),
             },
-            new Dictionary<string, string> { ["NumberCycle"] = "Ctrl+Alt+Shift+1", ["About"] = "" },
+            new Dictionary<string, string> { ["FillColorCycle"] = "Ctrl+Alt+Shift+1", ["About"] = "" },
             undoCellCap: 250,
             diagnosticsLog: false);
 
-        var result = ToolkitSettings.FromJson(settings.ToJson());
+        var json = settings.ToJson();
+
+        var result = ToolkitSettings.FromJson(json);
 
         Assert.Empty(result.Problems);
-        AssertEquivalent(settings, result.Settings);
+        Assert.Empty(result.Notes);
+        Assert.Equal(json, result.Settings.ToJson());
+        Assert.Equal(1, CountOf(json, "\"provisional\": true"));
+
+        // The actions added later are written even when unbound, so they read back unbound.
+        Assert.Equal(string.Empty, result.Settings.Keymap[ActionIds.BinaryCycle]);
+        Assert.Equal(string.Empty, result.Settings.Keymap[ActionIds.RatioCycle]);
+        Assert.Equal(new[] { "MyNumbers", "FillColorCycle" }, result.Settings.Cycles.Select(c => c.Id));
     }
 
     [Fact]
-    public void Json_is_indented_readable_and_marks_only_provisional_cycles()
+    public void Json_is_indented_and_readable()
     {
         var json = ToolkitSettings.Defaults().ToJson();
 
@@ -72,8 +82,8 @@ public class ToolkitSettingsTests
         Assert.Contains("        { \"name\": \"Comma 0 Dec No Align\", \"code\": \"#,##0;(#,##0);\\\"–\\\";@\" }", json);
         Assert.Contains("        { \"name\": \"Navy\", \"color\": \"rgb(28,69,135)\" },", json);
         Assert.Contains("        { \"name\": \"No Fill\", \"color\": \"none\" }", json);
-        Assert.Equal(4, CountOf(json, "\"provisional\": true"));
-        Assert.DoesNotContain("\"provisional\": false", json);
+        Assert.Contains("    \"BinaryCycle\": \"Ctrl+Shift+Y\",\r\n    \"RatioCycle\": \"Alt+Shift+;\",\r\n", json);
+        Assert.DoesNotContain("\"provisional\"", json); // written only when true
         Assert.DoesNotContain("\\u2013", json); // written as the character itself
     }
 
@@ -86,7 +96,8 @@ public class ToolkitSettingsTests
         Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
         Assert.Equal(ToolkitSettings.DefaultUndoCellCap, result.Settings.UndoCellCap);
         Assert.True(result.Settings.DiagnosticsLog);
-        var cycle = Assert.Single(result.Settings.Cycles);
+        var cycle = result.Settings.Cycles[0];
+        Assert.Equal("FontColorCycle", cycle.Id);
         Assert.False(cycle.Provisional);
         Assert.Equal(OleColor.FromRgb(0, 0, 255), ((ColorItem)cycle.Items[0]).Color);
         Assert.Equal("Ctrl+'", result.Settings.Keymap["FontColorCycle"]);
@@ -448,6 +459,8 @@ public class ToolkitSettingsTests
         Assert.Throws<ArgumentNullException>(() => new SettingsLoadResult(null!, Array.Empty<string>(), SettingsLoadOutcome.Loaded));
         Assert.Throws<ArgumentNullException>(() => new SettingsLoadResult(ToolkitSettings.Defaults(), null!, SettingsLoadOutcome.Loaded));
         Assert.Throws<ArgumentNullException>(() => SettingsLoadResult.Rejected(null!));
+        Assert.Empty(new SettingsLoadResult(ToolkitSettings.Defaults(), Array.Empty<string>(), SettingsLoadOutcome.Loaded).Notes);
+        Assert.Empty(SettingsLoadResult.Rejected(new[] { "bad" }).Notes);
     }
 
     [Fact]
@@ -577,8 +590,12 @@ public class ToolkitSettingsTests
         Assert.False(ActionIds.IsCycle(ActionIds.About));
         Assert.True(ActionIds.IsCycle(ActionIds.BlueBlackToggle));
         Assert.False(ActionIds.IsKnown("about"));
-        Assert.Equal(9, ActionIds.All.Count);
-        Assert.Equal(8, ActionIds.CycleActions.Count);
+        Assert.True(ActionIds.IsCycle(ActionIds.BinaryCycle));
+        Assert.True(ActionIds.IsCycle(ActionIds.RatioCycle));
+        Assert.Equal(11, ActionIds.All.Count);
+        Assert.Equal(10, ActionIds.CycleActions.Count);
+        Assert.Equal(new[] { ActionIds.BinaryCycle, ActionIds.RatioCycle }, ActionIds.AddedLater);
+        Assert.All(ActionIds.AddedLater, a => Assert.True(ActionIds.IsKnown(a)));
     }
 
     private static ToolkitSettings WithKeymap(Dictionary<string, string> keymap) =>

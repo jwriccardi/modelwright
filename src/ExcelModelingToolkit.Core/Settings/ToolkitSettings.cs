@@ -109,6 +109,13 @@ public sealed class ToolkitSettings
     /// <see cref="Validate"/>, returns a <see cref="SettingsLoadOutcome.Rejected"/> result carrying
     /// <see cref="Defaults"/> and the problems (never throws for bad content).
     /// </summary>
+    /// <remarks>
+    /// Settings written by an earlier build are brought up to date before they are validated, and each change is
+    /// listed in <see cref="SettingsLoadResult.Notes"/>: an action added since (<see cref="ActionIds.AddedLater"/>)
+    /// that the keymap does not mention gets its default key (unbound if that key is taken) and its default cycle
+    /// (if no cycle has its id), and a cycle still marked provisional gets the default list that replaced the
+    /// placeholder. Everything else in the file is used as it is, so the schema version stays the same.
+    /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="json"/> is null.</exception>
     public static SettingsLoadResult FromJson(string json)
     {
@@ -119,13 +126,15 @@ public sealed class ToolkitSettings
 
         var problems = new List<string>();
         var settings = SettingsJson.Read(json, problems);
+        IReadOnlyList<string> notes = Array.Empty<string>();
         if (settings is not null)
         {
+            settings = SettingsUpgrade.Apply(settings, out notes);
             problems.AddRange(settings.Validate());
         }
 
         return problems.Count == 0
-            ? new SettingsLoadResult(settings!, problems, SettingsLoadOutcome.Loaded)
+            ? new SettingsLoadResult(settings!, problems, SettingsLoadOutcome.Loaded, notes)
             : SettingsLoadResult.Rejected(problems);
     }
 
@@ -314,8 +323,11 @@ public sealed class ToolkitSettings
             : fileName + " is not valid UTF-8; save it as UTF-8.";
 
     /// <summary>The keymap's action ids: known actions in <see cref="ActionIds.All"/> order, then any others ordinally.</summary>
-    internal IEnumerable<string> OrderedKeymapActions() =>
-        _keymap.Keys.OrderBy(OrderOf).ThenBy(k => k, StringComparer.Ordinal);
+    internal IEnumerable<string> OrderedKeymapActions() => InKeymapOrder(_keymap.Keys);
+
+    /// <summary><paramref name="actionIds"/> in keymap order (see <see cref="OrderedKeymapActions"/>).</summary>
+    internal static IEnumerable<string> InKeymapOrder(IEnumerable<string> actionIds) =>
+        actionIds.OrderBy(OrderOf).ThenBy(k => k, StringComparer.Ordinal);
 
     private static int OrderOf(string actionId)
     {

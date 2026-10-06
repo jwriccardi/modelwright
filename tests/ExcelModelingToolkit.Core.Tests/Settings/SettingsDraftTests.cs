@@ -12,6 +12,19 @@ public class SettingsDraftTests
 {
     private static SettingsDraft DefaultDraft() => new SettingsDraft(ToolkitSettings.Defaults());
 
+    /// <summary>
+    /// The defaults with Date, Currency, Percent and Multiple marked provisional, as earlier builds shipped them. No
+    /// default cycle is provisional any more; these keep the provisional handling covered, which stays generic.
+    /// </summary>
+    private static SettingsDraft ProvisionalDraft()
+    {
+        var defaults = ToolkitSettings.Defaults();
+        var provisional = new[] { ActionIds.DateCycle, ActionIds.CurrencyCycle, ActionIds.PercentCycle, ActionIds.MultipleCycle };
+        var cycles = defaults.Cycles.Select(c =>
+            provisional.Contains(c.Id) ? new CycleDefinition(c.Id, c.DisplayName, c.Kind, c.Items, provisional: true) : c);
+        return new SettingsDraft(new ToolkitSettings(cycles, defaults.Keymap, defaults.UndoCellCap, defaults.DiagnosticsLog));
+    }
+
     private static CycleDraft Cycle(SettingsDraft draft, string id) => draft.Cycles.Single(c => c.Id == id);
 
     private static string Json(SettingsDraft draft)
@@ -150,7 +163,7 @@ public class SettingsDraftTests
     [MemberData(nameof(ItemEdits))]
     public void Editing_a_provisional_cycles_items_clears_provisional(string edit, Action<CycleDraft> apply)
     {
-        var draft = DefaultDraft();
+        var draft = ProvisionalDraft();
         var percent = Cycle(draft, ActionIds.PercentCycle);
         Assert.True(percent.Provisional);
 
@@ -165,7 +178,7 @@ public class SettingsDraftTests
     [Fact]
     public void Edits_that_change_nothing_keep_provisional()
     {
-        var draft = DefaultDraft();
+        var draft = ProvisionalDraft();
         var percent = Cycle(draft, ActionIds.PercentCycle);
         var first = (NumberFormatItem)percent.Items[0];
 
@@ -283,10 +296,28 @@ public class SettingsDraftTests
 
         Assert.Equal(string.Empty, draft.GetKey(ActionIds.About));
         Assert.DoesNotContain("\"About\"", Json(draft));
+        Assert.Equal(string.Empty, draft.GetKey(ActionIds.BinaryCycle));
+        Assert.Contains("\"BinaryCycle\": \"\"", Json(draft)); // written, so loading the file keeps it unbound
 
         draft.SetKey(ActionIds.About, "Ctrl+Alt+Shift+F11");
 
         Assert.Contains("\"About\": \"Ctrl+Alt+Shift+F11\"", Json(draft));
+    }
+
+    [Fact]
+    public void Binary_and_ratio_are_listed_with_their_cycles_and_keys()
+    {
+        var draft = DefaultDraft();
+
+        Assert.Equal(ActionIds.All, draft.ShortcutActions);
+        Assert.Equal("Binary", draft.ActionDisplayName(ActionIds.BinaryCycle));
+        Assert.Equal("Ratio", draft.ActionDisplayName(ActionIds.RatioCycle));
+        Assert.Equal("Ctrl+Shift+Y", draft.GetKey(ActionIds.BinaryCycle));
+        Assert.Equal("Alt+Shift+;", draft.GetKey(ActionIds.RatioCycle));
+        Assert.Null(draft.KeyProblem(ActionIds.BinaryCycle));
+        Assert.Null(draft.KeyProblem(ActionIds.RatioCycle));
+        Assert.Equal(4, Cycle(draft, ActionIds.BinaryCycle).Items.Count);
+        Assert.Equal(6, Cycle(draft, ActionIds.RatioCycle).Items.Count);
     }
 
     [Fact]
@@ -317,7 +348,7 @@ public class SettingsDraftTests
     [Fact]
     public void Reset_restores_the_factory_defaults()
     {
-        var draft = DefaultDraft();
+        var draft = ProvisionalDraft();
         var percent = Cycle(draft, ActionIds.PercentCycle);
         percent.RemoveItem(0);
         draft.SetKey(ActionIds.About, "Ctrl+Alt+A");
@@ -327,7 +358,7 @@ public class SettingsDraftTests
         draft.ResetToDefaults();
 
         Assert.Equal(ToolkitSettings.Defaults().ToJson(), Json(draft));
-        Assert.True(Cycle(draft, ActionIds.PercentCycle).Provisional);
+        Assert.DoesNotContain(draft.Cycles, c => c.Provisional); // the factory lists replace the placeholders
         Assert.NotSame(percent, Cycle(draft, ActionIds.PercentCycle));
     }
 
@@ -439,7 +470,7 @@ public class SettingsDraftTests
     [Fact]
     public void Edits_undone_by_hand_keep_provisional()
     {
-        var draft = DefaultDraft();
+        var draft = ProvisionalDraft();
         var percent = Cycle(draft, ActionIds.PercentCycle);
         var first = (NumberFormatItem)percent.Items[0];
         var before = draft.ContentJson();
@@ -471,7 +502,7 @@ public class SettingsDraftTests
     [Fact]
     public void Same_values_under_another_name_are_not_the_provisional_items()
     {
-        var percent = Cycle(DefaultDraft(), ActionIds.PercentCycle);
+        var percent = Cycle(ProvisionalDraft(), ActionIds.PercentCycle);
         var first = percent.Items[0].Name;
 
         percent.RenameItem(0, first.ToUpperInvariant());
