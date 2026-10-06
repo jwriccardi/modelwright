@@ -240,7 +240,7 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
 | K1 ✅ (the keys work, but ADR-0001 stays superseded: D11) | Office.js named punctuation keys (`Ctrl+Shift+BracketLeft`, `Ctrl+Quote`, `Ctrl+Semicolon`) | The keys register and fire on Windows | Stay with ADR-0002. **If they work → reopen ADR-0001.** |
 | K2 | `ExecuteMso` formatting keeps native undo | Type a value → cycle via ExecuteMso → Ctrl+Z twice undoes both | **Done:** partly passes (fixed formats only, outside macro context). v1 uses our own UndoManager (§4.4). |
 | K3 ✅ | Excel-DNA binds every key in §4.2 | 100% fire. Over 30 presses on a selection of ≤ 1,000 cells, p95 key → format ≤ 50 ms | Try a thread keyboard hook |
-| K4 ✅ (C and B pass; F2 on C is pending) | Trace window keyboard model: **A** WPF with focus, **B** WinForms with focus, **C** a window that doesn't take focus plus a thread keyboard hook (Macabacus-style) | Up/Down/Left/Right/Enter/Esc reach the tree through `Goto` to another sheet and to another workbook. For C, F2 also passes through to Excel. | Choose the best variant that passes; prefer C |
+| K4 ✅ (C and B pass; F2 on C passed 2026-10-06) | Trace window keyboard model: **A** WPF with focus, **B** WinForms with focus, **C** a window that doesn't take focus plus a thread keyboard hook (Macabacus-style) | Up/Down/Left/Right/Enter/Esc reach the tree through `Goto` to another sheet and to another workbook. For C, F2 also passes through to Excel. | Choose the best variant that passes; prefer C |
 
 **Exit:** a go/no-go note in `docs/spike-results.md`.
 
@@ -262,7 +262,7 @@ Delivered as three PRs:
 - **3b:** `UndoManager`, with Ctrl+Z / Ctrl+Y through the thread keyboard hook.
 - **3c:** the settings dialog.
 
-Until the owner's Percent, Currency, Multiple and Date screenshots arrive, those four lists ship as **provisional** Macabacus-style defaults (marked in the defaults file).
+Defaults are the **Macabacus factory settings** (v9.9.5 settings export, 2026-10-06; see research/06). Binary (Ctrl+Shift+Y) and Ratio (Alt+Shift+;) cycles were added from the same source.
 - **Exit criteria:**
   - xUnit covers the cycle engine: wrap-around, the hybrid rule, mixed selections, color normalization and "No fill". Line coverage of `Toolkit.Core` is ≥ 90%.
   - All 7 v1 cycles fire on their Macabacus keys and meet the K3 latency target.
