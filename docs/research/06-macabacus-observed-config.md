@@ -101,6 +101,34 @@ The palette is a shared picker source. None of the cycle colors above come from 
 
   The spike has moved its own test commands to Ctrl+Alt+Shift+F-keys. The product's "Override" command needs a key that Macabacus doesn't use.
 
+
+## Factory defaults (Macabacus 9.9.5 settings export, 2026-10-06)
+
+The owner supplied a settings export from a **fresh installation**. It is kept local-only at `reference/macabacus/MacabacusSettings-factory-9.9.5.xml`, which is git-ignored.
+
+**What it confirms and settles:**
+- **These match the owner's screenshots, so the earlier values were already factory defaults:**
+  - the General Number cycle;
+  - the Font and Fill cycles (Fill ends with an empty entry, meaning No fill);
+  - the AutoColor scheme;
+  - default colors, recolor colors and chart series.
+- **Number-format cycles**, adopted verbatim as our defaults (the en dash is U+2013):
+
+| Cycle (key) | Items |
+|---|---|
+| Local Currency (Ctrl+Shift+4) | USD 0, 1 and 2 Dec Lg Align (`_([$$]#,##0_)_%;([$$]#,##0)_%;_("–"_)_%;_(@_)_%` …), USD 0 Dec No Align, EUR 0 Dec Lg Align (`[$€-2]`), GBP (`[$£-809]`), YEN (`[$¥-2]`) |
+| Percent (Ctrl+Shift+5) | Percent Aligned Neg Pct `_(#,##0.0%_);(#,##0.0%);_("–"_)_%;_(@_)_%`, Percent Unaligned, Hard Percent Aligned and Unaligned (a literal `"%"`), SOFR + `"S"+0_)_%;"S"-0_)_%;"S"+0_)_%`, LIBOR + `L+0_)_%;L-0_)_%;L+0_)_%` |
+| Multiple (Ctrl+Shift+8) | Mult 1 and 2 Decimal Aligned Neg Pct `_(0.0x_)_)_';_((0.0x)_'_';_("–"_)_%;_(@_)_%`, Mult 1 and 2 Decimal Unaligned `0.0x;(0.0x);"–"` |
+| Date (Ctrl+Shift+2) | `m/d/yyyy;@`, `mmmm d, yyyy;@`, **Date Actual Year `0000\A`**, **Date Estimated Year `0000\E`**. The year formats are *number* formats applied to a plain year value such as 2025, not to a date serial. |
+| Binary (Ctrl+Shift+Y) | Yes/No `"Yes";"ERROR";"No";"ERROR"`, Y/N, On/Off, True/False |
+| Ratio (Alt+Shift+;) | Exchange Ratio `0.0\:1_);(0.0)\:1_);0.0\:1_);@_)`, Fraction 1, 2 and 3 (`# ?/?` …), Halves `# ?/2`, Thirds `# ?/3` |
+
+- **Other factory facts:**
+  - Undo/Redo is enabled, with a **maximum of 2,000** steps.
+  - Factory Excel shortcuts differ from the owner's install in a few non-v1 places. For example, Paste Number Formats is factory Ctrl+Alt+U; the owner's copy uses Ctrl+Alt+F, and factory Ctrl+Alt+F is Super Find. So the owner has customized some keys.
+  - Macabacus also binds **Copy (Ctrl+C) and Cut (Ctrl+X)** by default.
+- **AutoColor `DataFunctions`:** RDP.Data, BDH, BDP, BDS, CIQ, FDS, SNL.
+
 ## Full Macabacus keymap (132 commands)
 
 "Our scope" tags the target release. Blank means not currently planned. Every row is a candidate for future scope, and **all keys stay reserved** so a later feature can use its Macabacus key.

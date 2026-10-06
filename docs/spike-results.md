@@ -7,7 +7,7 @@
 | A1 — Load the add-in | ✅ Passed. Loaded in 251 ms; the ribbon tab appeared. |
 | **K3 — Exact keys and speed** | ✅ **Passed** for every core key (details below). A few coverage keys still need confirming. |
 | K2 — Native undo | ✅ **Breakthrough (K2b).** A built-in command run **outside macro context** gives full native multi-level undo *and* keeps earlier history, even in volatile workbooks. **K2c:** any COM write wipes the history, so arbitrary formats get Macabacus parity at best with Excel-DNA alone. A hybrid with Office.js (K2d) could beat it. |
-| K4 — Trace window focus | ✅ **Passed with variants B (WinForms, focused) and C (hook, Excel keeps focus)**, including cross-workbook navigation. Variant A (WPF) is rejected. The F2 check on C is pending. |
+| K4 — Trace window focus | ✅ **Passed with variants B (WinForms, focused) and C (hook, Excel keeps focus)**, including cross-workbook navigation. Variant A (WPF) is rejected. **F2 pass-through on C: ✅ passed (owner, 2026-10-06).** |
 | K1 — Office.js named keys | ✅ **K1c: Office.js CAN bind the exact Macabacus punctuation keys** through undocumented key names (runtime `replaceShortcuts`). All 8 probes were accepted and fired. **ADR-0001 is reopened for decision.** |
 
 ## K3 details
