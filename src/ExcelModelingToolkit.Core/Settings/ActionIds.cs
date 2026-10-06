@@ -25,6 +25,12 @@ public static class ActionIds
     /// <summary>Multiple cycle.</summary>
     public const string MultipleCycle = "MultipleCycle";
 
+    /// <summary>Binary cycle (Yes/No, Y/N, On/Off, True/False).</summary>
+    public const string BinaryCycle = "BinaryCycle";
+
+    /// <summary>Ratio cycle (exchange ratio and fractions).</summary>
+    public const string RatioCycle = "RatioCycle";
+
     /// <summary>Font Color cycle.</summary>
     public const string FontColorCycle = "FontColorCycle";
 
@@ -45,6 +51,8 @@ public static class ActionIds
         CurrencyCycle,
         PercentCycle,
         MultipleCycle,
+        BinaryCycle,
+        RatioCycle,
         FontColorCycle,
         FillColorCycle,
         BlueBlackToggle,
@@ -52,6 +60,13 @@ public static class ActionIds
 
     /// <summary>Every bindable action, in keymap order.</summary>
     public static IReadOnlyList<string> All { get; } = CycleActions.Concat(new[] { About }).ToArray();
+
+    /// <summary>
+    /// The actions added after settings files were first written (schema version 1 first shipped with the others).
+    /// A settings file whose keymap does not mention one of these predates it, so loading the file gives it its
+    /// default key and cycle (<see cref="ToolkitSettings.FromJson"/>); every file written since mentions them all.
+    /// </summary>
+    public static IReadOnlyList<string> AddedLater { get; } = new[] { BinaryCycle, RatioCycle };
 
     /// <summary>True if <paramref name="actionId"/> is one of <see cref="All"/> (ordinal comparison).</summary>
     public static bool IsKnown(string actionId) => All.Contains(actionId, StringComparer.Ordinal);

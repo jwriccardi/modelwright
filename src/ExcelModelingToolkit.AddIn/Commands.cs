@@ -30,6 +30,14 @@ public static class Commands
     [ExcelCommand(Name = "EmtMultipleCycle")]
     public static void EmtMultipleCycle() => RunCycle(ActionIds.MultipleCycle);
 
+    /// <summary>Binary cycle.</summary>
+    [ExcelCommand(Name = "EmtBinaryCycle")]
+    public static void EmtBinaryCycle() => RunCycle(ActionIds.BinaryCycle);
+
+    /// <summary>Ratio cycle.</summary>
+    [ExcelCommand(Name = "EmtRatioCycle")]
+    public static void EmtRatioCycle() => RunCycle(ActionIds.RatioCycle);
+
     /// <summary>Font Color cycle.</summary>
     [ExcelCommand(Name = "EmtFontColorCycle")]
     public static void EmtFontColorCycle() => RunCycle(ActionIds.FontColorCycle);

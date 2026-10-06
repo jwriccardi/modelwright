@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using ExcelModelingToolkit.Core.Formatting;
 using ExcelModelingToolkit.Core.Json;
 
@@ -13,7 +14,7 @@ namespace ExcelModelingToolkit.Core.Settings;
 ///   "schemaVersion": 1,
 ///   "diagnosticsLog": true,              (optional, default true)
 ///   "undoCellCap": 10000,                (optional, default 10000)
-///   "keymap": { "NumberCycle": "Ctrl+Shift+1", ... },   ("" leaves an action unbound)
+///   "keymap": { "NumberCycle": "Ctrl+Shift+1", ... },   ("" leaves an action unbound; see below)
 ///   "cycles": [
 ///     { "id": "NumberCycle", "displayName": "Number", "kind": "numberFormat", "provisional": true,
 ///       "items": [ { "name": "...", "code": "..." } ] },
@@ -25,6 +26,9 @@ namespace ExcelModelingToolkit.Core.Settings;
 /// <c>kind</c> is <c>numberFormat</c>, <c>fontColor</c> or <c>fillColor</c> (any case). Colors are
 /// <c>rgb(r,g,b)</c>, <c>#RRGGBB</c> or <c>none</c> (<see cref="OleColor.Parse"/>). <c>provisional</c> is
 /// optional (default false) and written only when true. Unknown properties are errors, so typos are reported.
+/// An action missing from the keymap is unbound, except one added since files were first written
+/// (<see cref="ActionIds.AddedLater"/>): the file predates it, so it gets its default
+/// (<see cref="ToolkitSettings.FromJson"/>). The writer always lists those.
 /// </summary>
 internal static class SettingsJson
 {
@@ -40,10 +44,13 @@ internal static class SettingsJson
     /// <summary>Writes <paramref name="settings"/> (whatever their validity) as indented JSON.</summary>
     public static string Write(ToolkitSettings settings)
     {
+        // Every action added since files were first written is listed (unbound as ""), so that reading the file
+        // back does not take a missing one for a file that predates it (SettingsUpgrade).
         var keymap = new JsonObject();
-        foreach (var actionId in settings.OrderedKeymapActions())
+        var actionIds = settings.Keymap.Keys.Union(ActionIds.AddedLater, StringComparer.Ordinal);
+        foreach (var actionId in ToolkitSettings.InKeymapOrder(actionIds))
         {
-            keymap.Add(actionId, settings.Keymap[actionId]);
+            keymap.Add(actionId, settings.Keymap.TryGetValue(actionId, out var key) ? key : string.Empty);
         }
 
         var cycles = new List<object?>();

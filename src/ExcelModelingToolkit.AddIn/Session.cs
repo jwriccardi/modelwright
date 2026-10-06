@@ -77,8 +77,9 @@ internal static class Session
     }
 
     /// <summary>
-    /// A status-bar message: <paramref name="head"/>, then the first settings problem and the first key that could
-    /// not be bound, if any (the rest are in the diagnostics log).
+    /// A status-bar message: <paramref name="head"/>, then the first settings problem (or, with none, the first
+    /// note on what was brought up to date) and the first key that could not be bound, if any (the rest are in the
+    /// diagnostics log).
     /// </summary>
     public static string Summarize(string head, SettingsLoadResult? load, IReadOnlyList<string> keyFailures)
     {
@@ -87,6 +88,10 @@ internal static class Session
         {
             message += $". Settings problem{(load.Outcome == SettingsLoadOutcome.Rejected ? ", using defaults" : string.Empty)}: " +
                 load.Problems[0] + More(load.Problems.Count);
+        }
+        else if (load is not null && load.Notes.Count > 0)
+        {
+            message += ". Settings brought up to date: " + load.Notes[0] + More(load.Notes.Count);
         }
 
         if (keyFailures.Count > 0)
@@ -99,10 +104,15 @@ internal static class Session
 
     private static void LogLoad(SettingsLoadResult result, string outcome)
     {
-        DiagnosticsLog.Write("Settings", SettingsStore.FilePath, outcome, $"problems={result.Problems.Count}");
+        DiagnosticsLog.Write("Settings", SettingsStore.FilePath, outcome, $"problems={result.Problems.Count}", $"notes={result.Notes.Count}");
         foreach (var problem in result.Problems)
         {
             DiagnosticsLog.Write("SettingsProblem", problem);
+        }
+
+        foreach (var note in result.Notes)
+        {
+            DiagnosticsLog.Write("SettingsNote", note);
         }
     }
 
