@@ -19,6 +19,8 @@ public class ToolkitRibbon : ExcelRibbon
         new[] { ActionIds.CurrencyCycle, "Currency", "Cycle currency formats" },
         new[] { ActionIds.PercentCycle, "Percent", "Cycle percent formats" },
         new[] { ActionIds.MultipleCycle, "Multiple", "Cycle multiple formats" },
+        new[] { ActionIds.BinaryCycle, "Binary", "Cycle binary formats (Yes/No, On/Off...)" },
+        new[] { ActionIds.RatioCycle, "Ratio", "Cycle ratio and fraction formats" },
         new[] { ActionIds.FontColorCycle, "Font Color", "Cycle font colors" },
         new[] { ActionIds.FillColorCycle, "Fill Color", "Cycle fill colors" },
         new[] { ActionIds.BlueBlackToggle, "Blue/Black", "Toggle the font between blue and black" },

@@ -20,6 +20,8 @@ internal static class KeyBindings
         [ActionIds.CurrencyCycle] = nameof(Commands.EmtCurrencyCycle),
         [ActionIds.PercentCycle] = nameof(Commands.EmtPercentCycle),
         [ActionIds.MultipleCycle] = nameof(Commands.EmtMultipleCycle),
+        [ActionIds.BinaryCycle] = nameof(Commands.EmtBinaryCycle),
+        [ActionIds.RatioCycle] = nameof(Commands.EmtRatioCycle),
         [ActionIds.FontColorCycle] = nameof(Commands.EmtFontColorCycle),
         [ActionIds.FillColorCycle] = nameof(Commands.EmtFillColorCycle),
         [ActionIds.BlueBlackToggle] = nameof(Commands.EmtBlueBlackToggle),
