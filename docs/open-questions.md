@@ -6,7 +6,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 
 **Formatting cycles**
 
-1. ◐ *General Number cycle captured (research/06). Still needed: Percent, Currency, Multiple, Date and Binary.* **Number cycle defaults.** Settings › Configure › Excel › Format › Numbers. Capture the list for each cycle (General, Percent, Multiple, Currency, Date, Binary) with its format codes. *→ Sets our default cycle contents.*
+1. ✅ *All cycles captured from the factory settings export (research/06, 2026-10-06).* **Number cycle defaults.** Settings › Configure › Excel › Format › Numbers. Capture the list for each cycle (General, Percent, Multiple, Currency, Date, Binary) with its format codes. *→ Sets our default cycle contents.*
 2. ✅ *Captured (research/06).* **Font color cycle defaults.** Settings › … › Colors. Capture the RGB values in the Font Color Cycle, Fill Color Cycle and AutoColor scheme. *→ Sets our default palettes.*
 3. **What resets the cycle position?** Select a cell, press Ctrl+Shift+1 twice, then:
    - (a) move to another cell and press it again;
