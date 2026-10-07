@@ -4,6 +4,7 @@ using System.Text;
 using ExcelDna.Integration;
 using ExcelDna.Integration.CustomUI;
 using ExcelModelingToolkit.Core.Settings;
+using ExcelModelingToolkit.Core.Undo;
 
 namespace ExcelModelingToolkit.AddIn;
 
@@ -49,6 +50,8 @@ public class ToolkitRibbon : ExcelRibbon
           <button id='emtReregisterKeys' label='Re-register shortcuts' screentip='Take back every shortcut from other add-ins' onAction='OnReregisterKeys' />
           <button id='emtOpenSettings' label='Open settings file' screentip='Edit settings.json' onAction='OnOpenSettings' />
           <button id='emtReloadSettings' label='Reload settings' screentip='Apply your changes to settings.json' onAction='OnReloadSettings' />
+          <button id='emtUndoFormatting' label='Undo formatting' screentip='Undo our last formatting change' supertip='Undoes the last cycle even when Ctrl+Z would go to Excel (Excel has newer changes to undo).' onAction='OnUndoFormatting' />
+          <button id='emtRedoFormatting' label='Redo formatting' screentip='Redo our last undone formatting change' supertip='Redoes the last undone formatting change. Ctrl+Y drops this redo history once you change something in Excel after an undo.' onAction='OnRedoFormatting' />
         </group>
       </tab>
     </tabs>
@@ -74,4 +77,12 @@ public class ToolkitRibbon : ExcelRibbon
 
     /// <summary>Ribbon callback for Reload settings.</summary>
     public void OnReloadSettings(IRibbonControl control) => ExcelAsyncUtil.QueueAsMacro(Commands.EmtReloadSettings);
+
+    /// <summary>Ribbon callback for Undo formatting: always our stack, whatever Excel's own undo holds.</summary>
+    public void OnUndoFormatting(IRibbonControl control) =>
+        ExcelAsyncUtil.QueueAsMacro(() => UndoCommand.Run(UndoKey.Undo, "ribbon"));
+
+    /// <summary>Ribbon callback for Redo formatting: always acts on our redo stack (<see cref="UndoCommand"/>).</summary>
+    public void OnRedoFormatting(IRibbonControl control) =>
+        ExcelAsyncUtil.QueueAsMacro(() => UndoCommand.Run(UndoKey.Redo, "ribbon"));
 }

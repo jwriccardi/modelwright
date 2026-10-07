@@ -1,22 +1,23 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using ExcelDna.Integration;
 using ExcelModelingToolkit.Core.Formatting;
+using ExcelModelingToolkit.Core.Undo;
 
 namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
 /// Runs a formatting cycle on the selection: a thin COM adapter over <see cref="CycleEngine"/>. Reads the active
-/// cell only, writes the whole selection with one COM property write, then reads the active cell back. Call in
-/// macro context on the main thread. Any COM write clears Excel's undo history (spike K2c); our own undo arrives
-/// in Phase 3b.
+/// cell, captures the selection's current values for undo (<see cref="SnapshotPlanner"/>), writes the whole
+/// selection with one COM property write, then reads the active cell back and records the undo snapshot. Call in
+/// macro context on the main thread. Any COM write clears Excel's undo history (spike K2c); our own undo stack
+/// (<see cref="Session.Undo"/>, <see cref="UndoCommand"/>) replaces it for our changes.
 /// </summary>
 internal static class CycleCommand
 {
-    /// <summary><c>xlNone</c>: <c>Interior.Pattern</c> of a cell with no fill.</summary>
-    private const int XlNone = -4142;
-
     /// <summary>
     /// Applies the next item of the cycle whose id is <paramref name="actionId"/>, shows the result in the status bar
     /// and writes one diagnostics log line. <paramref name="source"/> is how it was invoked (the key, or <c>ribbon</c>).
@@ -37,7 +38,8 @@ internal static class CycleCommand
             StatusBar.Show($"{trace.Label ?? actionId}: failed: {ex.Message}");
         }
 
-        // ms: entry to the end of the COM write. totalMs: entry to here (adds the read-back and the status bar).
+        // ms: entry to the end of the COM write (including the undo capture). totalMs: entry to here (adds the
+        // read-back, recording the undo snapshot and the status bar).
         var total = stopwatch.Elapsed.TotalMilliseconds;
         var elapsed = trace.ElapsedMs ?? total;
         DiagnosticsLog.Write(
@@ -77,25 +79,26 @@ internal static class CycleCommand
         }
 
         object activeSheet = app.ActiveSheet;
-        if (FormattingIsProtected(activeSheet))
+        if (CellFormats.FormattingIsProtected(activeSheet))
         {
             StatusBar.Show($"{label}: The sheet is protected; formatting is not allowed.");
             return "sheet protected";
         }
 
-        // COM objects are held as object so only the adapter helpers below bind late.
+        // COM objects are held as object so only the adapter helpers bind late.
         object selection = app.Selection;
         object activeCell = app.ActiveCell;
         trace.Cells = CellCount(selection);
 
-        var current = ReadValue(activeCell, cycle.Kind);
+        var current = CellFormats.Read(activeCell, cycle.Kind);
         Session.States.TryGetValue(cycle.Id, out var previous);
         var step = Session.Engine.Next(cycle, current, SelectionKey(selection), previous);
         trace.Item = $"{step.Index + 1}/{cycle.Items.Count} {step.Item.Name}";
 
+        var capture = CaptureForUndo(actionId, activeSheet, selection, cycle.Kind);
         try
         {
-            Write(selection, cycle.Kind, step.Item);
+            CellFormats.Write(selection, cycle.Kind, step.Item.Value);
         }
         catch (Exception ex) when (cycle.Kind == CycleKind.NumberFormat)
         {
@@ -107,11 +110,14 @@ internal static class CycleCommand
 
         trace.ElapsedMs = stopwatch.Elapsed.TotalMilliseconds;
 
+        // The write is done: record it for undo first, so nothing below can skip that. Undo checks that the cells
+        // still hold what Excel reports, so the read-back form is recorded.
+        var readBack = ReadBack(activeCell, cycle.Kind);
+        var undoNote = RecordUndo(actionId, cycle, activeSheet, capture, readBack);
+
         // Excel may normalize a number format code or map a color to another; remember what it reports so the
         // cell is recognized next time (and, for number formats, learn the alias).
-        var state = step.State;
-        var readBack = ReadBack(activeCell, cycle.Kind);
-        state = Session.Engine.RecordReadBack(cycle, state, readBack);
+        var state = Session.Engine.RecordReadBack(cycle, step.State, readBack);
         if (!readBack.IsUnknown && readBack != step.Item.Value)
         {
             DiagnosticsLog.Write(
@@ -121,8 +127,134 @@ internal static class CycleCommand
         }
 
         Session.States[cycle.Id] = state;
-        StatusBar.Show($"{label}: {step.Item.Name} ({step.Index + 1}/{cycle.Items.Count})");
+        StatusBar.Show($"{label}: {step.Item.Name} ({step.Index + 1}/{cycle.Items.Count}){undoNote}");
         return "ok " + step.Reason;
+    }
+
+    /// <summary>
+    /// Captures the selection's current values of <paramref name="kind"/>, before the write, and logs the blocks,
+    /// reads and time taken. Never throws: a failure gives an unavailable plan with the reason.
+    /// </summary>
+    private static SnapshotPlan CaptureForUndo(string actionId, object activeSheet, object selection, CycleKind kind)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        SnapshotPlan plan;
+        try
+        {
+            plan = SnapshotPlanner.Plan(
+                Areas(selection),
+                UsedRange(activeSheet),
+                Session.Settings.UndoCellCap,
+                new SheetFormatReader(activeSheet, kind));
+        }
+        catch (Exception ex)
+        {
+            plan = SnapshotPlan.Unavailable("could not read the current formats: " + ex.Message, 0);
+        }
+
+        DiagnosticsLog.Write(
+            "UndoCapture",
+            actionId,
+            "blocks=" + plan.Blocks.Count.ToString(CultureInfo.InvariantCulture),
+            "reads=" + plan.Reads.ToString(CultureInfo.InvariantCulture),
+            "cells=" + plan.CellCount.ToString(CultureInfo.InvariantCulture),
+            "ms=" + stopwatch.Elapsed.TotalMilliseconds.ToString("0.0", CultureInfo.InvariantCulture),
+            plan.IsAvailable ? "ok" : "unavailable: " + plan.UnavailableReason);
+        return plan;
+    }
+
+    /// <summary>
+    /// Pushes the undo snapshot for a completed write (every block now holds <paramref name="applied"/>, the
+    /// active cell's read-back). If the change cannot be recorded (the capture failed, the read-back is unknown,
+    /// or the snapshot could not be made), pushes a barrier instead, so Ctrl+Z stops there rather than reach past
+    /// this change to older ones. Either way our redo stack is cleared. Returns the status-bar suffix: empty, or
+    /// why this change cannot be undone. Never throws.
+    /// </summary>
+    private static string RecordUndo(string actionId, CycleDefinition cycle, object activeSheet, SnapshotPlan capture, CycleValue applied)
+    {
+        var workbook = "(unknown workbook)";
+        var sheetName = "(unknown sheet)";
+        string? reason = null;
+        try
+        {
+            dynamic sheet = activeSheet;
+            string? name = sheet.Name;
+            string? fullName = sheet.Parent.FullName;
+            if (name is null || fullName is null)
+            {
+                reason = "could not identify the sheet";
+            }
+            else
+            {
+                sheetName = name;
+                workbook = fullName;
+            }
+        }
+        catch (Exception ex)
+        {
+            reason = "could not identify the sheet: " + ex.Message;
+        }
+
+        reason ??= capture.UnavailableReason ?? (applied.IsUnknown ? "the applied format could not be read back" : null);
+        if (reason is null)
+        {
+            try
+            {
+                Session.Undo.Push(FormatSnapshot.Create(
+                    cycle.DisplayName,
+                    cycle.Kind,
+                    workbook,
+                    sheetName,
+                    capture.Blocks.Select(b => b.WithApplied(applied))));
+                return string.Empty;
+            }
+            catch (Exception ex)
+            {
+                reason = ex.Message;
+            }
+        }
+
+        Session.Undo.Push(FormatSnapshot.Unavailable(cycle.DisplayName, cycle.Kind, workbook, sheetName, reason));
+        DiagnosticsLog.Write("UndoCapture", actionId, "not recorded, barrier pushed: " + reason);
+        return $" (undo unavailable: {reason})";
+    }
+
+    /// <summary>The selection's areas as rectangles.</summary>
+    private static IReadOnlyList<CellRect> Areas(object selection)
+    {
+        dynamic range = selection;
+        dynamic areas = range.Areas;
+        int count = areas.Count;
+        var rects = new List<CellRect>(count);
+        for (var i = 1; i <= count; i++)
+        {
+            object area = areas.Item(i);
+            rects.Add(ToRect(area));
+        }
+
+        return rects;
+    }
+
+    /// <summary>The worksheet's used range as a rectangle.</summary>
+    private static CellRect UsedRange(object worksheet)
+    {
+        dynamic sheet = worksheet;
+        object used = sheet.UsedRange;
+        return ToRect(used);
+    }
+
+    private static CellRect ToRect(object range)
+    {
+        dynamic r = range;
+        object row = r.Row;
+        object column = r.Column;
+        object rows = r.Rows.Count;
+        object columns = r.Columns.Count;
+        return new CellRect(
+            Convert.ToInt32(row, CultureInfo.InvariantCulture),
+            Convert.ToInt32(column, CultureInfo.InvariantCulture),
+            Convert.ToInt32(rows, CultureInfo.InvariantCulture),
+            Convert.ToInt32(columns, CultureInfo.InvariantCulture));
     }
 
     /// <summary>True if cells (not a chart, shape or other object) are selected. Uses the C API <c>SELECTION()</c>.</summary>
@@ -138,29 +270,12 @@ internal static class CycleCommand
         }
     }
 
-    /// <summary>
-    /// True if <paramref name="activeSheet"/> is protected and its protection does not allow formatting cells, so
-    /// every write would fail.
-    /// </summary>
-    private static bool FormattingIsProtected(object activeSheet)
-    {
-        dynamic sheet = activeSheet;
-        object protectContents = sheet.ProtectContents;
-        if (!(protectContents is bool isProtected && isProtected))
-        {
-            return false;
-        }
-
-        object allowFormatting = sheet.Protection.AllowFormattingCells;
-        return !(allowFormatting is bool allowed && allowed);
-    }
-
     /// <summary>The active cell's value right after a write; unknown if it cannot be read (the write still stands).</summary>
     private static CycleValue ReadBack(object activeCell, CycleKind kind)
     {
         try
         {
-            return ReadValue(activeCell, kind);
+            return CellFormats.Read(activeCell, kind);
         }
         catch (Exception ex)
         {
@@ -196,72 +311,6 @@ internal static class CycleCommand
 
         return workbookName + "|" + sheetName + "|" + address;
     }
-
-    /// <summary>The active cell's current value for <paramref name="kind"/>; unknown if mixed or unreadable.</summary>
-    private static CycleValue ReadValue(object activeCell, CycleKind kind)
-    {
-        dynamic cell = activeCell;
-        switch (kind)
-        {
-            case CycleKind.NumberFormat:
-                object format = cell.NumberFormat;
-                return format is string code ? CycleValue.FromNumberFormat(code) : CycleValue.Unknown;
-            case CycleKind.FontColor:
-                object fontColor = cell.Font.Color;
-                return ToColor(fontColor);
-            case CycleKind.FillColor:
-                dynamic interior = cell.Interior;
-                object pattern = interior.Pattern;
-                if (ToInt(pattern) == XlNone)
-                {
-                    return CycleValue.FromColor(OleColor.NoFill);
-                }
-
-                object fillColor = interior.Color;
-                return ToColor(fillColor);
-            default:
-                return CycleValue.Unknown;
-        }
-    }
-
-    /// <summary>Applies <paramref name="item"/> to the whole selection with one COM property write.</summary>
-    private static void Write(object range, CycleKind kind, CycleItem item)
-    {
-        dynamic selection = range;
-        switch (item)
-        {
-            case NumberFormatItem format when kind == CycleKind.NumberFormat:
-                selection.NumberFormat = format.Code;
-                break;
-            case ColorItem color when kind == CycleKind.FontColor:
-                selection.Font.Color = color.Color.OleValue;
-                break;
-            case ColorItem color when kind == CycleKind.FillColor && color.Color.IsNoFill:
-                selection.Interior.Pattern = XlNone;
-                break;
-            case ColorItem color when kind == CycleKind.FillColor:
-                selection.Interior.Color = color.Color.OleValue;
-                break;
-            default:
-                throw new InvalidOperationException($"\"{item.Name}\" cannot be applied by a {kind} cycle.");
-        }
-    }
-
-    /// <summary>An OLE color from a COM value (Excel returns a double); unknown for DBNull (mixed) or out of range.</summary>
-    private static CycleValue ToColor(object? value)
-    {
-        var ole = ToInt(value);
-        return ole is int v && v >= 0 && v <= OleColor.MaxOleValue
-            ? CycleValue.FromColor(OleColor.FromOle(v))
-            : CycleValue.Unknown;
-    }
-
-    private static int? ToInt(object? value) => value switch
-    {
-        int i => i,
-        double d when d >= int.MinValue && d <= int.MaxValue && d == Math.Floor(d) => (int)d,
-        _ => null,
-    };
 
     /// <summary>What one run did, for the diagnostics log.</summary>
     private sealed class Trace

@@ -130,8 +130,8 @@ Decided by the owner on 2026-09-28, based on spike K2/K2b/K2c (see `docs/spike-r
 - Built-in commands run *inside* an `OnKey` macro lose the earlier history. They also collapse to one level when the workbook has volatile formulas.
 
 **v1 design: our own `UndoManager` (Macabacus parity).**
-- **Snapshot.** Before each change, snapshot the number format, font color and fill of the affected cells.
-  - Capture is capped (default 10,000 cells).
+- **Snapshot.** Before each change, snapshot the property being changed (number format, font color or fill) of the affected cells.
+  - Capture is capped by `undoCellCap` (default 10,000 *reads*; uniform regions cost one read).
   - Uniform ranges are run-length compressed.
 - **Ctrl+Z / Ctrl+Y are intercepted.** The thread keyboard hook is preferred: it can *decline* to swallow the key.
 - **Ordering rule.**
@@ -139,6 +139,25 @@ Decided by the owner on 2026-09-28, based on spike K2/K2b/K2c (see `docs/spike-r
   - Otherwise, pop our own stack.
 - **Invalidation.** Clear our stack when the workbook is closed, and on structural changes (row or column insert or delete).
 - **Where native commands exist, use them (optional).** If a cycle item matches a built-in command, such as Bold, dispatch it from the hook outside macro context. That keeps the user's history intact for that action.
+
+**Refinements from the Phase 3b code review (2026-09-29):**
+- **Barrier.** A change we couldn't record (the capture cap was exceeded, a patterned or gradient fill, a failed read) is pushed as a *barrier*. Ctrl+Z stops there with "Can't undo: … could not be recorded", so undo never jumps past it to an older change. Every write, recorded or not, clears our redo stack.
+- **Redo staleness.** Our restore wipes Excel's undo *and* redo. So if Excel reports any undo or redo entries while our redo stack is non-empty, the user has acted since, and our redo is stale: clear it and pass the key to Excel. The same applies to Ctrl+Z when Excel's undo is available.
+- **Identity and invalidation.**
+  - Snapshots are keyed by the workbook's **FullName** (full path).
+  - Snapshots are invalidated on `WorkbookBeforeClose`, and on `SheetChange` events whose target is whole rows or columns (row or column inserts and deletes).
+  - These events come through a late-bound COM event sink, so no Office PIA dependency is needed.
+- **The capture cap counts reads, not cells.** Mixed rectangles are split recursively along their longer side, so a uniform region costs one read and whole-column selections stay cheap.
+- **Color fidelity.** A font set to *Automatic* is restored as Automatic, not black. Theme-color links are not preserved; the RGB value is restored.
+- **Hook safety.**
+  - The hook makes no Excel calls while the mouse is captured, while a menu is open, or while a window is being moved or sized.
+  - It guards against re-entry.
+  - At restore time it checks Excel's undo state again.
+  - Holding Ctrl+Z undoes one step, and Excel's own Undo/Redo buttons are not intercepted.
+- **Memory.** A global block budget evicts the oldest snapshots.
+- **Owner test finding (2026-10-07).** Read from *macro context* (inside an add-in command), `GetEnabledMso("Undo")` is unreliable right after a native undo: it reported `true` while Excel's undo list was empty. The reading taken in the hook (outside macro context) was correct.
+  - The restore therefore no longer re-checks Excel's state. The hook alone decides, including whether our redo is stale.
+  - The ribbon Undo/Redo buttons always act on our stack.
 
 **v2 candidate: the hybrid (spike K2d, deferred).**
 - The Excel-DNA hook catches the exact keys and forwards the command over a local channel to a small Office.js add-in in the same Excel.
