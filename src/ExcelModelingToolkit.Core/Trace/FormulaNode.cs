@@ -10,24 +10,32 @@ public sealed class FormulaNode
 {
     private static readonly FormulaNode[] NoChildren = new FormulaNode[0];
 
-    internal FormulaNode(FormulaNodeKind kind, string text, int start)
+    // The whole formula, not this node's text: a node's span contains its children's, so storing each node's own
+    // text would take memory quadratic in the formula's nesting (hundreds of MB for 16,000 nested negations).
+    private readonly string _formula;
+
+    internal FormulaNode(FormulaNodeKind kind, string formula, int start, int length)
     {
         Kind = kind;
-        Text = text;
+        _formula = formula;
         Start = start;
+        Length = length;
     }
 
     /// <summary>The kind of node.</summary>
     public FormulaNodeKind Kind { get; }
 
-    /// <summary>The node's source text: for a function, from its name to its closing parenthesis.</summary>
-    public string Text { get; internal set; }
+    /// <summary>
+    /// The node's source text: for a function, from its name to its closing parenthesis. Read from the formula on
+    /// each access, not stored.
+    /// </summary>
+    public string Text => _formula.Substring(Start, Length);
 
     /// <summary>The 0-based position of <see cref="Text"/> in the formula string (which starts with <c>=</c>).</summary>
     public int Start { get; internal set; }
 
     /// <summary>The length of <see cref="Text"/>.</summary>
-    public int Length => Text.Length;
+    public int Length { get; internal set; }
 
     /// <summary>
     /// The child nodes: a group's inner expression, a function's arguments, an operator's operands. Empty for

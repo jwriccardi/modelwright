@@ -1,6 +1,9 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 using ExcelModelingToolkit.Core.Trace;
 using ExcelModelingToolkit.Core.Undo;
 using Xunit;
@@ -267,6 +270,22 @@ public class FormulaParserTests
     }
 
     [Fact]
+    public void Quoted_prefix_with_a_text_file_extension_is_a_sheet_but_with_a_workbook_extension_a_workbook()
+    {
+        Assert.Equal((null, "My Book.xlsx", null, null), FormulaParser.ParsePrefix("'My Book.xlsx'!", FormulaReferenceKind.Name));
+        Assert.Equal((null, "Data.ods", null, null), FormulaParser.ParsePrefix("'Data.ods'!", FormulaReferenceKind.StructuredReference));
+        Assert.Equal((null, "Import.csv", null, null), FormulaParser.ParsePrefix("Import.csv!", FormulaReferenceKind.Name));
+        Assert.Equal((null, null, "Import.csv", null), FormulaParser.ParsePrefix("'Import.csv'!", FormulaReferenceKind.Name));
+        Assert.Equal((null, null, "Notes.txt", null), FormulaParser.ParsePrefix("'Notes.txt'!", FormulaReferenceKind.Name));
+        Assert.Equal(("C:\\dir\\", "Import.csv", null, null), FormulaParser.ParsePrefix("'C:\\dir\\Import.csv'!", FormulaReferenceKind.Name));
+
+        var reference = Parse("='Import.csv'!Rate").References.Single();
+        Assert.Equal(FormulaReferenceKind.Name, reference.Kind);
+        Assert.Equal("Import.csv", reference.Sheet);
+        Assert.Null(reference.WorkbookName);
+    }
+
+    [Fact]
     public void Reference_into_a_deleted_sheet_is_a_ref_error()
     {
         var references = Parse("=#REF!A1+#REF!B1:B5+[Budget.xlsx]#REF!C3+'#REF'!D4").References;
@@ -381,8 +400,9 @@ public class FormulaParserTests
     [Fact]
     public void Recursion_too_deep_for_the_stack_fails_instead_of_overflowing()
     {
-        // 8,000 nested negations: XLParser reads them, and building the structure runs out of a 256 KB stack.
-        var formula = "=" + new string('-', 8000) + "A1";
+        // 1,000 nested negations, the most Parse accepts in a row: XLParser reads them, and building the structure
+        // runs out of a 256 KB stack.
+        var formula = "=" + new string('-', 1000) + "A1";
 
         var parsed = OnSmallStack(() => FormulaParser.ParseOnCurrentThread(formula, Context));
 
@@ -399,23 +419,153 @@ public class FormulaParserTests
     }
 
     [Fact]
-    public void Parse_thread_that_takes_too_long_is_abandoned_and_the_next_parse_still_works()
+    public void Formula_with_more_than_a_thousand_operators_in_a_row_fails_at_once()
     {
-        using var release = new ManualResetEventSlim();
-        var late = FormulaParser.Parse("=1", Context);
+        // 16,382 negations, all a formula of the maximum length holds: XLParser alone took 4-13 s on .NET Framework.
+        var watch = Stopwatch.StartNew();
+        var parsed = FormulaParser.Parse("=" + new string('-', 16382) + "1", Context);
+        watch.Stop();
 
-        var timedOut = FormulaParser.LargeStackThread.Run(
+        AssertFailed(parsed);
+        Assert.Contains("more than 1,000 operators in a row", parsed.Error);
+        Assert.True(watch.ElapsedMilliseconds < 1000, $"The rejection took {watch.ElapsedMilliseconds} ms.");
+        AssertFailed(FormulaParser.Parse("=A1" + new string('%', 1001), Context));
+        AssertFailed(FormulaParser.Parse("=" + string.Concat(Enumerable.Repeat("- ", 1001)) + "1", Context));
+        Assert.True(FormulaParser.Parse("=" + new string('-', 1000) + "1", Context).IsParsed);
+        Assert.True(FormulaParser.Parse("=" + string.Join("*", Enumerable.Repeat(new string('-', 1000) + "1", 16)), Context).IsParsed);
+    }
+
+    [Fact]
+    public async Task Request_that_times_out_while_queued_is_skipped_by_the_parse_thread()
+    {
+        using var thread = new FormulaParser.LargeStackThread(1024 * 1024);
+        using var started = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var first = Task.Run(() => thread.Run(
             () =>
             {
+                started.Set();
                 release.Wait();
-                return late;
+                return Parsed;
             },
-            TimeSpan.FromMilliseconds(50));
+            Fail,
+            TimeSpan.FromSeconds(30)));
+        Assert.True(started.Wait(TimeSpan.FromSeconds(10)));
+        var ran = 0;
+
+        var queued = thread.Run(
+            () =>
+            {
+                Interlocked.Increment(ref ran);
+                return Parsed;
+            },
+            Fail,
+            TimeSpan.FromMilliseconds(200));
         release.Set();
 
-        Assert.Null(timedOut);
-        var formula = "=" + string.Join("+", Enumerable.Repeat("A1", 200));
-        Assert.Equal(200, FormulaParser.Parse(formula, Context).References.Count);
+        Assert.Contains("took too long", queued.Error);
+        Assert.Same(Parsed, await first);
+        Assert.Same(Parsed, thread.Run(() => Parsed, Fail, TimeSpan.FromSeconds(10)));
+        Assert.Equal(0, Volatile.Read(ref ran));
+    }
+
+    [Fact]
+    public void While_a_timed_out_request_still_runs_new_requests_fail_at_once_then_parsing_works_again()
+    {
+        using var thread = new FormulaParser.LargeStackThread(1024 * 1024);
+        using var started = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        Assert.Same(Parsed, thread.Run(() => Parsed, Fail, TimeSpan.FromSeconds(10)));
+
+        var timedOut = thread.Run(
+            () =>
+            {
+                started.Set();
+                release.Wait();
+                return Parsed;
+            },
+            Fail,
+            TimeSpan.FromSeconds(1));
+        Assert.True(started.Wait(TimeSpan.FromSeconds(10)), "The request was not running when it timed out.");
+        var watch = Stopwatch.StartNew();
+        var busy = thread.Run(() => Parsed, Fail, TimeSpan.FromSeconds(30));
+        watch.Stop();
+        release.Set();
+
+        Assert.Contains("took too long", timedOut.Error);
+        Assert.Contains("still busy", busy.Error);
+        Assert.True(watch.ElapsedMilliseconds < 1000, $"The busy request waited {watch.ElapsedMilliseconds} ms.");
+        Assert.True(SpinWait.SpinUntil(() => thread.Run(() => Parsed, Fail, TimeSpan.FromSeconds(10)).IsParsed, TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public void Parse_thread_reports_an_exception_from_its_work_as_a_failure_and_keeps_running()
+    {
+        using var thread = new FormulaParser.LargeStackThread(1024 * 1024);
+
+        var failed = thread.Run(() => throw new InvalidOperationException("Boom"), Fail, TimeSpan.FromSeconds(10));
+
+        Assert.Equal("the parser failed: Boom", failed.Error);
+        Assert.Same(Parsed, thread.Run(() => Parsed, Fail, TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public void Parse_thread_that_cannot_start_fails_each_request_without_throwing()
+    {
+        // A negative stack size makes the thread's constructor throw, as an out-of-memory start would.
+        using var thread = new FormulaParser.LargeStackThread(-1);
+
+        var first = thread.Run(() => Parsed, Fail, TimeSpan.FromSeconds(10));
+        var second = thread.Run(() => Parsed, Fail, TimeSpan.FromSeconds(10));
+
+        Assert.StartsWith("the parser could not start: ", first.Error);
+        Assert.StartsWith("the parser could not start: ", second.Error);
+    }
+
+    [Fact]
+    public void Short_formula_parses_on_the_large_stack_thread_when_the_callers_stack_is_nearly_used()
+    {
+        const string formula = "=SUM(A1,B1)";
+
+        var (inline, parsed) = OnSmallStack(() =>
+        {
+            // The first parse on a thread builds XLParser's grammar; do that before using the stack up.
+            FormulaParser.Parse("=1", Context);
+            return AtStackLimit(() => (FormulaParser.ParseOnCurrentThread(formula, Context), FormulaParser.Parse(formula, Context)));
+        });
+
+        AssertFailed(inline);
+        Assert.True(parsed.IsParsed, parsed.Error);
+        Assert.Equal(new[] { "A1", "B1" }, parsed.References.Select(reference => reference.Text));
+    }
+
+    private static readonly ParsedFormula Parsed = FormulaParser.Parse("=1", Context);
+
+    private static ParsedFormula Fail(string reason) => ParsedFormula.Failed("=1", Context, reason);
+
+    // Recurses until the runtime's stack check fails, then runs work there.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static T AtStackLimit<T>(Func<T> work)
+    {
+        bool atLimit;
+        try
+        {
+            RuntimeHelpers.EnsureSufficientExecutionStack();
+            atLimit = false;
+        }
+        catch (InsufficientExecutionStackException)
+        {
+            atLimit = true;
+        }
+
+        if (atLimit)
+        {
+            return work();
+        }
+
+        var result = AtStackLimit(work);
+        GC.KeepAlive(work); // Not a tail call, which could reuse the frame.
+        return result;
     }
 
     private static void AssertFailed(ParsedFormula parsed)

@@ -11,24 +11,31 @@ public sealed class FormulaReference
 {
     private static readonly string[] None = new string[0];
 
-    internal FormulaReference(FormulaReferenceKind kind, string text, int start)
+    // The whole formula, as in FormulaNode: a merged bounding range (A1:A2:...:A1500) spans most of it.
+    private readonly string _formula;
+
+    internal FormulaReference(FormulaReferenceKind kind, string formula, int start, int length)
     {
         Kind = kind;
-        Text = text;
+        _formula = formula;
         Start = start;
+        Length = length;
     }
 
     /// <summary>What the reference points to.</summary>
     public FormulaReferenceKind Kind { get; internal set; }
 
-    /// <summary>The reference exactly as written in the formula, including any sheet or workbook prefix.</summary>
-    public string Text { get; internal set; }
+    /// <summary>
+    /// The reference exactly as written in the formula, including any sheet or workbook prefix. Read from the
+    /// formula on each access, not stored.
+    /// </summary>
+    public string Text => _formula.Substring(Start, Length);
 
     /// <summary>The 0-based position of <see cref="Text"/> in the formula string (which starts with <c>=</c>).</summary>
     public int Start { get; }
 
     /// <summary>The length of <see cref="Text"/>.</summary>
-    public int Length => Text.Length;
+    public int Length { get; internal set; }
 
     /// <summary>
     /// The external workbook's file name (<c>Book.xlsx</c>), or null for the formula's own workbook. Whether that

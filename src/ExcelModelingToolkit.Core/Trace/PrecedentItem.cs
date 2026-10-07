@@ -15,7 +15,8 @@ public sealed class PrecedentItem
     /// <param name="sheet">The sheet holding the target, or null if it has none (a workbook-level name, a function).</param>
     /// <param name="address">
     /// The target's sheet-local address (<c>B5</c>, <c>A1:C10</c>), or null if it has none. Together with
-    /// <paramref name="workbook"/> and <paramref name="sheet"/> it identifies the item for cycle detection.
+    /// <paramref name="workbook"/> and <paramref name="sheet"/> it identifies the item for cycle detection; an item
+    /// without one has no <see cref="Id"/>.
     /// </param>
     /// <param name="cellCount">The number of cells for a range (at least 1).</param>
     /// <param name="valueText">The Value column (the first cell's value for a range), or null.</param>
@@ -71,8 +72,12 @@ public sealed class PrecedentItem
 
     /// <summary>
     /// The canonical identity used for cycle detection, <c>WORKBOOK|SHEET|ADDRESS</c> in upper case with <c>$</c>
-    /// removed from the address, so <c>$A$1</c> is <c>A1</c> (names use their label when they have no address); null for items that are part of a formula's structure (functions, groups)
-    /// or added by the tree, which cannot form a cycle.
+    /// removed from the address and a one-cell range written as its cell, so <c>$A$1</c> and <c>A1:A1</c> are both
+    /// <c>A1</c> (as Excel's <c>Range.Address</c> writes them). Null for an item with no address, which is never
+    /// marked as a cycle: a name or structured reference written without one can mean different cells in different
+    /// places (<c>[@Amount]</c> in two tables, a sheet-scoped name on two sheets), and a cycle through it is found
+    /// one level down, at its cells. Null too for items that are part of a formula's structure (functions, groups) or
+    /// added by the tree, which cannot form a cycle.
     /// </summary>
     public string? Id
     {
@@ -86,8 +91,9 @@ public sealed class PrecedentItem
                 case PrecedentKind.Truncated:
                     return null;
                 default:
-                    return ((Workbook ?? string.Empty) + "|" + (Sheet ?? string.Empty) + "|" +
-                        (Address?.Replace("$", string.Empty) ?? Label)).ToUpperInvariant();
+                    return Address is null
+                        ? null
+                        : ((Workbook ?? string.Empty) + "|" + (Sheet ?? string.Empty) + "|" + CellForm(Address)).ToUpperInvariant();
             }
         }
     }
@@ -96,8 +102,9 @@ public sealed class PrecedentItem
     /// Creates the item for a reference in a formula. The reference leaves out its formula's own workbook and sheet;
     /// the item fills them in from <paramref name="context"/>, so the same cell always has the same <see cref="Id"/>
     /// however it was written. A name or table keeps only the sheet written before it (an unqualified name may be
-    /// sheet-scoped or workbook-level, which only the workbook knows); a 3-D reference's sheet is
-    /// <c>First:Last</c>.
+    /// sheet-scoped or workbook-level, which only the workbook knows) and has no address, so no <see cref="Id"/>: it
+    /// is never marked as a cycle itself, and a cycle through it shows at the cells it expands to. A 3-D reference's
+    /// sheet is <c>First:Last</c>.
     /// </summary>
     /// <param name="reference">A reference from <see cref="ParsedFormula.References"/>.</param>
     /// <param name="context">The workbook and sheet of the formula the reference is in.</param>
@@ -110,6 +117,23 @@ public sealed class PrecedentItem
     /// <paramref name="reference"/> is a LET or LAMBDA local name, which is not a precedent.
     /// </exception>
     public static PrecedentItem FromReference(FormulaReference reference, FormulaContext context, string? label = null,
+        string? valueText = null, bool canExpand = true, string? argument = null) =>
+        TryFromReference(reference, context, label, valueText, canExpand, argument) ??
+        throw new ArgumentException("A LET or LAMBDA local name is not a precedent.", nameof(reference));
+
+    /// <summary>
+    /// Like <see cref="FromReference"/>, but returns null for a LET or LAMBDA local name, which is not a precedent,
+    /// so every item of <see cref="ParsedFormula.References"/> can be passed.
+    /// </summary>
+    /// <param name="reference">A reference from <see cref="ParsedFormula.References"/>.</param>
+    /// <param name="context">The workbook and sheet of the formula the reference is in.</param>
+    /// <param name="label">The Precedents column, or null for the reference as written.</param>
+    /// <param name="valueText">The Value column, or null.</param>
+    /// <param name="canExpand">False if the item has nothing below it; always false for <c>#REF!</c>.</param>
+    /// <param name="argument">The Argument column in evaluate mode, or null.</param>
+    /// <returns>The item, or null for a local name.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="reference"/> or <paramref name="context"/> is null.</exception>
+    public static PrecedentItem? TryFromReference(FormulaReference reference, FormulaContext context, string? label = null,
         string? valueText = null, bool canExpand = true, string? argument = null)
     {
         if (reference is null)
@@ -144,7 +168,7 @@ public sealed class PrecedentItem
                 canExpand = false;
                 break;
             default:
-                throw new ArgumentException("A LET or LAMBDA local name is not a precedent.", nameof(reference));
+                return null;
         }
 
         var sheet = reference.LastSheet is null ? reference.Sheet : reference.Sheet + ":" + reference.LastSheet;
@@ -159,4 +183,16 @@ public sealed class PrecedentItem
 
     /// <summary>The label.</summary>
     public override string ToString() => Label;
+
+    // A1:A1 as A1. Whole columns and rows (A:A, 1:1) keep both halves, as Range.Address writes them.
+    private static string CellForm(string address)
+    {
+        var bare = address.Replace("$", string.Empty);
+        var colon = bare.IndexOf(':');
+        var first = colon > 0 ? bare.Substring(0, colon) : string.Empty;
+        return first.Length > 1 && char.IsLetter(first[0]) && char.IsDigit(first[first.Length - 1]) &&
+            string.Equals(first, bare.Substring(colon + 1), StringComparison.OrdinalIgnoreCase)
+            ? first
+            : bare;
+    }
 }

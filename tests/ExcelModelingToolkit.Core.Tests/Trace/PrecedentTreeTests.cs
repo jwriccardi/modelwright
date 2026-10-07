@@ -431,7 +431,8 @@ public class PrecedentTreeTests
     public void Item_ids_are_case_insensitive_locations_and_null_for_structure_nodes()
     {
         Assert.Equal("MODEL.XLSX|CALC|A1", new PrecedentItem(PrecedentKind.Cell, "x", "Model.xlsx", "Calc", "a1").Id);
-        Assert.Equal("MODEL.XLSX||REVENUE", new PrecedentItem(PrecedentKind.Name, "Revenue", "Model.xlsx").Id);
+        Assert.Null(new PrecedentItem(PrecedentKind.Name, "Revenue", "Model.xlsx").Id);
+        Assert.Null(new PrecedentItem(PrecedentKind.Table, "[@Amount]", "Model.xlsx", "Calc").Id);
         Assert.Null(new PrecedentItem(PrecedentKind.Function, "SUM(...)").Id);
         Assert.Null(new PrecedentItem(PrecedentKind.Group, "(x)").Id);
         Assert.Throws<ArgumentOutOfRangeException>(() => new PrecedentItem(PrecedentKind.Range, "r", cellCount: 0));
@@ -468,6 +469,61 @@ public class PrecedentTreeTests
     }
 
     [Fact]
+    public void Item_id_of_a_one_cell_range_is_its_cell_as_excel_writes_it()
+    {
+        var context = new FormulaContext("Model.xlsx", "Calc");
+        var references = FormulaParser.Parse("=SUM(A1:A1,$B$2:B2,A:A,3:3,C1:D1)", context).References;
+
+        Assert.Equal(
+            new[] { "MODEL.XLSX|CALC|A1", "MODEL.XLSX|CALC|B2", "MODEL.XLSX|CALC|A:A", "MODEL.XLSX|CALC|3:3", "MODEL.XLSX|CALC|C1:D1" },
+            references.Select(reference => PrecedentItem.FromReference(reference, context).Id));
+        Assert.Equal("MODEL.XLSX|CALC|A1", new PrecedentItem(PrecedentKind.Range, "x", "Model.xlsx", "Calc", "$a$1:A1").Id);
+    }
+
+    [Fact]
+    public void One_cell_range_of_an_ancestor_cell_is_a_cycle()
+    {
+        var root = new PrecedentItem(PrecedentKind.Cell, "Calc!$A$1", "Model.xlsx", "Calc", "$A$1");
+        var provider = new FakePrecedentProvider().Has(root, Range("A1:A1", 1));
+
+        var tree = new PrecedentTree(provider, root);
+
+        Assert.True(tree.Root.Children[0].IsCycle);
+    }
+
+    [Fact]
+    public void Names_and_structured_references_without_an_address_never_form_a_false_cycle()
+    {
+        // [@Amount] in the Sales table and [@Amount] in the Costs table, or a sheet-scoped Rate on two sheets, are
+        // different cells written the same way. A real cycle through them still shows, at the cells they expand to.
+        var context = new FormulaContext("Model.xlsx", "Calc");
+        var amount = FormulaParser.Parse("=[@Amount]", context).References.Single();
+        var sales = PrecedentItem.FromReference(amount, context);
+        var costs = PrecedentItem.FromReference(amount, context);
+        var rate = new PrecedentItem(PrecedentKind.Name, "Rate", "Model.xlsx");
+        var sheet2Rate = new PrecedentItem(PrecedentKind.Name, "Rate", "Model.xlsx");
+        var root = Cell("A1");
+        var b2 = Cell("B2");
+        var c1 = Cell("C1", "Sheet2");
+
+        // The fake looks precedents up by label, so costs [@Amount] has the same precedent as sales [@Amount]: B2.
+        var provider = new FakePrecedentProvider().Has(root, sales, rate).Has(sales, b2).Has(b2, costs).Has(rate, c1).Has(c1, sheet2Rate);
+        var tree = new PrecedentTree(provider, root);
+        tree.Expand(tree.Root.Children[0]);
+        var b2Node = tree.Root.Children[0].Children[0];
+        tree.Expand(b2Node);
+        tree.Expand(b2Node.Children[0]);
+        tree.Expand(tree.Root.Children[1]);
+        tree.Expand(tree.Root.Children[1].Children[0]);
+
+        Assert.Null(sales.Id);
+        Assert.Null(PrecedentItem.FromReference(amount, context, "Sales[@Amount]").Id);
+        Assert.False(b2Node.Children[0].IsCycle);
+        Assert.True(b2Node.Children[0].Children[0].IsCycle);
+        Assert.False(tree.Root.Children[1].Children[0].Children[0].IsCycle);
+    }
+
+    [Fact]
     public void Absolute_and_relative_addresses_of_the_same_cell_form_a_cycle()
     {
         var root = new PrecedentItem(PrecedentKind.Cell, "Calc!$A$1", "Model.xlsx", "Calc", "$A$1");
@@ -492,8 +548,7 @@ public class PrecedentTreeTests
             new[]
             {
                 "MODEL.XLSX|CALC|A1", "MODEL.XLSX|CALC|A1", "MODEL.XLSX|SHEET2|B2", "OTHER.XLSX|DATA|C3", "MODEL.XLSX|CALC|D1:E5",
-                "MODEL.XLSX|CALC|B:B", "MODEL.XLSX||RATE", "MODEL.XLSX|INPUTS|INPUTS!TAX", "BOOK2.XLSX||BOOK2.XLSX!FX",
-                "MODEL.XLSX||SALES[AMOUNT]", "MODEL.XLSX||#REF!", "MODEL.XLSX|JAN:DEC|A1",
+                "MODEL.XLSX|CALC|B:B", null, null, null, null, null, "MODEL.XLSX|JAN:DEC|A1",
             },
             items.Select(item => item.Id));
         Assert.Equal(
@@ -507,8 +562,23 @@ public class PrecedentTreeTests
         Assert.Equal(10, items[4].CellCount);
         Assert.Equal(1048576, items[5].CellCount);
         Assert.False(items[10].CanExpand);
+        Assert.Equal("Inputs", items[7].Sheet);
+        Assert.Equal("Book2.xlsx", items[8].Workbook);
         Assert.Equal("number1", PrecedentItem.FromReference(parsed.References[0], context, "Calc!A1", "5", argument: "number1").Argument);
         Assert.Equal("Calc!A1", PrecedentItem.FromReference(parsed.References[0], context, "Calc!A1").Label);
+    }
+
+    [Fact]
+    public void Try_item_from_a_reference_skips_local_names()
+    {
+        var context = new FormulaContext("Model.xlsx", "Calc");
+        var references = FormulaParser.Parse("=LET(x,A1,x+Rate)", context).References;
+
+        var items = references.Select(reference => PrecedentItem.TryFromReference(reference, context)).ToList();
+
+        Assert.Equal(new[] { null, "A1", null, "Rate" }, items.Select(item => item?.Label));
+        Assert.Throws<ArgumentNullException>(() => PrecedentItem.TryFromReference(null!, context));
+        Assert.Throws<ArgumentNullException>(() => PrecedentItem.TryFromReference(references[1], null!));
     }
 
     [Fact]

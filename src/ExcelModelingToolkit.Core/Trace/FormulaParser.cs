@@ -42,21 +42,37 @@ public static class FormulaParser
     private static readonly Regex ExternalRefErrorPattern = new Regex(@"^\[([^\[\]]+)\]#REF!", RegexOptions.CultureInvariant);
 
     // XLParser walks its parse tree recursively, up to about 1 KB of stack per chained range or intersection
-    // operator (A1:A2:A3..., A1 A2 A3...), and a stack overflow cannot be caught: it ends the Excel process. A
-    // formula this short needs under 100 KB, which any caller has left; a longer one parses on LargeStackThread.
+    // operator (A1:A2:A3..., A1 A2 A3...), and a stack overflow cannot be caught: it ends the Excel process. For the
+    // worst formulas this short, XLParser needs about 2-14 KB of stack beyond the caller's, and the Builder's own
+    // recursion is guarded by stack checks; a longer formula parses on LargeStackThread. Those checks are cautious:
+    // on .NET Framework they fail once half the thread's stack is used, which Excel's main thread can reach, so a
+    // parse that fails for want of stack is retried on LargeStackThread.
     private const int InlineLength = 256;
 
     // Excel's limit is 8,192 characters, more once a closed workbook's path is written out. LargeStackThread's
     // stack holds a formula of this length several times over.
     private const int MaxLength = 16384;
 
+    // XLParser's time grows with the square of a run of unary operators (=------...1): on .NET Framework 1,000 take
+    // about 13 ms, 4,000 150 ms and 16,382 (all a formula of MaxLength holds) 4-17 s, while Excel's main thread waits.
+    // Real formulas write two or three in a row at most (--A1 to coerce, -A1%), and no string constant (255
+    // characters at most), sheet name (31) or table column name (255) can hold a run this long, so a formula with a
+    // longer run is rejected unparsed. Then no formula of MaxLength takes more than about 0.25 s.
+    private const int MaxOperatorRun = 1000;
+
     // The files Excel opens as workbooks, for Book.xlsx!Name. (An unsaved workbook has no extension, so Book2!Rate
-    // reads as a sheet-scoped name; the provider resolves that against the open workbooks.)
+    // reads as a sheet-scoped name; the provider resolves that against the open workbooks.) A quoted prefix is
+    // ambiguous: 'My Book.xlsx'!Rate is a workbook-level name in a workbook whose file name has a space, but
+    // 'Import.csv'!Rate can just as well be a name scoped to a sheet called Import.csv. So these extensions mark a
+    // workbook however the prefix is written...
     private static readonly string[] WorkbookExtensions =
     {
-        ".xlsx", ".xlsm", ".xlsb", ".xls", ".xltx", ".xltm", ".xlt", ".xlam", ".xla", ".xlw", ".csv", ".txt", ".prn",
-        ".ods", ".xml", ".slk", ".dif",
+        ".xlsx", ".xlsm", ".xlsb", ".xls", ".xltx", ".xltm", ".xlt", ".xlam", ".xla", ".ods",
     };
+
+    // ...and these, formats that rarely hold a name a formula points to (a text file cannot save one), only when
+    // unquoted. Either way it is a guess the provider checks against the open workbooks and sheets.
+    private static readonly string[] TextFileExtensions = { ".csv", ".txt", ".prn", ".xml", ".slk", ".dif", ".xlw" };
 
     /// <summary>Parses <paramref name="formula"/>, which lives on <paramref name="context"/>'s sheet.</summary>
     /// <param name="formula">The formula text, starting with <c>=</c>.</param>
@@ -89,14 +105,28 @@ public static class FormulaParser
                 "The formula could not be parsed: it is longer than {0:N0} characters.", MaxLength));
         }
 
-        return formula.Length <= InlineLength
-            ? ParseOnCurrentThread(formula, context)
-            : LargeStackThread.Parse(formula, context);
+        if (HasLongOperatorRun(formula))
+        {
+            return ParsedFormula.Failed(formula, context, string.Format(CultureInfo.InvariantCulture,
+                "The formula could not be parsed: it has more than {0:N0} operators in a row.", MaxOperatorRun));
+        }
+
+        if (formula.Length > InlineLength)
+        {
+            return LargeStackThread.Shared.Parse(formula, context);
+        }
+
+        var parsed = ParseOnCurrentThread(formula, context, out var outOfStack);
+        return outOfStack ? LargeStackThread.Shared.Parse(formula, context) : parsed;
     }
 
     // Parse's work, on the calling thread. Internal so tests can run it on a small stack.
-    internal static ParsedFormula ParseOnCurrentThread(string formula, FormulaContext context)
+    internal static ParsedFormula ParseOnCurrentThread(string formula, FormulaContext context) =>
+        ParseOnCurrentThread(formula, context, out _);
+
+    private static ParsedFormula ParseOnCurrentThread(string formula, FormulaContext context, out bool outOfStack)
     {
+        outOfStack = false;
         try
         {
             var root = ExcelFormulaParser.Parse(formula);
@@ -110,8 +140,39 @@ public static class FormulaParser
             // reported the same way: the caller falls back (Trace In can still use Range.DirectPrecedents). So is
             // InsufficientExecutionStackException from the Builder's stack checks, which stop a deep recursion before
             // it overflows.
+            outOfStack = ex is InsufficientExecutionStackException;
             return ParsedFormula.Failed(formula, context, "The formula could not be parsed: " + FirstLine(ex.Message));
         }
+    }
+
+    private static bool HasLongOperatorRun(string formula)
+    {
+        var run = 0;
+        foreach (var character in formula)
+        {
+            switch (character)
+            {
+                case '-':
+                case '+':
+                case '%':
+                    if (++run > MaxOperatorRun)
+                    {
+                        return true;
+                    }
+
+                    break;
+                case ' ':
+                case '\r':
+                case '\n':
+                    // Spaces and line breaks may separate the operators of a run.
+                    break;
+                default:
+                    run = 0;
+                    break;
+            }
+        }
+
+        return false;
     }
 
     private static string FirstLine(string text)
@@ -121,67 +182,142 @@ public static class FormulaParser
     }
 
     /// <summary>
-    /// One background thread with a large stack that parses long formulas, so no formula can overflow the caller's
-    /// stack. It lives as long as the process, so XLParser builds its grammar for it once.
+    /// A background thread with a large stack that parses long formulas, so no formula can overflow the caller's
+    /// stack. <see cref="Shared"/> lives as long as the process, so XLParser builds its grammar for it once; tests make
+    /// their own.
     /// </summary>
-    internal static class LargeStackThread
+    internal sealed class LargeStackThread : IDisposable
     {
-        private const int StackSize = 16 * 1024 * 1024;
+        private const int DefaultStackSize = 16 * 1024 * 1024;
 
-        // A long formula parses in milliseconds. If the grammar ever hangs on one, the caller (Excel's main thread)
-        // gives up once the thread has made no progress for this long and falls back, rather than freezing Excel.
+        private const string TooLong = "the parser took too long.";
+
+        private const string Busy = "the parser is still busy with a formula that took too long.";
+
+        // A long formula parses in well under a second. If the grammar ever hangs on one, the caller (Excel's main
+        // thread) gives up once the thread has made no progress for this long and falls back, rather than freezing
+        // Excel.
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
-        private static readonly BlockingCollection<Request> Requests = Start();
+        private readonly int _stackSize;
+        private readonly object _startLock = new object();
+
+        // Null until the first request starts the thread.
+        private BlockingCollection<Request>? _requests;
 
         // Stopwatch timestamp of the thread's last progress: when it last started or finished a request.
-        private static long _progress = Stopwatch.GetTimestamp();
+        private long _progress = Stopwatch.GetTimestamp();
 
-        public static ParsedFormula Parse(string formula, FormulaContext context) =>
-            Run(() => ParseOnCurrentThread(formula, context), Timeout)
-            ?? ParsedFormula.Failed(formula, context, "The formula could not be parsed: the parser took too long.");
+        // The request the thread is running, or null.
+        private volatile Request? _running;
+
+        internal LargeStackThread(int stackSize)
+        {
+            _stackSize = stackSize;
+        }
+
+        /// <summary>The thread <see cref="FormulaParser.Parse"/> uses. It starts on the first long formula.</summary>
+        public static LargeStackThread Shared { get; } = new LargeStackThread(DefaultStackSize);
+
+        public ParsedFormula Parse(string formula, FormulaContext context) =>
+            Run(() => ParseOnCurrentThread(formula, context),
+                reason => ParsedFormula.Failed(formula, context, "The formula could not be parsed: " + reason), Timeout);
 
         /// <summary>
-        /// Runs <paramref name="work"/> on the thread and waits for its result, or returns null once the thread has
-        /// made no progress for <paramref name="timeout"/>: not on this request, and not on requests queued ahead of
-        /// it (the late result is then dropped). <paramref name="work"/> must not throw.
+        /// Runs <paramref name="work"/> on the thread and waits for its result. Never throws: returns
+        /// <paramref name="fail"/>'s result for a reason instead if the thread cannot start, if <paramref name="work"/>
+        /// throws or returns null, or once the thread has made no progress for <paramref name="timeout"/> (not on this
+        /// request, and not on requests queued ahead of it). A request that times out is abandoned: the thread skips
+        /// it if it has not started it, and drops its late result if it has; while the thread is still running one,
+        /// every request fails at once rather than waiting behind it.
         /// </summary>
-        internal static ParsedFormula? Run(Func<ParsedFormula> work, TimeSpan timeout)
+        internal ParsedFormula Run(Func<ParsedFormula> work, Func<string, ParsedFormula> fail, TimeSpan timeout)
         {
+            if (_running is { Abandoned: true })
+            {
+                // Waiting would only time out again, spinning Excel's main thread for another timeout.
+                return fail(Busy);
+            }
+
+            var requests = Requests(out var startError);
+            if (requests is null)
+            {
+                return fail("the parser could not start: " + startError);
+            }
+
             var request = new Request(work);
-            Requests.Add(request);
+            try
+            {
+                requests.Add(request);
+            }
+            catch (InvalidOperationException)
+            {
+                return fail("the parser has stopped.");
+            }
 
             // Spin rather than block: a blocking wait on Excel's (STA) main thread pumps COM messages, which can
             // re-enter the add-in.
             var queued = Stopwatch.GetTimestamp();
             var limit = (long)(timeout.TotalSeconds * Stopwatch.Frequency);
-            while (request.Result is null)
+            while (!request.IsDone)
             {
+                var running = _running;
+                if (running is not null && running != request && running.Abandoned)
+                {
+                    // Another caller gave up on the request ahead of this one.
+                    request.Abandoned = true;
+                    return fail(Busy);
+                }
+
                 if (Stopwatch.GetTimestamp() - Math.Max(queued, Interlocked.Read(ref _progress)) >= limit)
                 {
-                    return null;
+                    request.Abandoned = true;
+                    return fail(TooLong);
                 }
 
                 Thread.Yield();
             }
 
-            return request.Result;
+            return request.Result ?? fail(request.Error ?? "the parser returned no result.");
         }
 
-        private static BlockingCollection<Request> Start()
+        /// <summary>Stops the thread once it has run the requests already queued.</summary>
+        public void Dispose()
+        {
+            lock (_startLock)
+            {
+                _requests?.CompleteAdding();
+            }
+        }
+
+        // Starts the thread on first use, not in a static initializer: if that fails (in 32-bit Excel, 16 MB of
+        // address space for the stack may not be free), every later call would throw TypeInitializationException. A
+        // failure is not remembered, so the next long formula tries again, once memory may have been freed.
+        private BlockingCollection<Request>? Requests(out string? error)
+        {
+            lock (_startLock)
+            {
+                error = null;
+                if (_requests is null)
+                {
+                    try
+                    {
+                        _requests = Start();
+                    }
+                    catch (Exception ex)
+                    {
+                        error = FirstLine(ex.Message);
+                    }
+                }
+
+                return _requests;
+            }
+        }
+
+        private BlockingCollection<Request> Start()
         {
             var requests = new BlockingCollection<Request>();
-            var thread = new Thread(
-                () =>
-                {
-                    foreach (var request in requests.GetConsumingEnumerable())
-                    {
-                        Interlocked.Exchange(ref _progress, Stopwatch.GetTimestamp());
-                        request.Result = request.Work();
-                        Interlocked.Exchange(ref _progress, Stopwatch.GetTimestamp());
-                    }
-                },
-                StackSize)
+            var thread = new Thread(() => Serve(requests), _stackSize)
             {
                 IsBackground = true,
                 Name = "Formula parser",
@@ -190,9 +326,37 @@ public static class FormulaParser
             return requests;
         }
 
+        private void Serve(BlockingCollection<Request> requests)
+        {
+            foreach (var request in requests.GetConsumingEnumerable())
+            {
+                if (request.Abandoned)
+                {
+                    continue;
+                }
+
+                _running = request;
+                Interlocked.Exchange(ref _progress, Stopwatch.GetTimestamp());
+                try
+                {
+                    request.Result = request.Work();
+                }
+                catch (Exception ex)
+                {
+                    // An exception escaping a background thread ends the process, and the process is Excel.
+                    request.Error = "the parser failed: " + FirstLine(ex.Message);
+                }
+
+                request.IsDone = true;
+                _running = null;
+                Interlocked.Exchange(ref _progress, Stopwatch.GetTimestamp());
+            }
+        }
+
         private sealed class Request
         {
-            private volatile ParsedFormula? _result;
+            private volatile bool _abandoned;
+            private volatile bool _done;
 
             public Request(Func<ParsedFormula> work)
             {
@@ -201,10 +365,21 @@ public static class FormulaParser
 
             public Func<ParsedFormula> Work { get; }
 
-            public ParsedFormula? Result
+            // Result and Error are written before IsDone and read after it; its volatile write and read order them.
+            public ParsedFormula? Result { get; set; }
+
+            public string? Error { get; set; }
+
+            public bool IsDone
             {
-                get => _result;
-                set => _result = value;
+                get => _done;
+                set => _done = value;
+            }
+
+            public bool Abandoned
+            {
+                get => _abandoned;
+                set => _abandoned = value;
             }
         }
     }
@@ -310,7 +485,7 @@ public static class FormulaParser
 
                 case GrammarNames.ReservedName:
                     // A built-in name such as _xlnm.Print_Area: a defined name Excel created.
-                    var reserved = new FormulaReference(FormulaReferenceKind.Name, SourceText(node), Start(node))
+                    var reserved = new FormulaReference(FormulaReferenceKind.Name, _formula, Start(node), Length(node))
                     {
                         Name = SourceText(node),
                         EnclosingReferenceFunction = CurrentReferenceFunction,
@@ -348,8 +523,8 @@ public static class FormulaParser
                 if (inner.Kind == FormulaNodeKind.Reference && inner.Reference is FormulaReference spilled)
                 {
                     spilled.IsSpill = true;
-                    spilled.Text = SourceText(node);
-                    inner.Text = spilled.Text;
+                    spilled.Length = Length(node);
+                    inner.Length = spilled.Length;
                     return inner;
                 }
 
@@ -437,7 +612,7 @@ public static class FormulaParser
             }
 
             References.RemoveRange(count - 2, 2);
-            var reference = new FormulaReference(FormulaReferenceKind.Range, SourceText(node), Start(node))
+            var reference = new FormulaReference(FormulaReferenceKind.Range, _formula, Start(node), Length(node))
             {
                 WorkbookPath = first.WorkbookPath,
                 WorkbookName = first.WorkbookName,
@@ -461,16 +636,17 @@ public static class FormulaParser
 
         // XLParser reads [Book.xlsx]#REF!A1 (a reference into a deleted sheet of another workbook) as the table column
         // [Book.xlsx], spilled, intersected with sheet REF's A1. No real formula has "]#REF!" there otherwise
-        // (an intersection needs a space).
+        // (an intersection needs a space). The pattern is matched in place: every link of a long intersection chain
+        // is checked, and copying each one's text out would be quadratic.
         private bool IsExternalRefError(ParseTreeNode node) =>
             node.Is(GrammarNames.ReferenceFunctionCall) && node.IsIntersection() &&
-            ExternalRefErrorPattern.IsMatch(SourceText(node)) &&
+            ExternalRefErrorPattern.Match(_formula, Start(node), Length(node)).Success &&
             SourceText(node.ChildNodes[2]).StartsWith("REF!", StringComparison.Ordinal);
 
         private FormulaNode ExternalRefError(ParseTreeNode node)
         {
             var workbook = ExternalRefErrorPattern.Match(SourceText(node)).Groups[1].Value;
-            var reference = new FormulaReference(FormulaReferenceKind.RefError, SourceText(node), Start(node))
+            var reference = new FormulaReference(FormulaReferenceKind.RefError, _formula, Start(node), Length(node))
             {
                 WorkbookName = string.Equals(workbook, _context.WorkbookName, StringComparison.OrdinalIgnoreCase) ? null : workbook,
                 EnclosingReferenceFunction = CurrentReferenceFunction,
@@ -486,7 +662,7 @@ public static class FormulaParser
             function.ReturnsReference = ReferenceFunctions.Contains(name);
             if (function.ReturnsReference)
             {
-                DynamicReferences.Add(new DynamicReference(name, function.Text, function.Start));
+                DynamicReferences.Add(new DynamicReference(name, _formula, function.Start, function.Length));
                 _referenceFunctions.Add(name);
             }
 
@@ -553,8 +729,7 @@ public static class FormulaParser
 
         private FormulaNode ReferenceLeaf(ParseTreeNode node, ParserReference parsed)
         {
-            var text = SourceText(node);
-            var reference = new FormulaReference(Kind(parsed.ReferenceType), text, Start(node))
+            var reference = new FormulaReference(Kind(parsed.ReferenceType), _formula, Start(node), Length(node))
             {
                 EnclosingReferenceFunction = CurrentReferenceFunction,
             };
@@ -745,7 +920,7 @@ public static class FormulaParser
         }
 
         private FormulaNode Node(FormulaNodeKind kind, ParseTreeNode node) =>
-            new FormulaNode(kind, SourceText(node), Start(node));
+            new FormulaNode(kind, _formula, Start(node), Length(node));
 
         private FormulaNode Operator(ParseTreeNode node, string op, OperatorFixity fixity)
         {
@@ -763,6 +938,8 @@ public static class FormulaParser
 
         private static int Start(ParseTreeNode node) => node.Span.Location.Position;
 
+        private static int Length(ParseTreeNode node) => node.Span.Length;
+
         private string SourceText(ParseTreeNode node) => _formula.Substring(node.Span.Location.Position, node.Span.Length);
     }
 
@@ -773,7 +950,8 @@ public static class FormulaParser
     internal static (string? Path, string? File, string? Sheet, string? LastSheet) ParsePrefix(string prefix, FormulaReferenceKind kind)
     {
         var text = prefix.EndsWith("!", StringComparison.Ordinal) ? prefix.Substring(0, prefix.Length - 1) : prefix;
-        if (text.Length >= 2 && text[0] == '\'' && text[text.Length - 1] == '\'')
+        var quoted = text.Length >= 2 && text[0] == '\'' && text[text.Length - 1] == '\'';
+        if (quoted)
         {
             text = text.Substring(1, text.Length - 2).Replace("''", "'");
         }
@@ -805,7 +983,7 @@ public static class FormulaParser
             sheetPart = string.Empty;
         }
         else if ((kind == FormulaReferenceKind.Name || kind == FormulaReferenceKind.StructuredReference) &&
-            WorkbookExtensions.Any(extension => text.EndsWith(extension, StringComparison.OrdinalIgnoreCase)))
+            (HasExtension(text, WorkbookExtensions) || (!quoted && HasExtension(text, TextFileExtensions))))
         {
             // Book.xlsx!Name or Book.xlsx!Table1[Col]: a workbook-level name or table in an open workbook. (Cell
             // references into another workbook always have a [Book] part.)
@@ -824,4 +1002,7 @@ public static class FormulaParser
             ? (path, file, sheetPart, null)
             : (path, file, sheetPart.Substring(0, colon), sheetPart.Substring(colon + 1));
     }
+
+    private static bool HasExtension(string file, string[] extensions) =>
+        extensions.Any(extension => file.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
 }
