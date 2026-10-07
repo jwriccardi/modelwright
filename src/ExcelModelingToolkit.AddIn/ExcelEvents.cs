@@ -11,7 +11,8 @@ namespace ExcelModelingToolkit.AddIn;
 /// (a COM connection point on <see cref="AppEvents"/>, so no Office PIA is needed):
 /// <list type="bullet">
 /// <item><c>WorkbookBeforeClose</c>: every snapshot of that workbook (by <c>FullName</c>). If the user then cancels
-/// the close, the history is gone anyway: the safe side.</item>
+/// the close, the history is gone anyway: the safe side. An open Trace In window on a cell of that workbook is
+/// closed too.</item>
 /// <item><c>SheetChange</c> on whole rows or whole columns (a row or column inserted or deleted, or cleared): every
 /// snapshot of that sheet, since its cells may have moved. Other changes are ignored; the restore still checks
 /// every block before writing.</item>
@@ -70,9 +71,26 @@ internal static class ExcelEvents
         _cookie = 0;
     }
 
-    /// <summary>Handles <c>WorkbookBeforeClose</c>. Never throws.</summary>
+    /// <summary>
+    /// Handles <c>WorkbookBeforeClose</c>: closes an open Trace In window whose audited cell is in the workbook, and
+    /// drops the workbook's undo history. Never throws.
+    /// </summary>
     internal static void OnWorkbookBeforeClose(object workbook)
     {
+        if (TraceSession.Current is TraceSession trace)
+        {
+            try
+            {
+                dynamic closing = workbook;
+                string closingName = closing.FullName;
+                trace.OnWorkbookClosing(workbook, closingName);
+            }
+            catch (Exception ex)
+            {
+                DiagnosticsLog.Write("TraceClose", "WorkbookBeforeClose failed", ex.Message);
+            }
+        }
+
         if (Session.Undo.UndoCount + Session.Undo.RedoCount == 0)
         {
             return;

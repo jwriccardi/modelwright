@@ -50,6 +50,14 @@ public static class Commands
     [ExcelCommand(Name = "EmtBlueBlackToggle")]
     public static void EmtBlueBlackToggle() => RunCycle(ActionIds.BlueBlackToggle);
 
+    /// <summary>Trace In: the precedents of the active cell (docs/PLAN.md section 4.5).</summary>
+    [ExcelCommand(Name = "EmtTraceIn")]
+    public static void EmtTraceIn() => TraceCommand.TraceIn(KeyBindings.KeyFor(ActionIds.TraceIn));
+
+    /// <summary>Last Audited Cell: back to the cell Trace In was last opened on.</summary>
+    [ExcelCommand(Name = "EmtLastAuditedCell")]
+    public static void EmtLastAuditedCell() => TraceCommand.LastAuditedCell(KeyBindings.KeyFor(ActionIds.LastAuditedCell));
+
     /// <summary>Shows the product name, version, commit, build date and add-in path.</summary>
     [ExcelCommand(Name = "EmtAbout")]
     public static void EmtAbout()

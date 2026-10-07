@@ -22,10 +22,15 @@ public sealed class PrecedentItem
     /// <param name="valueText">The Value column (the first cell's value for a range), or null.</param>
     /// <param name="canExpand">False if the item has nothing below it (a constant cell, an error).</param>
     /// <param name="argument">The Argument column in evaluate mode (<c>[value_if_true]</c>), or null.</param>
+    /// <param name="hiddenNote">
+    /// Why the target cannot be seen (<c>hidden sheet</c>, <c>hidden rows</c>; see
+    /// <see cref="TraceValueText.HiddenNote"/>), shown as a badge, or null if it is visible.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="label"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="cellCount"/> is below 1.</exception>
     public PrecedentItem(PrecedentKind kind, string label, string? workbook = null, string? sheet = null,
-        string? address = null, long cellCount = 1, string? valueText = null, bool canExpand = true, string? argument = null)
+        string? address = null, long cellCount = 1, string? valueText = null, bool canExpand = true, string? argument = null,
+        string? hiddenNote = null)
     {
         if (cellCount < 1)
         {
@@ -41,6 +46,7 @@ public sealed class PrecedentItem
         ValueText = valueText;
         CanExpand = canExpand;
         Argument = argument;
+        HiddenNote = hiddenNote;
     }
 
     /// <summary>What the item is.</summary>
@@ -66,6 +72,12 @@ public sealed class PrecedentItem
 
     /// <summary>False if the item has nothing below it.</summary>
     public bool CanExpand { get; }
+
+    /// <summary>Why the target cannot be seen (a badge), or null if it is visible.</summary>
+    public string? HiddenNote { get; }
+
+    /// <summary>True if <see cref="HiddenNote"/> is set: the target is on a hidden sheet, row or column.</summary>
+    public bool IsHidden => HiddenNote is not null;
 
     /// <summary>The Argument column text, or null.</summary>
     public string? Argument { get; }

@@ -1,6 +1,6 @@
 # Work plan — Excel Modeling Toolkit
 
-> **Status: Phases 0–3 complete. PRs #1–#4 were merged on 2026-10-06 after the owner tested in Excel, and the automated smoke test `tests/excel-smoke/undo-smoke.ps1` passes. Phase 4 (Trace In) is in progress: 4a core logic, then 4b the trace window.**
+> **Status: Phases 0–3 complete. PRs #1–#4 were merged on 2026-10-06 after the owner tested in Excel, and the automated smoke test `tests/excel-smoke/undo-smoke.ps1` passes. Phase 4 (Trace In) is in progress: 4a (core logic, PR #5) merged on 2026-10-07; 4b (the Trace In window and its Excel provider, classic mode) is in progress. Evaluate mode (Ctrl+E) follows as 4c.**
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
 > - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
@@ -342,6 +342,7 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 - 2026-09-29: Phase 2 (scaffold) approved and started on branch `phase2/scaffold`. The web colors-only edition is logged as a future development.
 - 2026-10-06: Phase 3 merged (#2, #3, #4) after owner Excel testing. The undo restore's macro-context re-check was removed (it was unreliable). Automated Excel smoke test added. Phase 4 started.
 - 2026-10-06: Phase 4a (Trace In core): formula parser on XLParser 1.7.5 (MPL-2.0) + Irony (MIT), reference extraction, formula structure, precedent tree model and audit history.
+- 2026-10-07: PR #5 (4a) merged after two review rounds (stack safety on long formulas, parser timeouts, linear memory, name and table ids). Phase 4b started; Evaluate mode split out as 4c.
 - 2026-09-28: **Phase 1 complete.** ADR-0002 accepted. D11: cross-workbook trace essential. K1c: Office.js key names work; recorded as the v2 path.
 - 2026-09-28: Undo decision (owner): Macabacus parity in v1, with the Office.js hybrid for native undo as a v2 candidate. §4.4 rewritten from spike K2/K2b/K2c.
 - 2026-09-28: Trace In spec from the Macabacus help PDF (research/07): the Argument column, Evaluate mode as v1.1, the focus/hook keyboard model, and the K4 variant C.

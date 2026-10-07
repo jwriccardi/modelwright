@@ -28,6 +28,11 @@
     <!-- Late-bound COM (dynamic) for the Excel object model; part of .NET Framework, nothing to pack. -->
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Windows.Forms" />
+    <!-- WPF for the Trace In window (code and runtime-loaded XAML; no markup compilation). Part of .NET Framework. -->
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
   </ItemGroup>
 
   <ItemGroup>

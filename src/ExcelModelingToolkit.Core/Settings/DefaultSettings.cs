@@ -133,6 +133,8 @@ public static class DefaultSettings
         [ActionIds.FontColorCycle] = "Ctrl+'",
         [ActionIds.FillColorCycle] = "Ctrl+Shift+K",
         [ActionIds.BlueBlackToggle] = "Ctrl+;",
+        [ActionIds.TraceIn] = "Ctrl+Shift+[",
+        [ActionIds.LastAuditedCell] = "Ctrl+Shift+\\",
         [ActionIds.About] = "Ctrl+Alt+Shift+F12",
     };
 }

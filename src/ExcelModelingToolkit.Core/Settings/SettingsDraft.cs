@@ -124,8 +124,8 @@ public sealed class SettingsDraft
     }
 
     /// <summary>
-    /// The name people see for <paramref name="actionId"/>: its cycle's display name, <c>About</c>, or the id
-    /// itself.
+    /// The name people see for <paramref name="actionId"/>: its cycle's display name, else
+    /// <see cref="ActionIds.DisplayName"/> (<c>Trace In</c>, <c>About</c>, or the id itself).
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="actionId"/> is null.</exception>
     public string ActionDisplayName(string actionId)
@@ -141,7 +141,7 @@ public sealed class SettingsDraft
             return cycle.DisplayName;
         }
 
-        return string.Equals(actionId, ActionIds.About, StringComparison.Ordinal) ? "About" : actionId;
+        return ActionIds.DisplayName(actionId);
     }
 
     /// <summary>

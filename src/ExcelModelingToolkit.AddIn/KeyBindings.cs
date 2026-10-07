@@ -25,6 +25,8 @@ internal static class KeyBindings
         [ActionIds.FontColorCycle] = nameof(Commands.EmtFontColorCycle),
         [ActionIds.FillColorCycle] = nameof(Commands.EmtFillColorCycle),
         [ActionIds.BlueBlackToggle] = nameof(Commands.EmtBlueBlackToggle),
+        [ActionIds.TraceIn] = nameof(Commands.EmtTraceIn),
+        [ActionIds.LastAuditedCell] = nameof(Commands.EmtLastAuditedCell),
         [ActionIds.About] = nameof(Commands.EmtAbout),
     };
 

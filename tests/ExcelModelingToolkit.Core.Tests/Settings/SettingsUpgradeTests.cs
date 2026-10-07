@@ -61,6 +61,43 @@ public class SettingsUpgradeTests
         Assert.Equal("Alt+Shift+;", result.Settings.Keymap[ActionIds.RatioCycle]);
         Assert.Contains("keymap: 'BinaryCycle' is new: added with its default key Ctrl+Shift+Y and the default Binary cycle.", result.Notes);
         Assert.Contains("keymap: 'RatioCycle' is new: added with its default key Alt+Shift+; and the default Ratio cycle.", result.Notes);
+        Assert.Equal("Ctrl+Shift+[", result.Settings.Keymap[ActionIds.TraceIn]);
+        Assert.Equal("Ctrl+Shift+\\", result.Settings.Keymap[ActionIds.LastAuditedCell]);
+        Assert.Contains("keymap: 'TraceIn' is new: added with its default key Ctrl+Shift+[.", result.Notes);
+        Assert.Contains("keymap: 'LastAuditedCell' is new: added with its default key Ctrl+Shift+\\.", result.Notes);
+    }
+
+    [Fact]
+    public void A_file_from_before_trace_in_gains_the_trace_actions_and_no_cycle()
+    {
+        // A Phase 3 file: every cycle action listed, no trace actions.
+        var json = ToolkitSettings.Defaults().ToJson()
+            .Replace("    \"TraceIn\": \"Ctrl+Shift+[\",\r\n", string.Empty)
+            .Replace("    \"LastAuditedCell\": \"Ctrl+Shift+\\\\\",\r\n", string.Empty);
+        Assert.DoesNotContain("TraceIn", json);
+        Assert.DoesNotContain("LastAuditedCell", json);
+
+        var result = ToolkitSettings.FromJson(json);
+
+        Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
+        Assert.Empty(result.Problems);
+        Assert.Equal(
+            new[] { "keymap: 'TraceIn' is new: added with its default key Ctrl+Shift+[.", "keymap: 'LastAuditedCell' is new: added with its default key Ctrl+Shift+\\." },
+            result.Notes);
+        Assert.Equal(Defaults.ToJson(), result.Settings.ToJson());
+    }
+
+    [Fact]
+    public void A_trace_action_whose_default_key_is_taken_is_left_unbound()
+    {
+        var json = EarlierBuildJson.Replace("\"FontColorCycle\": \"Ctrl+'\"", "\"FontColorCycle\": \"Ctrl+{\"");
+
+        var result = ToolkitSettings.FromJson(json);
+
+        Assert.Empty(result.Problems);
+        Assert.Equal(string.Empty, result.Settings.Keymap[ActionIds.TraceIn]);
+        Assert.Contains("keymap: 'TraceIn' is new and left unbound: its default key Ctrl+Shift+[ is assigned to 'FontColorCycle'.", result.Notes);
+        Assert.Equal("Ctrl+Shift+\\", result.Settings.Keymap[ActionIds.LastAuditedCell]);
     }
 
     [Fact]
@@ -88,7 +125,7 @@ public class SettingsUpgradeTests
         }
 
         Assert.Contains("cycle 'DateCycle': replaced the provisional placeholder list with the default Date list.", result.Notes);
-        Assert.Equal(6, result.Notes.Count); // four placeholders, two new actions
+        Assert.Equal(8, result.Notes.Count); // four placeholders, four new actions
     }
 
     [Fact]
@@ -102,7 +139,7 @@ public class SettingsUpgradeTests
         Assert.Single(settings.FindCycle(ActionIds.FontColorCycle)!.Items);
         Assert.Equal(string.Empty, settings.Keymap[ActionIds.BlueBlackToggle]);
         Assert.Equal("Ctrl+Shift+1", settings.Keymap[ActionIds.NumberCycle]);
-        Assert.Equal(11, settings.Keymap.Count);
+        Assert.Equal(13, settings.Keymap.Count);
         Assert.Equal(500, settings.UndoCellCap);
         Assert.False(settings.DiagnosticsLog);
     }

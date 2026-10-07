@@ -4,14 +4,15 @@ using System.Globalization;
 using System.IO;
 using ExcelModelingToolkit.Core.Formatting;
 using ExcelModelingToolkit.Core.Settings;
+using ExcelModelingToolkit.Core.Trace;
 using ExcelModelingToolkit.Core.Undo;
 
 namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
 /// In-memory state for the Excel session: the settings in use, the cycle engine (with its learned number format
-/// aliases), each cycle's last <see cref="CycleState"/> and our formatting undo stack. Main thread only; nothing
-/// here is persisted.
+/// aliases), each cycle's last <see cref="CycleState"/>, our formatting undo stack and the Trace In audit history.
+/// Main thread only; nothing here is persisted.
 /// </summary>
 internal static class Session
 {
@@ -29,6 +30,9 @@ internal static class Session
     /// emptied when the add-in closes.
     /// </summary>
     public static UndoManager Undo { get; } = new UndoManager();
+
+    /// <summary>The cells Trace In was opened on, newest last, for Last Audited Cell (docs/PLAN.md section 4.5).</summary>
+    public static AuditHistory Audits { get; } = new AuditHistory();
 
     /// <summary>
     /// Whether the settings file is what <see cref="Settings"/> came from: <see cref="SettingsLoadOutcome.Loaded"/>

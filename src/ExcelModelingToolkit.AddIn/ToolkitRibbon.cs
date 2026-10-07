@@ -46,6 +46,10 @@ public class ToolkitRibbon : ExcelRibbon
       <tab id='emtTab' label='{name}'>
         <group id='emtFormatGroup' label='Format'>{format}
         </group>
+        <group id='emtAuditGroup' label='Audit'>
+          <button id='emtTraceIn' label='Trace In' screentip='Trace the precedents of the active cell' supertip='Default key: Ctrl+Shift+[. Opens the precedents of the active cell. Up and Down go to each precedent (on other sheets and in other workbooks, opening closed ones read-only); Right expands, Left goes back up; Enter closes and stays, Esc closes and returns to the audited cell. F2 edits the cell with the window open.' onAction='OnTraceIn' />
+          <button id='emtLastAuditedCell' label='Last Audited Cell' screentip='Go back to the last audited cell' supertip='Default key: Ctrl+Shift+\. Goes back to the cell Trace In was last opened on. Press again to go further back (up to 20 audits).' onAction='OnLastAuditedCell' />
+        </group>
         <group id='emtToolkitGroup' label='Toolkit'>
           <button id='emtSettings' label='Settings…' screentip='Edit cycles, shortcuts and options' supertip='Edit, reorder and preview the cycles, change shortcuts, and import, export or reset your settings.' onAction='OnSettings' />
           <button id='emtAbout' label='About' screentip='About {name}' onAction='OnAbout' />
@@ -67,6 +71,13 @@ public class ToolkitRibbon : ExcelRibbon
         var actionId = control.Tag;
         ExcelAsyncUtil.QueueAsMacro(() => Commands.RunCycleFromRibbon(actionId));
     }
+
+    /// <summary>Ribbon callback for Trace In.</summary>
+    public void OnTraceIn(IRibbonControl control) => ExcelAsyncUtil.QueueAsMacro(() => TraceCommand.TraceIn("ribbon"));
+
+    /// <summary>Ribbon callback for Last Audited Cell.</summary>
+    public void OnLastAuditedCell(IRibbonControl control) =>
+        ExcelAsyncUtil.QueueAsMacro(() => TraceCommand.LastAuditedCell("ribbon"));
 
     /// <summary>
     /// Ribbon callback for Settings: the dialog runs as a macro, so its preview can call Excel. The click time lets

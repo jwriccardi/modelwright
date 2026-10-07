@@ -321,6 +321,23 @@ public class SettingsDraftTests
     }
 
     [Fact]
+    public void Trace_actions_are_listed_with_their_names_and_keys()
+    {
+        var draft = DefaultDraft();
+
+        Assert.Equal("Trace In", draft.ActionDisplayName(ActionIds.TraceIn));
+        Assert.Equal("Last Audited Cell", draft.ActionDisplayName(ActionIds.LastAuditedCell));
+        Assert.Equal("Ctrl+Shift+[", draft.GetKey(ActionIds.TraceIn));
+        Assert.Equal("Ctrl+Shift+\\", draft.GetKey(ActionIds.LastAuditedCell));
+        Assert.Null(draft.KeyProblem(ActionIds.TraceIn));
+        Assert.Null(draft.KeyProblem(ActionIds.LastAuditedCell));
+
+        draft.SetKey(ActionIds.About, "Ctrl+{");
+
+        Assert.Equal("Ctrl+{ is pressed with the same keys as Ctrl+Shift+[ (Trace In) on a US keyboard.", draft.KeyProblem(ActionIds.About));
+    }
+
+    [Fact]
     public void Action_display_names_come_from_the_cycles()
     {
         var draft = DefaultDraft();
@@ -561,6 +578,7 @@ public class SettingsDraftTests
     public void Key_problems_name_a_key_pressed_the_same_way_on_a_us_keyboard()
     {
         var draft = DefaultDraft();
+        draft.SetKey(ActionIds.TraceIn, string.Empty); // frees its default, Ctrl+Shift+[
 
         draft.SetKey(ActionIds.DateCycle, "Ctrl+{");
         draft.SetKey(ActionIds.About, "Ctrl+Shift+[");

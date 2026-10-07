@@ -592,10 +592,27 @@ public class ToolkitSettingsTests
         Assert.False(ActionIds.IsKnown("about"));
         Assert.True(ActionIds.IsCycle(ActionIds.BinaryCycle));
         Assert.True(ActionIds.IsCycle(ActionIds.RatioCycle));
-        Assert.Equal(11, ActionIds.All.Count);
+        Assert.True(ActionIds.IsKnown(ActionIds.TraceIn));
+        Assert.True(ActionIds.IsKnown(ActionIds.LastAuditedCell));
+        Assert.False(ActionIds.IsCycle(ActionIds.TraceIn));
+        Assert.False(ActionIds.IsCycle(ActionIds.LastAuditedCell));
+        Assert.Equal(13, ActionIds.All.Count);
         Assert.Equal(10, ActionIds.CycleActions.Count);
-        Assert.Equal(new[] { ActionIds.BinaryCycle, ActionIds.RatioCycle }, ActionIds.AddedLater);
+        Assert.Equal(new[] { ActionIds.TraceIn, ActionIds.LastAuditedCell }, ActionIds.TraceActions);
+        Assert.Equal(new[] { ActionIds.TraceIn, ActionIds.LastAuditedCell, ActionIds.About }, ActionIds.All.Skip(10));
+        Assert.Equal(new[] { ActionIds.BinaryCycle, ActionIds.RatioCycle, ActionIds.TraceIn, ActionIds.LastAuditedCell }, ActionIds.AddedLater);
         Assert.All(ActionIds.AddedLater, a => Assert.True(ActionIds.IsKnown(a)));
+    }
+
+    [Theory]
+    [InlineData(ActionIds.TraceIn, "Trace In")]
+    [InlineData(ActionIds.LastAuditedCell, "Last Audited Cell")]
+    [InlineData(ActionIds.About, "About")]
+    [InlineData(ActionIds.NumberCycle, ActionIds.NumberCycle)]
+    [InlineData("Unknown", "Unknown")]
+    public void ActionIds_name_the_actions_that_are_not_cycles(string actionId, string expected)
+    {
+        Assert.Equal(expected, ActionIds.DisplayName(actionId));
     }
 
     private static ToolkitSettings WithKeymap(Dictionary<string, string> keymap) =>

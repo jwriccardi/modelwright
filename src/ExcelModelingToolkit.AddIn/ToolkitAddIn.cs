@@ -5,8 +5,9 @@ namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
 /// Add-in lifetime: loads the settings, registers their keyboard shortcuts, installs the Ctrl+Z / Ctrl+Y hook and
-/// connects the Excel events that invalidate undo history on load; disconnects them, removes the hook, empties our
-/// undo stacks and restores Excel's defaults for our keys on unload.
+/// connects the Excel events that invalidate undo history on load; closes any Trace In window (removing its key hook),
+/// disconnects the events, removes the hook, empties our undo stacks and restores Excel's defaults for our keys on
+/// unload.
 /// </summary>
 public sealed class ToolkitAddIn : IExcelAddIn
 {
@@ -47,6 +48,8 @@ public sealed class ToolkitAddIn : IExcelAddIn
     /// <inheritdoc />
     public void AutoClose()
     {
+        TraceSession.Current?.Abort("add-in closing");
+        TraceKeyHook.Uninstall();
         ExcelEvents.Disconnect();
         UndoKeyHook.Uninstall();
         Session.Undo.Clear();

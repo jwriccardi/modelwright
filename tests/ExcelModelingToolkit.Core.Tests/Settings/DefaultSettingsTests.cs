@@ -29,6 +29,8 @@ public class DefaultSettingsTests
         { ActionIds.FontColorCycle, "Ctrl+'", "^'" },
         { ActionIds.FillColorCycle, "Ctrl+Shift+K", "^+k" },
         { ActionIds.BlueBlackToggle, "Ctrl+;", "^;" },
+        { ActionIds.TraceIn, "Ctrl+Shift+[", "^+{[}" },
+        { ActionIds.LastAuditedCell, "Ctrl+Shift+\\", "^+\\" },
         { ActionIds.About, "Ctrl+Alt+Shift+F12", "^%+{F12}" },
     };
 
@@ -44,7 +46,7 @@ public class DefaultSettingsTests
     public void Keymap_binds_every_action_and_nothing_else()
     {
         Assert.Equal(ActionIds.All.OrderBy(a => a), Defaults.Keymap.Keys.OrderBy(a => a));
-        Assert.Equal(11, Defaults.Keymap.Count);
+        Assert.Equal(13, Defaults.Keymap.Count);
     }
 
     [Fact]
