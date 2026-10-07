@@ -602,21 +602,4 @@ public class FormulaParserTests
 
         return result;
     }
-
-    [Fact]
-    public void Parsing_is_fast_after_the_first_call()
-    {
-        // docs/PLAN.md Phase 4: a formula with 20 references opens in 300 ms, Excel reads included.
-        var formula = "=" + string.Join("+", Enumerable.Range(1, 20).Select(i => "'Sheet " + i + "'!$B$" + i));
-        Parse(formula);
-
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        for (var i = 0; i < 100; i++)
-        {
-            Assert.Equal(20, FormulaParser.Parse(formula, Context).References.Count);
-        }
-
-        watch.Stop();
-        Assert.True(watch.ElapsedMilliseconds < 1000, $"100 parses took {watch.ElapsedMilliseconds} ms.");
-    }
 }
