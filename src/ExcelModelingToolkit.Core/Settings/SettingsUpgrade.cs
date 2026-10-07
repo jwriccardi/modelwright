@@ -18,7 +18,8 @@ internal static class SettingsUpgrade
     /// <list type="bullet">
     /// <item>
     /// An action of <see cref="ActionIds.AddedLater"/> that the keymap does not mention (the file predates it) gets
-    /// its default key, or stays unbound if another action already uses that key; a cycle action also gets its
+    /// its default key, or stays unbound if another action already uses that key (or one pressed the same way on a
+    /// US keyboard, which <see cref="ToolkitSettings.Validate"/> rejects); a cycle action also gets its
     /// default cycle, appended, if there is no cycle with its id. If a cycle's id differs from the action's only in
     /// case, the action stays unbound instead (adding the cycle would make the ids clash).
     /// </item>
@@ -80,7 +81,10 @@ internal static class SettingsUpgrade
             : new ToolkitSettings(cycles, keymap, settings.UndoCellCap, settings.DiagnosticsLog);
     }
 
-    /// <summary>The action whose key in <paramref name="keymap"/> is <paramref name="chord"/>, or null. Keys that do not parse are skipped.</summary>
+    /// <summary>
+    /// The action whose key in <paramref name="keymap"/> is <paramref name="chord"/> or the same keys on a US keyboard
+    /// (<see cref="KeyChord.ToUsKeys"/>), or null. Keys that do not parse are skipped.
+    /// </summary>
     private static string? OwnerOf(KeyChord chord, Dictionary<string, string> keymap)
     {
         foreach (var entry in keymap)
@@ -92,7 +96,7 @@ internal static class SettingsUpgrade
 
             try
             {
-                if (KeyChord.Parse(entry.Value) == chord)
+                if (KeyChord.Parse(entry.Value).ToUsKeys() == chord.ToUsKeys())
                 {
                     return entry.Key;
                 }

@@ -157,6 +157,20 @@ public class SettingsUpgradeTests
     }
 
     [Fact]
+    public void A_new_action_whose_default_key_is_taken_on_a_us_keyboard_is_left_unbound()
+    {
+        // Alt+: is typed with Alt+Shift+; on a US keyboard, which Validate rejects as a clash.
+        var json = EarlierBuildJson.Replace("\"NumberCycle\": \"Ctrl+Shift+1\"", "\"NumberCycle\": \"Alt+:\"");
+
+        var result = ToolkitSettings.FromJson(json);
+
+        Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
+        Assert.Empty(result.Problems);
+        Assert.Equal(string.Empty, result.Settings.Keymap[ActionIds.RatioCycle]);
+        Assert.Contains("keymap: 'RatioCycle' is new and left unbound: its default key Alt+Shift+; is assigned to 'NumberCycle'.", result.Notes);
+    }
+
+    [Fact]
     public void A_users_own_cycle_with_a_new_actions_id_is_kept_and_bound()
     {
         var json = EarlierBuildJson.Replace(

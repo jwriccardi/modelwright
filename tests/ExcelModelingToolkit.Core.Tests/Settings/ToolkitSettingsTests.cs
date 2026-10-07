@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using ExcelModelingToolkit.Core.Formatting;
+using ExcelModelingToolkit.Core.Keys;
 using ExcelModelingToolkit.Core.Settings;
 using Xunit;
 
@@ -181,6 +182,39 @@ public class ToolkitSettingsTests
         var problem = Assert.Single(settings.Validate());
 
         Assert.Equal("keymap: Ctrl+Shift+K is assigned to both 'NumberCycle' and 'FillColorCycle'.", problem);
+    }
+
+    [Theory]
+    [InlineData("Ctrl+{", "Ctrl+Shift+[")]
+    [InlineData("Ctrl++", "Ctrl+Shift+=")]
+    [InlineData("Ctrl+Shift+{", "Ctrl+{")]
+    public void Keys_pressed_the_same_way_on_a_us_keyboard_are_reported(string first, string second)
+    {
+        var settings = WithKeymap(new Dictionary<string, string>
+        {
+            [ActionIds.NumberCycle] = first,
+            [ActionIds.FillColorCycle] = second,
+        });
+
+        var problem = Assert.Single(settings.Validate());
+
+        var usKeys = KeyChord.Parse(first).ToUsKeys();
+        Assert.Equal(
+            $"keymap: {KeyChord.Parse(first)} ('NumberCycle') and {KeyChord.Parse(second)} ('FillColorCycle') are the same keys on a US keyboard ({usKeys}).",
+            problem);
+    }
+
+    [Fact]
+    public void Shifted_and_unshifted_keys_of_different_keys_are_not_duplicates()
+    {
+        var settings = WithKeymap(new Dictionary<string, string>
+        {
+            [ActionIds.NumberCycle] = "Ctrl+{",
+            [ActionIds.FillColorCycle] = "Ctrl+[",
+            [ActionIds.DateCycle] = "Ctrl+Shift+]",
+        });
+
+        Assert.Empty(settings.Validate());
     }
 
     [Fact]
@@ -510,6 +544,21 @@ public class ToolkitSettingsTests
             "settings.json is 1,048,577 bytes; the limit is 1,048,576 bytes (1 MB). It is probably not a settings file.",
             Assert.Single(result.Problems));
         Assert.Throws<ArgumentNullException>(() => ToolkitSettings.FromFileBytes(null!));
+    }
+
+    [Fact]
+    public void File_problems_name_the_given_file()
+    {
+        var badUtf8 = ToolkitSettings.FromFileBytes(new byte[] { 0x7B, 0xFF, 0x7D }, "team.json");
+        var badUtf16 = ToolkitSettings.FromFileBytes(new byte[] { 0xFF, 0xFE, 0x00, 0xDC }, "team.json");
+        var tooLarge = ToolkitSettings.FromFileBytes(new byte[ToolkitSettings.MaxFileBytes + 1], "team.json");
+
+        Assert.Equal("team.json is not valid UTF-8; save it as UTF-8.", Assert.Single(badUtf8.Problems));
+        Assert.Equal("team.json is not valid UTF-16; save it as UTF-8.", Assert.Single(badUtf16.Problems));
+        Assert.StartsWith("team.json is 1,048,577 bytes;", Assert.Single(tooLarge.Problems));
+        Assert.StartsWith("x.json is 1,048,577 bytes;", ToolkitSettings.CheckFileSize(ToolkitSettings.MaxFileBytes + 1, "x.json"));
+        Assert.Throws<ArgumentNullException>(() => ToolkitSettings.FromFileBytes(new byte[0], null!));
+        Assert.Throws<ArgumentNullException>(() => ToolkitSettings.CheckFileSize(0, null!));
     }
 
     [Fact]

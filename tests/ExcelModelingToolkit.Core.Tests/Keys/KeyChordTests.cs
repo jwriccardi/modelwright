@@ -393,6 +393,42 @@ public class KeyChordTests
         Assert.True(none == null);
     }
 
+    [Theory]
+    [InlineData("Ctrl+{", "Ctrl+Shift+[")]
+    [InlineData("Ctrl+Shift+{", "Ctrl+Shift+[")]
+    [InlineData("Ctrl++", "Ctrl+Shift+=")]
+    [InlineData("Ctrl+|", "Ctrl+Shift+\\")]
+    [InlineData("Alt+~", "Alt+Shift+`")]
+    [InlineData("Ctrl+!", "Ctrl+Shift+1")]
+    [InlineData("Ctrl+)", "Ctrl+Shift+0")]
+    [InlineData("Ctrl+_", "Ctrl+Shift+-")]
+    [InlineData("Ctrl+:", "Ctrl+Shift+;")]
+    [InlineData("Ctrl+\"", "Ctrl+Shift+'")]
+    [InlineData("Ctrl+<", "Ctrl+Shift+,")]
+    [InlineData("Ctrl+>", "Ctrl+Shift+.")]
+    [InlineData("Ctrl+?", "Ctrl+Shift+/")]
+    [InlineData("Ctrl+Alt+^", "Ctrl+Alt+Shift+6")]
+    public void Shifted_punctuation_is_the_shifted_key_on_a_us_keyboard(string chord, string usKeys)
+    {
+        Assert.Equal(usKeys, KeyChord.Parse(chord).ToUsKeys().ToDisplayString());
+        Assert.Equal(KeyChord.Parse(usKeys), KeyChord.Parse(chord).ToUsKeys());
+        Assert.NotEqual(KeyChord.Parse(usKeys), KeyChord.Parse(chord)); // still different chords to OnKey
+    }
+
+    [Theory]
+    [InlineData("Ctrl+Shift+[")]
+    [InlineData("Ctrl+[")]
+    [InlineData("Ctrl+K")]
+    [InlineData("Ctrl+Shift+1")]
+    [InlineData("Alt+PgUp")]
+    [InlineData("Ctrl+F2")]
+    public void Unshifted_keys_are_their_own_us_keys(string chord)
+    {
+        var parsed = KeyChord.Parse(chord);
+
+        Assert.Same(parsed, parsed.ToUsKeys());
+    }
+
     /// <summary>Parses <paramref name="human"/>, checks the OnKey string, and round-trips the display string.</summary>
     private static void AssertChord(string human, string onKey)
     {

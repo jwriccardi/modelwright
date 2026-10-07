@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
@@ -46,6 +47,7 @@ public class ToolkitRibbon : ExcelRibbon
         <group id='emtFormatGroup' label='Format'>{format}
         </group>
         <group id='emtToolkitGroup' label='Toolkit'>
+          <button id='emtSettings' label='Settings…' screentip='Edit cycles, shortcuts and options' supertip='Edit, reorder and preview the cycles, change shortcuts, and import, export or reset your settings.' onAction='OnSettings' />
           <button id='emtAbout' label='About' screentip='About {name}' onAction='OnAbout' />
           <button id='emtReregisterKeys' label='Re-register shortcuts' screentip='Take back every shortcut from other add-ins' onAction='OnReregisterKeys' />
           <button id='emtOpenSettings' label='Open settings file' screentip='Edit settings.json' onAction='OnOpenSettings' />
@@ -64,6 +66,16 @@ public class ToolkitRibbon : ExcelRibbon
     {
         var actionId = control.Tag;
         ExcelAsyncUtil.QueueAsMacro(() => Commands.RunCycleFromRibbon(actionId));
+    }
+
+    /// <summary>
+    /// Ribbon callback for Settings: the dialog runs as a macro, so its preview can call Excel. The click time lets
+    /// a second click, queued while the dialog was open, be ignored once it has closed.
+    /// </summary>
+    public void OnSettings(IRibbonControl control)
+    {
+        var clickedAt = Environment.TickCount;
+        ExcelAsyncUtil.QueueAsMacro(() => Commands.ShowSettings(clickedAt));
     }
 
     /// <summary>Ribbon callback for the About button.</summary>

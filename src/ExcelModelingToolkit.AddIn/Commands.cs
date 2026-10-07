@@ -107,8 +107,8 @@ public static class Commands
             var load = Session.Reload(out var keptPrevious);
             if (keptPrevious)
             {
-                var count = load.Problems.Count;
-                var first = count > 0 ? load.Problems[0] : "see the diagnostics log";
+                var count = load.Result.Problems.Count;
+                var first = count > 0 ? load.Result.Problems[0] : "see the diagnostics log";
                 StatusBar.Show(
                     $"{ProductInfo.Name}: settings.json has {count} problem{(count == 1 ? string.Empty : "s")}; " +
                     $"still using the previous settings: {first}");
@@ -129,13 +129,60 @@ public static class Commands
     [ExcelCommand(Name = "EmtOpenSettings")]
     public static void EmtOpenSettings()
     {
+        var problem = OpenSettingsFile();
+        StatusBar.Show(problem is null
+            ? $"{ProductInfo.Name}: opened settings.json. Save your changes, then click Reload settings."
+            : $"{ProductInfo.Name}: {problem}");
+    }
+
+    /// <summary>
+    /// Opens the settings dialog on the current settings. OK saves settings.json and applies it at once, exactly as
+    /// Reload settings would (<see cref="Session.ApplySaved"/>), then re-binds the shortcuts; Cancel changes nothing.
+    /// Runs as a macro (the ribbon queues it, see <see cref="ShowSettings"/>), so the dialog's number format preview
+    /// can call Excel.
+    /// </summary>
+    [ExcelCommand(Name = "EmtSettings")]
+    public static void EmtSettings() => ShowSettings(Environment.TickCount);
+
+    /// <summary>
+    /// <see cref="EmtSettings"/>, requested at <paramref name="requestedAt"/> (<see cref="Environment.TickCount"/>):
+    /// a request made before the last settings dialog closed (a second click queued while it was open) is ignored,
+    /// and one made while a dialog is open brings that dialog to the front.
+    /// </summary>
+    internal static void ShowSettings(int requestedAt)
+    {
+        try
+        {
+            var saved = SettingsDialog.Edit(Session.Settings, requestedAt);
+            if (saved is null)
+            {
+                return;
+            }
+
+            Session.ApplySaved(saved.Value.Settings, saved.Value.Save);
+            var failures = KeyBindings.Apply(Session.Settings.Keymap);
+            StatusBar.Show(Session.Summarize(
+                $"{ProductInfo.Name}: settings saved, {KeyBindings.Count} shortcuts registered", null, failures));
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("SettingsDialogFailed", ex.ToString());
+            StatusBar.Show($"{ProductInfo.Name}: the settings dialog failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Opens settings.json in the default editor for .json files (Notepad if there is none), creating it first if
+    /// needed. Returns null on success, else the reason. Never throws.
+    /// </summary>
+    internal static string? OpenSettingsFile()
+    {
         try
         {
             var problem = SettingsStore.EnsureExists();
             if (problem is not null)
             {
-                StatusBar.Show($"{ProductInfo.Name}: {problem}");
-                return;
+                return problem;
             }
 
             try
@@ -148,11 +195,11 @@ public static class Commands
                 Process.Start(new ProcessStartInfo("notepad.exe", "\"" + SettingsStore.FilePath + "\"") { UseShellExecute = true })?.Dispose();
             }
 
-            StatusBar.Show($"{ProductInfo.Name}: opened settings.json. Save your changes, then click Reload settings.");
+            return null;
         }
         catch (Exception ex)
         {
-            StatusBar.Show($"{ProductInfo.Name}: could not open {SettingsStore.FilePath}: {ex.Message}");
+            return $"could not open {SettingsStore.FilePath}: {ex.Message}";
         }
     }
 
