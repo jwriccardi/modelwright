@@ -53,7 +53,7 @@ public class ToolkitRibbon : ExcelRibbon
           <button id='emtOpenSettings' label='Open settings file' screentip='Edit settings.json' onAction='OnOpenSettings' />
           <button id='emtReloadSettings' label='Reload settings' screentip='Apply your changes to settings.json' onAction='OnReloadSettings' />
           <button id='emtUndoFormatting' label='Undo formatting' screentip='Undo our last formatting change' supertip='Undoes the last cycle even when Ctrl+Z would go to Excel (Excel has newer changes to undo).' onAction='OnUndoFormatting' />
-          <button id='emtRedoFormatting' label='Redo formatting' screentip='Redo our last undone formatting change' supertip='Redoes the last undone cycle. Once you change something in Excel after an undo, there is nothing left to redo.' onAction='OnRedoFormatting' />
+          <button id='emtRedoFormatting' label='Redo formatting' screentip='Redo our last undone formatting change' supertip='Redoes the last undone formatting change. Ctrl+Y drops this redo history once you change something in Excel after an undo.' onAction='OnRedoFormatting' />
         </group>
       </tab>
     </tabs>
@@ -94,7 +94,7 @@ public class ToolkitRibbon : ExcelRibbon
     public void OnUndoFormatting(IRibbonControl control) =>
         ExcelAsyncUtil.QueueAsMacro(() => UndoCommand.Run(UndoKey.Undo, "ribbon"));
 
-    /// <summary>Ribbon callback for Redo formatting: our stack, unless Excel's history shows it is stale (<see cref="UndoCommand"/>).</summary>
+    /// <summary>Ribbon callback for Redo formatting: always acts on our redo stack (<see cref="UndoCommand"/>).</summary>
     public void OnRedoFormatting(IRibbonControl control) =>
         ExcelAsyncUtil.QueueAsMacro(() => UndoCommand.Run(UndoKey.Redo, "ribbon"));
 }

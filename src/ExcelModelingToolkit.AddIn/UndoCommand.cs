@@ -31,7 +31,7 @@ internal static class UndoCommand
         string result;
         try
         {
-            result = Execute(key, source, ref label, ref blocks);
+            result = Execute(key, ref label, ref blocks);
         }
         catch (Exception ex)
         {
@@ -61,38 +61,18 @@ internal static class UndoCommand
             result);
     }
 
-    private static string Execute(UndoKey key, string source, ref string label, ref int blocks)
+    private static string Execute(UndoKey key, ref string label, ref int blocks)
     {
         var verb = Verb(key);
 
-        // Excel's history is newer than our last restore if it has anything (our restores and cycles wipe it).
-        var native = NativeUndoState.Query(withRepeat: false);
-        var nativeNewer = native.Undo == true || (key == UndoKey.Redo && native.Redo == true);
-        if (source == "key" && nativeNewer)
-        {
-            // The key was ours when pressed, but the user changed something in Excel before this ran.
-            var cleared = Session.Undo.ClearRedo();
-            var keyName = key == UndoKey.Undo ? "Ctrl+Z" : "Ctrl+Y";
-            StatusBar.Show($"{ProductInfo.Name}: {keyName} was not applied: you changed something in Excel since. Press {keyName} again.");
-            return $"aborted: Excel has newer changes (dropped {cleared} redo)";
-        }
-
-        var stale = 0;
-        if (native.Undo == true || native.Redo == true)
-        {
-            // The ribbon acts on our stack whatever Excel holds, but our redo entries are stale.
-            stale = Session.Undo.ClearRedo();
-        }
-
+        // Excel's native undo/redo state is NOT re-checked here. Read from macro context it is unreliable: right after
+        // a native undo, GetEnabledMso("Undo") reports true although Excel's undo list is empty (owner test,
+        // 2026-10-07: the hook read undo=false redo=true, this command read undo=true redo=true moments later).
+        // The keyboard hook reads it outside macro context and makes the decision (incl. redo staleness);
+        // the ribbon buttons are an explicit request to act on our stack.
         var snapshot = Session.Undo.Peek(key);
         if (snapshot is null)
         {
-            if (stale > 0)
-            {
-                StatusBar.Show($"Can't redo: Excel has newer changes, so the formatting redo history was cleared.");
-                return $"refused: redo stale (dropped {stale})";
-            }
-
             StatusBar.Show($"{ProductInfo.Name}: no formatting change to {verb}.");
             return "nothing to " + verb;
         }
@@ -189,7 +169,7 @@ internal static class UndoCommand
         var left = Session.Undo.Count(key).ToString(CultureInfo.InvariantCulture);
         StatusBar.Show(
             $"{(key == UndoKey.Undo ? "Undo" : "Redo")}: {snapshot.Label} on {snapshot.WorkbookName}!{snapshot.Sheet} ({left} left)");
-        return stale > 0 ? $"ok (dropped {stale} stale redo)" : "ok";
+        return "ok";
     }
 
     /// <summary>

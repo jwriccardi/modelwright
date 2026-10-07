@@ -155,6 +155,9 @@ Decided by the owner on 2026-09-28, based on spike K2/K2b/K2c (see `docs/spike-r
   - At restore time it checks Excel's undo state again.
   - Holding Ctrl+Z undoes one step, and Excel's own Undo/Redo buttons are not intercepted.
 - **Memory.** A global block budget evicts the oldest snapshots.
+- **Owner test finding (2026-10-07).** Read from *macro context* (inside an add-in command), `GetEnabledMso("Undo")` is unreliable right after a native undo: it reported `true` while Excel's undo list was empty. The reading taken in the hook (outside macro context) was correct.
+  - The restore therefore no longer re-checks Excel's state. The hook alone decides, including whether our redo is stale.
+  - The ribbon Undo/Redo buttons always act on our stack.
 
 **v2 candidate: the hybrid (spike K2d, deferred).**
 - The Excel-DNA hook catches the exact keys and forwards the command over a local channel to a small Office.js add-in in the same Excel.
