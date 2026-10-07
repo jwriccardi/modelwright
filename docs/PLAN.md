@@ -334,6 +334,7 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 ## Changelog
 - 2026-09-28: first draft (Office.js, ADR-0001).
 - 2026-09-28: build-vs-fork recommendation added (research/04).
+- 2026-10-07: Phase 3 merged (#2, #3, #4) after owner Excel testing. The undo restore's macro-context re-check was removed (it was unreliable). Automated Excel smoke test added. Phase 4 started.
 - 2026-09-29: PR #1 (scaffold) merged. Phase 3 approved and split into 3a, 3b and 3c.
 - 2026-09-29: Phase 2 (scaffold) approved and started on branch `phase2/scaffold`. The web colors-only edition is logged as a future development.
 - 2026-09-28: **Phase 1 complete.** ADR-0002 accepted. D11: cross-workbook trace essential. K1c: Office.js key names work; recorded as the v2 path.
