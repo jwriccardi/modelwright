@@ -19,6 +19,18 @@
       "notes": "Excel-DNA runtime library, embedded in the packed .xll."
     },
     {
+      "id": "XLParser",
+      "license": "MPL-2.0",
+      "buildOnly": false,
+      "notes": "Excel formula parser for Trace In (Core). Shipped unmodified in the packed .xll; MPL-2.0 is file-level copyleft, so THIRD_PARTY_NOTICES.md says where its source is. Any change to XLParser's own files must be published under MPL-2.0."
+    },
+    {
+      "id": "Irony",
+      "license": "MIT",
+      "buildOnly": false,
+      "notes": "Parser framework XLParser is built on; transitive. Shipped in the packed .xll."
+    },
+    {
       "id": "Microsoft.NETFramework.ReferenceAssemblies",
       "license": "MIT",
       "licenseUrl": "https://github.com/Microsoft/dotnet/blob/master/LICENSE",
