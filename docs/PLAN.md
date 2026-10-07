@@ -1,6 +1,6 @@
 # Work plan — Excel Modeling Toolkit
 
-> **Status: Phase 2 complete (PR #1 merged 2026-09-29). Phase 3 approved and in progress, in three slices (3a cycles, 3b undo, 3c settings dialog).** Phase 0 (decisions) and Phase 1 (decision spikes) are complete; see [`spike-results.md`](spike-results.md). No product code has been written; the spikes are throwaway code in `spikes/`.
+> **Status: Phases 0–3 complete. PRs #1–#4 were merged on 2026-10-07 after the owner tested in Excel, and the automated smoke test `tests/excel-smoke/undo-smoke.ps1` passes. Phase 4 (Trace In) is in progress: 4a core logic, then 4b the trace window.**
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
 > - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
