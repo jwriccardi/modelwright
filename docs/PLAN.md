@@ -1,6 +1,6 @@
 # Work plan — Excel Modeling Toolkit
 
-> **Status: Phase 2 complete (PR #1 merged 2026-09-29). Phase 3 approved and in progress, in three slices (3a cycles, 3b undo, 3c settings dialog).** Phase 0 (decisions) and Phase 1 (decision spikes) are complete; see [`spike-results.md`](spike-results.md). No product code has been written; the spikes are throwaway code in `spikes/`.
+> **Status: Phases 0–3 complete. PRs #1–#4 were merged on 2026-10-06 after the owner tested in Excel, and the automated smoke test `tests/excel-smoke/undo-smoke.ps1` passes. Phase 4 (Trace In) is in progress: 4a core logic, then 4b the trace window.**
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
 > - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
@@ -155,7 +155,7 @@ Decided by the owner on 2026-09-28, based on spike K2/K2b/K2c (see `docs/spike-r
   - At restore time it checks Excel's undo state again.
   - Holding Ctrl+Z undoes one step, and Excel's own Undo/Redo buttons are not intercepted.
 - **Memory.** A global block budget evicts the oldest snapshots.
-- **Owner test finding (2026-10-07).** Read from *macro context* (inside an add-in command), `GetEnabledMso("Undo")` is unreliable right after a native undo: it reported `true` while Excel's undo list was empty. The reading taken in the hook (outside macro context) was correct.
+- **Owner test finding (2026-10-06).** Read from *macro context* (inside an add-in command), `GetEnabledMso("Undo")` is unreliable right after a native undo: it reported `true` while Excel's undo list was empty. The reading taken in the hook (outside macro context) was correct.
   - The restore therefore no longer re-checks Excel's state. The hook alone decides, including whether our redo is stale.
   - The ribbon Undo/Redo buttons always act on our stack.
 
@@ -282,6 +282,10 @@ Defaults are the **Macabacus factory settings** (v9.9.5 settings export, 2026-10
   - A formula with ≤ 20 references opens in ≤ 300 ms.
   - Up/Down navigation takes ≤ 100 ms per step.
   - Last Audited Cell returns correctly through 3 levels of history.
+- **Notes for 4b (from the 4a review):**
+  - When the parser reports a failure (an immediately called `LAMBDA(...)(...)`, or a stack guard tripping on a huge formula), fall back to `Range.DirectPrecedents`.
+  - `Book2!Rate` is ambiguous. It can mean a sheet `Book2`, or a workbook-level name in an unsaved `Book2`. If that sheet doesn't exist, try an open workbook with that name.
+  - Only INDEX, OFFSET, INDIRECT and CHOOSE are flagged as returning references (per spec). XLOOKUP, IF, IFS, SWITCH and LET can also return references, as in `=SUM(A1:XLOOKUP(...))`. Candidate for v1.1.
 
 ### Phase 5 — Release
 - **Contents:**
@@ -336,6 +340,8 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 - 2026-09-28: build-vs-fork recommendation added (research/04).
 - 2026-09-29: PR #1 (scaffold) merged. Phase 3 approved and split into 3a, 3b and 3c.
 - 2026-09-29: Phase 2 (scaffold) approved and started on branch `phase2/scaffold`. The web colors-only edition is logged as a future development.
+- 2026-10-06: Phase 3 merged (#2, #3, #4) after owner Excel testing. The undo restore's macro-context re-check was removed (it was unreliable). Automated Excel smoke test added. Phase 4 started.
+- 2026-10-06: Phase 4a (Trace In core): formula parser on XLParser 1.7.5 (MPL-2.0) + Irony (MIT), reference extraction, formula structure, precedent tree model and audit history.
 - 2026-09-28: **Phase 1 complete.** ADR-0002 accepted. D11: cross-workbook trace essential. K1c: Office.js key names work; recorded as the v2 path.
 - 2026-09-28: Undo decision (owner): Macabacus parity in v1, with the Office.js hybrid for native undo as a v2 candidate. §4.4 rewritten from spike K2/K2b/K2c.
 - 2026-09-28: Trace In spec from the Macabacus help PDF (research/07): the Argument column, Evaluate mode as v1.1, the focus/hook keyboard model, and the K4 variant C.

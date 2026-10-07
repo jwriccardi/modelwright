@@ -13,7 +13,7 @@
     <ExcelDnaCreate64BitAddIn>true</ExcelDnaCreate64BitAddIn>
     <RunExcelDnaPack>true</RunExcelDnaPack>
     <!-- net48 does not pack project references automatically; list every shipped dependency here. -->
-    <ExcelAddInInclude>ExcelModelingToolkit.Core.dll</ExcelAddInInclude>
+    <ExcelAddInInclude>ExcelModelingToolkit.Core.dll;XLParser.dll;Irony.dll</ExcelAddInInclude>
 
     <!-- The version stamp (short git SHA) is added by the StampVersion target below. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
