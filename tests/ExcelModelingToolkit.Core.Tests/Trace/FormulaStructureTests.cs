@@ -22,9 +22,7 @@ public class FormulaStructureTests
     [Fact]
     public void Macabacus_example_has_the_documented_top_level_nodes()
     {
-        var root = Structure(MacabacusExample);
-
-        var top = root.TraceChildren;
+        var top = FormulaParser.Parse(MacabacusExample, Context).TopLevelNodes;
 
         Assert.Equal(new[] { "(B2+C2/D2)", "IF(E2>0,F2+G2,SUM(H2:J2))", "(K2+L2-ABS(M2))", "PRODUCT(N2:T2,U2)", "V2" },
             top.Select(node => node.Text));
@@ -33,11 +31,42 @@ public class FormulaStructureTests
             top.Select(node => node.Kind));
     }
 
+    [Theory]
+    [InlineData("=A1", "A1", FormulaNodeKind.Reference)]
+    [InlineData("=Rate", "Rate", FormulaNodeKind.Reference)]
+    [InlineData("=A1#", "A1#", FormulaNodeKind.Reference)]
+    [InlineData("=SUM(A1,B1)", "SUM(A1,B1)", FormulaNodeKind.Function)]
+    [InlineData("=(A1+B1)", "(A1+B1)", FormulaNodeKind.Group)]
+    [InlineData("=SUM(A1)+0", "SUM(A1)", FormulaNodeKind.Function)]
+    [InlineData("=-A1", "A1", FormulaNodeKind.Reference)]
+    public void Top_level_node_is_the_root_itself_unless_it_is_an_operator(string formula, string text, FormulaNodeKind kind)
+    {
+        var top = FormulaParser.Parse(formula, Context).TopLevelNodes;
+
+        Assert.Equal(text, top.Single().Text);
+        Assert.Equal(kind, top.Single().Kind);
+    }
+
+    [Fact]
+    public void Top_level_nodes_of_an_operator_root_are_its_operands()
+    {
+        Assert.Equal(new[] { "A1", "B1" }, FormulaParser.Parse("=A1+B1", Context).TopLevelNodes.Select(node => node.Text));
+        Assert.Empty(FormulaParser.Parse("=5", Context).TopLevelNodes);
+        Assert.Empty(FormulaParser.Parse("=SUM(A1", Context).TopLevelNodes);
+    }
+
+    [Fact]
+    public void Function_root_traces_to_its_arguments()
+    {
+        var sum = FormulaParser.Parse("=SUM(A1,B1)", Context).TopLevelNodes.Single();
+
+        Assert.Equal(new[] { "A1", "B1" }, sum.TraceChildren.Select(node => node.Text));
+    }
+
     [Fact]
     public void Macabacus_example_IF_arguments_carry_tooltip_parameter_names()
     {
-        var root = Structure(MacabacusExample);
-        var function = root.TraceChildren[1];
+        var function = FormulaParser.Parse(MacabacusExample, Context).TopLevelNodes[1];
 
         Assert.Equal("IF", function.FunctionName);
         Assert.Equal(new[] { "E2>0", "F2+G2", "SUM(H2:J2)" }, function.TraceChildren.Select(node => node.Text));
@@ -50,7 +79,7 @@ public class FormulaStructureTests
     [Fact]
     public void Operator_argument_traces_to_its_references_not_its_constants()
     {
-        var test = Structure(MacabacusExample).TraceChildren[1].Children[0];
+        var test = FormulaParser.Parse(MacabacusExample, Context).TopLevelNodes[1].Children[0];
 
         Assert.Equal(">", test.Operator);
         Assert.Equal(OperatorFixity.Infix, test.Fixity);
@@ -60,7 +89,7 @@ public class FormulaStructureTests
     [Fact]
     public void Group_traces_to_the_operands_inside_it()
     {
-        var group = Structure(MacabacusExample).TraceChildren[2];
+        var group = FormulaParser.Parse(MacabacusExample, Context).TopLevelNodes[2];
 
         Assert.Equal(new[] { "K2", "L2", "ABS(M2)" }, group.TraceChildren.Select(node => node.Text));
         Assert.Single(group.Children);
@@ -156,8 +185,7 @@ public class FormulaStructureTests
     [Fact]
     public void Reference_returning_functions_are_marked()
     {
-        var root = Structure("=INDEX(A1:C3,2,2)+OFFSET(A1,1,1)+SUM(A1)");
-        var functions = root.TraceChildren;
+        var functions = FormulaParser.Parse("=INDEX(A1:C3,2,2)+OFFSET(A1,1,1)+SUM(A1)", Context).TopLevelNodes;
 
         Assert.Equal(new[] { true, true, false }, functions.Select(node => node.ReturnsReference));
     }
@@ -237,6 +265,27 @@ public class FormulaStructureTests
         Assert.Equal(FormulaNodeKind.Group, group.Kind);
         Assert.Equal("(A1)", group.Text);
         Assert.Equal(FormulaNodeKind.Reference, group.Children.Single().Kind);
+    }
+
+    [Fact]
+    public void Chained_range_operators_make_one_bounding_range()
+    {
+        var parsed = FormulaParser.Parse("=SUM(A1:B2:C3)", Context);
+        var range = parsed.Structure!.Children.Single();
+
+        Assert.Equal(FormulaNodeKind.Reference, range.Kind);
+        Assert.Equal("A1:B2:C3", range.Text);
+        Assert.Same(parsed.References.Single(), range.Reference);
+        Assert.Equal("A1:C3", range.Reference!.Address);
+    }
+
+    [Fact]
+    public void Range_operator_between_sheets_stays_an_operator()
+    {
+        var range = Structure("=SUM(Sheet2!A1:B2:C3)").Children.Single();
+
+        Assert.Equal(":", range.Operator);
+        Assert.Equal(new[] { "Sheet2!A1:B2", "C3" }, range.Children.Select(node => node.Text));
     }
 
     [Fact]

@@ -1,7 +1,12 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
+using System.Threading;
 using ExcelModelingToolkit.Core.Undo;
 using Irony.Parsing;
 using XLParser;
@@ -21,7 +26,9 @@ namespace ExcelModelingToolkit.Core.Trace;
 /// </para>
 /// <para>
 /// Thread-safe: XLParser keeps one parser per thread. The first parse on a thread builds the grammar (about
-/// 0.1 s); later parses take well under a millisecond.
+/// 0.1 s); later parses take well under a millisecond. Formulas longer than a few hundred characters parse on a
+/// background thread with a large stack (the caller waits), since XLParser's recursion could overflow the caller's.
+/// No formula, however long or deeply nested, can overflow the stack: the result is parsed, or a failure.
 /// </para>
 /// </remarks>
 public static class FormulaParser
@@ -32,8 +39,24 @@ public static class FormulaParser
     private static readonly HashSet<string> ReferenceFunctions =
         new HashSet<string>(StringComparer.Ordinal) { "INDEX", "OFFSET", "INDIRECT", "CHOOSE" };
 
+    private static readonly Regex ExternalRefErrorPattern = new Regex(@"^\[([^\[\]]+)\]#REF!", RegexOptions.CultureInvariant);
+
+    // XLParser walks its parse tree recursively, up to about 1 KB of stack per chained range or intersection
+    // operator (A1:A2:A3..., A1 A2 A3...), and a stack overflow cannot be caught: it ends the Excel process. A
+    // formula this short needs under 100 KB, which any caller has left; a longer one parses on LargeStackThread.
+    private const int InlineLength = 256;
+
+    // Excel's limit is 8,192 characters, more once a closed workbook's path is written out. LargeStackThread's
+    // stack holds a formula of this length several times over.
+    private const int MaxLength = 16384;
+
+    // The files Excel opens as workbooks, for Book.xlsx!Name. (An unsaved workbook has no extension, so Book2!Rate
+    // reads as a sheet-scoped name; the provider resolves that against the open workbooks.)
     private static readonly string[] WorkbookExtensions =
-        { ".xlsx", ".xlsm", ".xlsb", ".xls", ".xltx", ".xltm", ".xlt", ".xlam", ".xla", ".csv" };
+    {
+        ".xlsx", ".xlsm", ".xlsb", ".xls", ".xltx", ".xltm", ".xlt", ".xlam", ".xla", ".xlw", ".csv", ".txt", ".prn",
+        ".ods", ".xml", ".slk", ".dif",
+    };
 
     /// <summary>Parses <paramref name="formula"/>, which lives on <paramref name="context"/>'s sheet.</summary>
     /// <param name="formula">The formula text, starting with <c>=</c>.</param>
@@ -60,6 +83,20 @@ public static class FormulaParser
             return ParsedFormula.Failed(formula, context, "Not a formula: it must start with '=' and have an expression.");
         }
 
+        if (formula.Length > MaxLength)
+        {
+            return ParsedFormula.Failed(formula, context, string.Format(CultureInfo.InvariantCulture,
+                "The formula could not be parsed: it is longer than {0:N0} characters.", MaxLength));
+        }
+
+        return formula.Length <= InlineLength
+            ? ParseOnCurrentThread(formula, context)
+            : LargeStackThread.Parse(formula, context);
+    }
+
+    // Parse's work, on the calling thread. Internal so tests can run it on a small stack.
+    internal static ParsedFormula ParseOnCurrentThread(string formula, FormulaContext context)
+    {
         try
         {
             var root = ExcelFormulaParser.Parse(formula);
@@ -70,7 +107,9 @@ public static class FormulaParser
         catch (Exception ex)
         {
             // ArgumentException is XLParser's documented failure. Anything else from the third-party grammar is
-            // reported the same way: the caller falls back (Trace In can still use Range.DirectPrecedents).
+            // reported the same way: the caller falls back (Trace In can still use Range.DirectPrecedents). So is
+            // InsufficientExecutionStackException from the Builder's stack checks, which stop a deep recursion before
+            // it overflows.
             return ParsedFormula.Failed(formula, context, "The formula could not be parsed: " + FirstLine(ex.Message));
         }
     }
@@ -79,6 +118,95 @@ public static class FormulaParser
     {
         var end = text.IndexOfAny(new[] { '\r', '\n' });
         return end < 0 ? text : text.Substring(0, end);
+    }
+
+    /// <summary>
+    /// One background thread with a large stack that parses long formulas, so no formula can overflow the caller's
+    /// stack. It lives as long as the process, so XLParser builds its grammar for it once.
+    /// </summary>
+    internal static class LargeStackThread
+    {
+        private const int StackSize = 16 * 1024 * 1024;
+
+        // A long formula parses in milliseconds. If the grammar ever hangs on one, the caller (Excel's main thread)
+        // gives up once the thread has made no progress for this long and falls back, rather than freezing Excel.
+        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+
+        private static readonly BlockingCollection<Request> Requests = Start();
+
+        // Stopwatch timestamp of the thread's last progress: when it last started or finished a request.
+        private static long _progress = Stopwatch.GetTimestamp();
+
+        public static ParsedFormula Parse(string formula, FormulaContext context) =>
+            Run(() => ParseOnCurrentThread(formula, context), Timeout)
+            ?? ParsedFormula.Failed(formula, context, "The formula could not be parsed: the parser took too long.");
+
+        /// <summary>
+        /// Runs <paramref name="work"/> on the thread and waits for its result, or returns null once the thread has
+        /// made no progress for <paramref name="timeout"/>: not on this request, and not on requests queued ahead of
+        /// it (the late result is then dropped). <paramref name="work"/> must not throw.
+        /// </summary>
+        internal static ParsedFormula? Run(Func<ParsedFormula> work, TimeSpan timeout)
+        {
+            var request = new Request(work);
+            Requests.Add(request);
+
+            // Spin rather than block: a blocking wait on Excel's (STA) main thread pumps COM messages, which can
+            // re-enter the add-in.
+            var queued = Stopwatch.GetTimestamp();
+            var limit = (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+            while (request.Result is null)
+            {
+                if (Stopwatch.GetTimestamp() - Math.Max(queued, Interlocked.Read(ref _progress)) >= limit)
+                {
+                    return null;
+                }
+
+                Thread.Yield();
+            }
+
+            return request.Result;
+        }
+
+        private static BlockingCollection<Request> Start()
+        {
+            var requests = new BlockingCollection<Request>();
+            var thread = new Thread(
+                () =>
+                {
+                    foreach (var request in requests.GetConsumingEnumerable())
+                    {
+                        Interlocked.Exchange(ref _progress, Stopwatch.GetTimestamp());
+                        request.Result = request.Work();
+                        Interlocked.Exchange(ref _progress, Stopwatch.GetTimestamp());
+                    }
+                },
+                StackSize)
+            {
+                IsBackground = true,
+                Name = "Formula parser",
+            };
+            thread.Start();
+            return requests;
+        }
+
+        private sealed class Request
+        {
+            private volatile ParsedFormula? _result;
+
+            public Request(Func<ParsedFormula> work)
+            {
+                Work = work;
+            }
+
+            public Func<ParsedFormula> Work { get; }
+
+            public ParsedFormula? Result
+            {
+                get => _result;
+                set => _result = value;
+            }
+        }
     }
 
     /// <summary>Walks XLParser's tree once, building the structure and collecting references in source order.</summary>
@@ -117,9 +245,18 @@ public static class FormulaParser
 
         public FormulaNode Build(ParseTreeNode node)
         {
+            // The recursion follows the formula's nesting. Operator chains, the nesting a formula can repeat
+            // thousands of times, are built in a loop (InfixChain); for anything else nested too deeply this check
+            // throws (and Parse reports a failure) before the stack overflows.
+            RuntimeHelpers.EnsureSufficientExecutionStack();
             if (_parserReferences.TryGetValue(node, out var parserReference))
             {
                 return ReferenceLeaf(node, parserReference);
+            }
+
+            if (IsExternalRefError(node))
+            {
+                return ExternalRefError(node);
             }
 
             var children = node.ChildNodes;
@@ -219,14 +356,9 @@ public static class FormulaParser
                 return WithChildren(Operator(node, "#", OperatorFixity.Postfix), inner);
             }
 
-            if (node.IsIntersection())
+            if (node.IsIntersection() || node.IsBinaryOperation())
             {
-                return WithChildren(Operator(node, " ", OperatorFixity.Infix), Build(children[0]), Build(children[2]));
-            }
-
-            if (node.IsBinaryOperation())
-            {
-                return WithChildren(Operator(node, SourceText(children[1]), OperatorFixity.Infix), Build(children[0]), Build(children[2]));
+                return InfixChain(node);
             }
 
             if (node.IsUnaryPrefixOperation())
@@ -240,6 +372,110 @@ public static class FormulaParser
             }
 
             return null;
+        }
+
+        // A1+A2+...+An parses left-nested: ((A1+A2)+...)+An, n levels deep, and Excel's 8,192 characters allow
+        // thousands of terms. So the left operands are followed in a loop, and the operator nodes built bottom-up
+        // (the tree keeps the same shape, and references stay in source order).
+        private FormulaNode InfixChain(ParseTreeNode node)
+        {
+            var chain = new List<ParseTreeNode> { node };
+            var first = Unwrap(node.ChildNodes[0]);
+            while (IsInfix(first))
+            {
+                chain.Add(first);
+                first = Unwrap(first.ChildNodes[0]);
+            }
+
+            var result = Build(first);
+            for (var index = chain.Count - 1; index >= 0; index--)
+            {
+                var operation = chain[index];
+                var children = operation.ChildNodes;
+                var op = operation.IsIntersection() ? " " : SourceText(children[1]);
+                var right = Build(children[2]);
+                result = (op == ":" ? BoundingRange(operation, result, right) : null) ??
+                    WithChildren(Operator(operation, op, OperatorFixity.Infix), result, right);
+            }
+
+            return result;
+        }
+
+        // Steps through the single-child Formula / Reference wrappers Build passes straight through.
+        private ParseTreeNode Unwrap(ParseTreeNode node)
+        {
+            while ((node.Is(GrammarNames.Formula) || node.Is(GrammarNames.Reference)) && node.ChildNodes.Count == 1 &&
+                !node.IsParentheses() && !_parserReferences.ContainsKey(node))
+            {
+                node = node.ChildNodes[0];
+            }
+
+            return node;
+        }
+
+        // True for a node Operation would build as a binary operator or intersection.
+        private bool IsInfix(ParseTreeNode node) =>
+            (node.Is(GrammarNames.FunctionCall) || node.Is(GrammarNames.ReferenceFunctionCall)) &&
+            !_parserReferences.ContainsKey(node) && !IsExternalRefError(node) && !node.IsNamedFunction() &&
+            !node.IsUnion() && !(node.ChildNodes.Count == 2 && node.ChildNodes[1].Term.Name == "#") &&
+            (node.IsIntersection() || node.IsBinaryOperation());
+
+        // A1:B2:C3 is the range operator applied to the reference A1:B2 and the cell C3; on one sheet its result is
+        // the bounding rectangle, A1:C3, which replaces both as one reference. Null when the operands are not two
+        // cell or range references on the same sheet.
+        private FormulaNode? BoundingRange(ParseTreeNode node, FormulaNode left, FormulaNode right)
+        {
+            var count = References.Count;
+            if (left.Reference is not FormulaReference first || right.Reference is not FormulaReference second ||
+                first.Area is not CellRect a || second.Area is not CellRect b || !IsCellOrRange(first) ||
+                !IsCellOrRange(second) || first.IsSpill || second.IsSpill || !SameText(first.Sheet, second.Sheet) ||
+                !SameText(first.LastSheet, second.LastSheet) || !SameText(first.WorkbookName, second.WorkbookName) ||
+                !SameText(first.WorkbookPath, second.WorkbookPath) || count < 2 ||
+                !ReferenceEquals(References[count - 2], first) || !ReferenceEquals(References[count - 1], second))
+            {
+                return null;
+            }
+
+            References.RemoveRange(count - 2, 2);
+            var reference = new FormulaReference(FormulaReferenceKind.Range, SourceText(node), Start(node))
+            {
+                WorkbookPath = first.WorkbookPath,
+                WorkbookName = first.WorkbookName,
+                Sheet = first.Sheet,
+                LastSheet = first.LastSheet,
+                EnclosingReferenceFunction = first.EnclosingReferenceFunction,
+            };
+            SetAddress(reference, Corner(Math.Min(a.Row, b.Row), Math.Min(a.Column, b.Column)),
+                Corner(Math.Max(a.LastRow, b.LastRow), Math.Max(a.LastColumn, b.LastColumn)));
+            return Leaf(node, reference);
+        }
+
+        private static bool IsCellOrRange(FormulaReference reference) =>
+            reference.Kind == FormulaReferenceKind.Cell || reference.Kind == FormulaReferenceKind.Range;
+
+        private static bool SameText(string? first, string? second) =>
+            string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
+
+        private static string Corner(int row, int column) =>
+            CellRect.ColumnName(column) + row.ToString(CultureInfo.InvariantCulture);
+
+        // XLParser reads [Book.xlsx]#REF!A1 (a reference into a deleted sheet of another workbook) as the table column
+        // [Book.xlsx], spilled, intersected with sheet REF's A1. No real formula has "]#REF!" there otherwise
+        // (an intersection needs a space).
+        private bool IsExternalRefError(ParseTreeNode node) =>
+            node.Is(GrammarNames.ReferenceFunctionCall) && node.IsIntersection() &&
+            ExternalRefErrorPattern.IsMatch(SourceText(node)) &&
+            SourceText(node.ChildNodes[2]).StartsWith("REF!", StringComparison.Ordinal);
+
+        private FormulaNode ExternalRefError(ParseTreeNode node)
+        {
+            var workbook = ExternalRefErrorPattern.Match(SourceText(node)).Groups[1].Value;
+            var reference = new FormulaReference(FormulaReferenceKind.RefError, SourceText(node), Start(node))
+            {
+                WorkbookName = string.Equals(workbook, _context.WorkbookName, StringComparison.OrdinalIgnoreCase) ? null : workbook,
+                EnclosingReferenceFunction = CurrentReferenceFunction,
+            };
+            return Leaf(node, reference);
         }
 
         private FormulaNode Function(ParseTreeNode spanNode, ParseTreeNode call, string? prefix)
@@ -324,6 +560,13 @@ public static class FormulaParser
             };
 
             var prefixNode = FindPrefix(node);
+            if (prefixNode is not null && prefixNode.ChildNodes.Any(child => child.Is(GrammarNames.TokenRefError)))
+            {
+                // #REF!A1: Excel's text for a reference into a deleted sheet. The address no longer means anything.
+                reference.Kind = FormulaReferenceKind.RefError;
+                return Leaf(node, reference);
+            }
+
             var prefix = prefixNode is null ? default : ParsePrefix(SourceText(prefixNode), reference.Kind);
             reference.WorkbookPath = prefix.Path;
             reference.WorkbookName = prefix.File;
@@ -483,6 +726,7 @@ public static class FormulaParser
         // The first Prefix node (Sheet1!, 'My Sheet'!, [Book.xlsx]Sheet1!, 'C:\dir\[Book.xlsx]Sheet1'!) in a reference.
         private static ParseTreeNode? FindPrefix(ParseTreeNode node)
         {
+            RuntimeHelpers.EnsureSufficientExecutionStack();
             if (node.Is(GrammarNames.Prefix))
             {
                 return node;
@@ -537,9 +781,15 @@ public static class FormulaParser
         string? path = null;
         string? file = null;
         var sheetPart = text;
-        var open = text.IndexOf('[');
-        var close = open < 0 ? -1 : text.IndexOf(']', open);
-        if (close > open)
+
+        // Sheet names cannot contain [ ] \ /, and file names cannot contain \ /: so the workbook's closing bracket is
+        // the last ']', if no separator follows it, and its opening bracket follows the last separator before it. The
+        // folders may have brackets of their own: C:\Deals [2024]\[Book.xlsx]Sheet1.
+        var close = text.LastIndexOf(']');
+        var open = close < 0 || text.IndexOfAny(new[] { '\\', '/' }, close) >= 0
+            ? -1
+            : text.LastIndexOfAny(new[] { '\\', '/' }, close) + 1;
+        if (open >= 0 && text[open] == '[')
         {
             // [Book.xlsx]Sheet1 or C:\dir\[Book.xlsx]Sheet1
             path = open > 0 ? text.Substring(0, open) : null;

@@ -280,14 +280,19 @@ public sealed class PrecedentTree
         node.IsLoaded = true;
     }
 
-    // Replaces a MoreCells node with the next page of its range.
+    // Replaces a MoreCells node with the next page of its range. A node already replaced (a stale row) does nothing.
     private bool LoadNextPage(PrecedentNode more)
     {
         var parent = more.Parent!;
-        var page = new List<PrecedentNode>();
-        AddPage(parent, more.PagedRange!, more.NextCell, page);
         var siblings = parent.ChildList!;
         var index = siblings.IndexOf(more);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var page = new List<PrecedentNode>();
+        AddPage(parent, more.PagedRange!, more.NextCell, page);
         siblings.RemoveAt(index);
         siblings.InsertRange(index, page);
         if (ReferenceEquals(Selected, more))
@@ -386,17 +391,24 @@ public sealed class PrecedentTree
         return -1;
     }
 
-    private static void AddVisible(PrecedentNode node, List<PrecedentNode> into)
+    // Depth-first, with a loop rather than recursion so no depth limit can overflow the stack.
+    private static void AddVisible(PrecedentNode root, List<PrecedentNode> into)
     {
-        into.Add(node);
-        if (!node.IsExpanded)
+        var pending = new Stack<PrecedentNode>();
+        pending.Push(root);
+        while (pending.Count > 0)
         {
-            return;
-        }
+            var node = pending.Pop();
+            into.Add(node);
+            if (!node.IsExpanded)
+            {
+                continue;
+            }
 
-        foreach (var child in node.Children)
-        {
-            AddVisible(child, into);
+            for (var index = node.Children.Count - 1; index >= 0; index--)
+            {
+                pending.Push(node.Children[index]);
+            }
         }
     }
 }

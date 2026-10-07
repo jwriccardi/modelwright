@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading;
 using ExcelModelingToolkit.Core.Trace;
 using ExcelModelingToolkit.Core.Undo;
 using Xunit;
@@ -242,6 +243,13 @@ public class FormulaParserTests
     [InlineData("'C:\\a b\\[It''s.xlsx]S 1'!", "C:\\a b\\", "It's.xlsx", "S 1", null)]
     [InlineData("'C:\\dir\\Book.xlsx'!", "C:\\dir\\", "Book.xlsx", null, null)]
     [InlineData("'https://x.com/a/[B.xlsx]S'!", "https://x.com/a/", "B.xlsx", "S", null)]
+    [InlineData("'C:\\Deals [2024]\\[Book.xlsx]Sheet1'!", "C:\\Deals [2024]\\", "Book.xlsx", "Sheet1", null)]
+    [InlineData("'C:\\Deals [2024]\\Book.xlsx'!", "C:\\Deals [2024]\\", "Book.xlsx", null, null)]
+    [InlineData("'C:\\Deals [2024]\\[Book.xlsx]Jan:Dec'!", "C:\\Deals [2024]\\", "Book.xlsx", "Jan", "Dec")]
+    [InlineData("'\\\\srv\\share [x]\\[B.xlsx]S'!", "\\\\srv\\share [x]\\", "B.xlsx", "S", null)]
+    [InlineData("'https://x.com/a [1]/[B.xlsx]S'!", "https://x.com/a [1]/", "B.xlsx", "S", null)]
+    [InlineData("'https://x.com/a [1]/B.xlsx'!", "https://x.com/a [1]/", "B.xlsx", null, null)]
+    [InlineData("'C:\\d\\[Book [v2].xlsx]S'!", "C:\\d\\", "Book [v2].xlsx", "S", null)]
     public void Prefixes_split_into_path_workbook_and_sheets(string prefix, string? path, string? file, string? sheet, string? lastSheet)
     {
         var parts = FormulaParser.ParsePrefix(prefix, FormulaReferenceKind.Cell);
@@ -252,9 +260,197 @@ public class FormulaParserTests
     [Fact]
     public void Workbook_like_prefix_is_a_workbook_only_for_names_and_tables()
     {
+        Assert.Equal((null, "Data.ods", null, null), FormulaParser.ParsePrefix("Data.ods!", FormulaReferenceKind.Name));
         Assert.Equal((null, "Book.xlsx", null, null), FormulaParser.ParsePrefix("Book.xlsx!", FormulaReferenceKind.Name));
         Assert.Equal((null, "Book.xlsx", null, null), FormulaParser.ParsePrefix("Book.xlsx!", FormulaReferenceKind.StructuredReference));
         Assert.Equal((null, null, "Book.xlsx", null), FormulaParser.ParsePrefix("Book.xlsx!", FormulaReferenceKind.Cell));
+    }
+
+    [Fact]
+    public void Reference_into_a_deleted_sheet_is_a_ref_error()
+    {
+        var references = Parse("=#REF!A1+#REF!B1:B5+[Budget.xlsx]#REF!C3+'#REF'!D4").References;
+
+        Assert.Equal(
+            new[] { FormulaReferenceKind.RefError, FormulaReferenceKind.RefError, FormulaReferenceKind.RefError, FormulaReferenceKind.Cell },
+            references.Select(r => r.Kind));
+        Assert.Equal(new[] { "#REF!A1", "#REF!B1:B5", "[Budget.xlsx]#REF!C3", "'#REF'!D4" }, references.Select(r => r.Text));
+        Assert.All(references.Take(3), reference =>
+        {
+            Assert.Null(reference.Sheet);
+            Assert.Null(reference.Address);
+            Assert.Null(reference.Area);
+        });
+        Assert.Null(references[0].WorkbookName);
+        Assert.Equal("Budget.xlsx", references[2].WorkbookName);
+
+        // A quoted '#REF' is a sheet that really has that name.
+        Assert.Equal("#REF", references[3].Sheet);
+    }
+
+    // A formula may use all of Excel's 8,192 characters, and XLParser recurses once per chained range or
+    // intersection operator. Each case runs on a thread with a 256 KB stack (Excel's main thread has 1 MB, some of it
+    // in use): the formula is parsed with every reference, or fails, but never overflows the stack, which would end
+    // the test process (and Excel).
+    [Theory]
+    [InlineData("+")]
+    [InlineData("&")]
+    [InlineData(" ")]
+    [InlineData(":")]
+    public void Long_operator_chain_parses_on_a_small_stack(string op)
+    {
+        var formula = "=" + string.Join(op, Enumerable.Repeat("A1", 2700));
+
+        var parsed = OnSmallStack(() => FormulaParser.Parse(formula, Context));
+
+        Assert.True(parsed.IsParsed, parsed.Error);
+        var expected = op == ":" ? 1 : 2700;
+        Assert.Equal(expected, parsed.References.Count);
+        Assert.Equal(expected, OnSmallStack(() => parsed.TopLevelNodes.Count));
+        Assert.Equal(op == ":" ? 0 : expected, OnSmallStack(() => parsed.Structure!.TraceChildren.Count));
+        Assert.Equal(parsed.References.Select(r => r.Start).OrderBy(start => start), parsed.References.Select(r => r.Start));
+    }
+
+    [Fact]
+    public void Long_mixed_operator_chain_parses_on_a_small_stack()
+    {
+        var ops = new[] { "+", "-", "*", "/", "^", "&", "=", "<>", "<=", ">", "+", "&" };
+        var formula = "=B1" + string.Concat(Enumerable.Range(0, 2000).Select(i => ops[i % ops.Length] + "B" + ((i % 9) + 1)));
+        Assert.True(formula.Length <= 8192, $"The formula has {formula.Length} characters.");
+
+        var parsed = OnSmallStack(() => FormulaParser.Parse(formula, Context));
+
+        Assert.True(parsed.IsParsed, parsed.Error);
+        Assert.Equal(2001, parsed.References.Count);
+        Assert.Equal(2001, OnSmallStack(() => parsed.TopLevelNodes.Count));
+        Assert.All(parsed.References, reference => Assert.Equal(reference.Text, formula.Substring(reference.Start, reference.Length)));
+    }
+
+    [Fact]
+    public void Long_range_operator_chain_is_one_bounding_range()
+    {
+        var formula = "=SUM(" + string.Join(":", Enumerable.Range(1, 1500).Select(row => "A" + row)) + ")";
+
+        var parsed = OnSmallStack(() => FormulaParser.Parse(formula, Context));
+
+        Assert.True(parsed.IsParsed, parsed.Error);
+        Assert.Equal("A1:A1500", parsed.References.Single().Address);
+        Assert.Equal(FormulaNodeKind.Reference, parsed.TopLevelNodes.Single().TraceChildren.Single().Kind);
+    }
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData(":")]
+    public void Reference_chain_short_enough_to_parse_on_the_callers_thread_fits_a_small_stack(string op)
+    {
+        // The longest formula Parse runs on the calling thread (256 characters).
+        var formula = "=" + string.Join(op, Enumerable.Repeat("A1", 85));
+
+        var parsed = OnSmallStack(() => FormulaParser.ParseOnCurrentThread(formula, Context));
+
+        Assert.True(parsed.IsParsed, parsed.Error);
+    }
+
+    [Fact]
+    public void Deep_parentheses_parse_on_a_small_stack()
+    {
+        var formula = "=" + new string('(', 4000) + "A1" + new string(')', 4000);
+
+        var parsed = OnSmallStack(() => FormulaParser.Parse(formula, Context));
+
+        Assert.True(parsed.IsParsed, parsed.Error);
+        Assert.Equal("A1", parsed.References.Single().Text);
+        Assert.Equal(FormulaNodeKind.Group, parsed.TopLevelNodes.Single().Kind);
+    }
+
+    [Theory]
+    [InlineData(64)]
+    [InlineData(1300)]
+    public void Deeply_nested_functions_parse_on_a_small_stack(int depth)
+    {
+        // Excel allows 64 levels; 1,300 fit in 8,192 characters (XLParser alone overflows 256 KB at about 600).
+        var formula = "=" + string.Concat(Enumerable.Repeat("IF(A1,", depth)) + "B1" + new string(')', depth);
+
+        var parsed = OnSmallStack(() => FormulaParser.Parse(formula, Context));
+
+        Assert.True(parsed.IsParsed, parsed.Error);
+        Assert.Equal(depth + 1, parsed.References.Count);
+        Assert.Equal("IF", parsed.TopLevelNodes.Single().FunctionName);
+    }
+
+    [Fact]
+    public void Recursion_too_deep_for_the_stack_fails_instead_of_overflowing()
+    {
+        // 8,000 nested negations: XLParser reads them, and building the structure runs out of a 256 KB stack.
+        var formula = "=" + new string('-', 8000) + "A1";
+
+        var parsed = OnSmallStack(() => FormulaParser.ParseOnCurrentThread(formula, Context));
+
+        AssertFailed(parsed);
+        Assert.True(OnSmallStack(() => FormulaParser.Parse(formula, Context)).IsParsed);
+    }
+
+    [Fact]
+    public void Formula_longer_than_the_limit_fails()
+    {
+        var parsed = FormulaParser.Parse("=" + string.Join("+", Enumerable.Repeat("A1", 5462)), Context);
+
+        AssertFailed(parsed);
+    }
+
+    [Fact]
+    public void Parse_thread_that_takes_too_long_is_abandoned_and_the_next_parse_still_works()
+    {
+        using var release = new ManualResetEventSlim();
+        var late = FormulaParser.Parse("=1", Context);
+
+        var timedOut = FormulaParser.LargeStackThread.Run(
+            () =>
+            {
+                release.Wait();
+                return late;
+            },
+            TimeSpan.FromMilliseconds(50));
+        release.Set();
+
+        Assert.Null(timedOut);
+        var formula = "=" + string.Join("+", Enumerable.Repeat("A1", 200));
+        Assert.Equal(200, FormulaParser.Parse(formula, Context).References.Count);
+    }
+
+    private static void AssertFailed(ParsedFormula parsed)
+    {
+        Assert.False(parsed.IsParsed);
+        Assert.StartsWith("The formula could not be parsed", parsed.Error);
+        Assert.Empty(parsed.References);
+        Assert.Empty(parsed.TopLevelNodes);
+    }
+
+    private static T OnSmallStack<T>(Func<T> work)
+    {
+        var result = default(T)!;
+        Exception? error = null;
+        var thread = new Thread(
+            () =>
+            {
+                try
+                {
+                    result = work();
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                }
+            },
+            256 * 1024);
+        thread.Start();
+        thread.Join();
+        if (error is not null)
+        {
+            throw new InvalidOperationException("The work threw on the small-stack thread.", error);
+        }
+
+        return result;
     }
 
     [Fact]

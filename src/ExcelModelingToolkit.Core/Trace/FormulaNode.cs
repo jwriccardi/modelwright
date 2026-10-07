@@ -31,7 +31,8 @@ public sealed class FormulaNode
 
     /// <summary>
     /// The child nodes: a group's inner expression, a function's arguments, an operator's operands. Empty for
-    /// leaves.
+    /// leaves. A long operator chain nests one level per operator, thousands of levels in the worst case, so walk the
+    /// tree with a loop rather than recursion (or use <see cref="TraceChildren"/>, which does).
     /// </summary>
     public IReadOnlyList<FormulaNode> Children { get; internal set; } = NoChildren;
 
@@ -75,6 +76,7 @@ public sealed class FormulaNode
     /// (research/07): a function's arguments, each as-is; for any other node, its operands with operator
     /// expressions flattened away, keeping groups, function calls and references but not constants. So for
     /// <c>(B2+C2/D2)+IF(...)*(K2+L2)+V2</c> the root's trace children are the group, IF, the second group and V2.
+    /// The audited cell's own row shows <see cref="ParsedFormula.TopLevelNodes"/>, which treats the root the same way.
     /// </summary>
     public IReadOnlyList<FormulaNode> TraceChildren
     {
@@ -98,23 +100,31 @@ public sealed class FormulaNode
     /// <summary>The node's source text.</summary>
     public override string ToString() => Text;
 
-    private static void AddOperands(FormulaNode node, List<FormulaNode> result)
+    // Adds node itself if a trace tree shows it, else the operands it stands for. A loop, not recursion: a long
+    // operator chain (A1+A2+...+A2000) is a tree thousands of levels deep.
+    internal static void AddOperands(FormulaNode node, List<FormulaNode> result)
     {
-        switch (node.Kind)
+        var pending = new Stack<FormulaNode>();
+        pending.Push(node);
+        while (pending.Count > 0)
         {
-            case FormulaNodeKind.Operator:
-            case FormulaNodeKind.Other:
-                foreach (var child in node.Children)
-                {
-                    AddOperands(child, result);
-                }
+            var current = pending.Pop();
+            switch (current.Kind)
+            {
+                case FormulaNodeKind.Operator:
+                case FormulaNodeKind.Other:
+                    for (var index = current.Children.Count - 1; index >= 0; index--)
+                    {
+                        pending.Push(current.Children[index]);
+                    }
 
-                break;
-            case FormulaNodeKind.Group:
-            case FormulaNodeKind.Function:
-            case FormulaNodeKind.Reference:
-                result.Add(node);
-                break;
+                    break;
+                case FormulaNodeKind.Group:
+                case FormulaNodeKind.Function:
+                case FormulaNodeKind.Reference:
+                    result.Add(current);
+                    break;
+            }
         }
     }
 }

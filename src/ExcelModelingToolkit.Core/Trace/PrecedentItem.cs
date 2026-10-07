@@ -70,8 +70,8 @@ public sealed class PrecedentItem
     public string? Argument { get; }
 
     /// <summary>
-    /// The canonical identity used for cycle detection, <c>WORKBOOK|SHEET|ADDRESS</c> in upper case (names use their
-    /// label when they have no address); null for items that are part of a formula's structure (functions, groups)
+    /// The canonical identity used for cycle detection, <c>WORKBOOK|SHEET|ADDRESS</c> in upper case with <c>$</c>
+    /// removed from the address, so <c>$A$1</c> is <c>A1</c> (names use their label when they have no address); null for items that are part of a formula's structure (functions, groups)
     /// or added by the tree, which cannot form a cycle.
     /// </summary>
     public string? Id
@@ -86,10 +86,75 @@ public sealed class PrecedentItem
                 case PrecedentKind.Truncated:
                     return null;
                 default:
-                    return ((Workbook ?? string.Empty) + "|" + (Sheet ?? string.Empty) + "|" + (Address ?? Label))
-                        .ToUpperInvariant();
+                    return ((Workbook ?? string.Empty) + "|" + (Sheet ?? string.Empty) + "|" +
+                        (Address?.Replace("$", string.Empty) ?? Label)).ToUpperInvariant();
             }
         }
+    }
+
+    /// <summary>
+    /// Creates the item for a reference in a formula. The reference leaves out its formula's own workbook and sheet;
+    /// the item fills them in from <paramref name="context"/>, so the same cell always has the same <see cref="Id"/>
+    /// however it was written. A name or table keeps only the sheet written before it (an unqualified name may be
+    /// sheet-scoped or workbook-level, which only the workbook knows); a 3-D reference's sheet is
+    /// <c>First:Last</c>.
+    /// </summary>
+    /// <param name="reference">A reference from <see cref="ParsedFormula.References"/>.</param>
+    /// <param name="context">The workbook and sheet of the formula the reference is in.</param>
+    /// <param name="label">The Precedents column, or null for the reference as written.</param>
+    /// <param name="valueText">The Value column, or null.</param>
+    /// <param name="canExpand">False if the item has nothing below it; always false for <c>#REF!</c>.</param>
+    /// <param name="argument">The Argument column in evaluate mode, or null.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="reference"/> or <paramref name="context"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="reference"/> is a LET or LAMBDA local name, which is not a precedent.
+    /// </exception>
+    public static PrecedentItem FromReference(FormulaReference reference, FormulaContext context, string? label = null,
+        string? valueText = null, bool canExpand = true, string? argument = null)
+    {
+        if (reference is null)
+        {
+            throw new ArgumentNullException(nameof(reference));
+        }
+
+        if (context is null)
+        {
+            throw new ArgumentNullException(nameof(context));
+        }
+
+        PrecedentKind kind;
+        switch (reference.Kind)
+        {
+            case FormulaReferenceKind.Cell:
+                kind = PrecedentKind.Cell;
+                break;
+            case FormulaReferenceKind.Range:
+            case FormulaReferenceKind.WholeColumn:
+            case FormulaReferenceKind.WholeRow:
+                kind = PrecedentKind.Range;
+                break;
+            case FormulaReferenceKind.Name:
+                kind = PrecedentKind.Name;
+                break;
+            case FormulaReferenceKind.StructuredReference:
+                kind = PrecedentKind.Table;
+                break;
+            case FormulaReferenceKind.RefError:
+                kind = PrecedentKind.Error;
+                canExpand = false;
+                break;
+            default:
+                throw new ArgumentException("A LET or LAMBDA local name is not a precedent.", nameof(reference));
+        }
+
+        var sheet = reference.LastSheet is null ? reference.Sheet : reference.Sheet + ":" + reference.LastSheet;
+        if (sheet is null && reference.WorkbookName is null && (kind == PrecedentKind.Cell || kind == PrecedentKind.Range))
+        {
+            sheet = context.SheetName;
+        }
+
+        return new PrecedentItem(kind, label ?? reference.Text, reference.WorkbookName ?? context.WorkbookName, sheet,
+            reference.Address, reference.Area?.CellCount ?? 1, valueText, canExpand, argument);
     }
 
     /// <summary>The label.</summary>

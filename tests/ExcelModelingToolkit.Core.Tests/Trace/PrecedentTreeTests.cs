@@ -439,6 +439,91 @@ public class PrecedentTreeTests
     }
 
     [Fact]
+    public void Expanding_a_more_cells_row_that_was_already_replaced_does_nothing()
+    {
+        var root = Cell("A1");
+        var provider = new FakePrecedentProvider().Has(root, Range("B1:B250", 250));
+        var tree = new PrecedentTree(provider, root);
+        var range = tree.Root.Children[0];
+        tree.Expand(range);
+        var more = range.Children[100];
+        Assert.True(tree.Expand(more));
+        var calls = provider.Calls.Count;
+        var nodes = tree.NodeCount;
+        var children = range.Children.ToList();
+
+        Assert.False(tree.Expand(more));
+
+        Assert.Equal(calls, provider.Calls.Count);
+        Assert.Equal(nodes, tree.NodeCount);
+        Assert.Equal(children, range.Children);
+    }
+
+    [Fact]
+    public void Item_ids_ignore_dollar_signs_in_addresses()
+    {
+        Assert.Equal("MODEL.XLSX|CALC|A1", new PrecedentItem(PrecedentKind.Cell, "x", "Model.xlsx", "Calc", "$A$1").Id);
+        Assert.Equal("MODEL.XLSX|CALC|A1:B2", new PrecedentItem(PrecedentKind.Range, "x", "Model.xlsx", "Calc", "$A$1:B$2", 4).Id);
+        Assert.Equal("MODEL.XLSX|SHEET$1|A1", new PrecedentItem(PrecedentKind.Cell, "x", "Model.xlsx", "Sheet$1", "A1").Id);
+    }
+
+    [Fact]
+    public void Absolute_and_relative_addresses_of_the_same_cell_form_a_cycle()
+    {
+        var root = new PrecedentItem(PrecedentKind.Cell, "Calc!$A$1", "Model.xlsx", "Calc", "$A$1");
+        var provider = new FakePrecedentProvider().Has(root, Cell("A1"));
+
+        var tree = new PrecedentTree(provider, root);
+
+        Assert.True(tree.Root.Children[0].IsCycle);
+    }
+
+    [Fact]
+    public void Items_from_references_fill_in_the_formulas_workbook_and_sheet()
+    {
+        var context = new FormulaContext("Model.xlsx", "Calc");
+        var parsed = FormulaParser.Parse(
+            "=$A$1+Calc!A1+Sheet2!$B$2+[Other.xlsx]Data!C3+SUM(D1:E5)+B:B+Rate+Inputs!Tax+Book2.xlsx!Fx+Sales[Amount]+#REF!+Jan:Dec!A1",
+            context);
+
+        var items = parsed.References.Select(reference => PrecedentItem.FromReference(reference, context)).ToList();
+
+        Assert.Equal(
+            new[]
+            {
+                "MODEL.XLSX|CALC|A1", "MODEL.XLSX|CALC|A1", "MODEL.XLSX|SHEET2|B2", "OTHER.XLSX|DATA|C3", "MODEL.XLSX|CALC|D1:E5",
+                "MODEL.XLSX|CALC|B:B", "MODEL.XLSX||RATE", "MODEL.XLSX|INPUTS|INPUTS!TAX", "BOOK2.XLSX||BOOK2.XLSX!FX",
+                "MODEL.XLSX||SALES[AMOUNT]", "MODEL.XLSX||#REF!", "MODEL.XLSX|JAN:DEC|A1",
+            },
+            items.Select(item => item.Id));
+        Assert.Equal(
+            new[]
+            {
+                PrecedentKind.Cell, PrecedentKind.Cell, PrecedentKind.Cell, PrecedentKind.Cell, PrecedentKind.Range, PrecedentKind.Range,
+                PrecedentKind.Name, PrecedentKind.Name, PrecedentKind.Name, PrecedentKind.Table, PrecedentKind.Error, PrecedentKind.Cell,
+            },
+            items.Select(item => item.Kind));
+        Assert.Equal("$A$1", items[0].Label);
+        Assert.Equal(10, items[4].CellCount);
+        Assert.Equal(1048576, items[5].CellCount);
+        Assert.False(items[10].CanExpand);
+        Assert.Equal("number1", PrecedentItem.FromReference(parsed.References[0], context, "Calc!A1", "5", argument: "number1").Argument);
+        Assert.Equal("Calc!A1", PrecedentItem.FromReference(parsed.References[0], context, "Calc!A1").Label);
+    }
+
+    [Fact]
+    public void Item_from_a_reference_checks_its_arguments()
+    {
+        var context = new FormulaContext("Model.xlsx", "Calc");
+        var local = FormulaParser.Parse("=LET(x,1,x)", context).References[0];
+        var cell = FormulaParser.Parse("=A1", context).References[0];
+
+        Assert.Throws<ArgumentException>(() => PrecedentItem.FromReference(local, context));
+        Assert.Throws<ArgumentNullException>(() => PrecedentItem.FromReference(null!, context));
+        Assert.Throws<ArgumentNullException>(() => PrecedentItem.FromReference(cell, null!));
+    }
+
+    [Fact]
     public void Evaluate_mode_function_nodes_never_count_as_cycles()
     {
         var root = Cell("A1");

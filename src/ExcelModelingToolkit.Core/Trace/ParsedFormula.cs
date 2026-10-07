@@ -7,6 +7,8 @@ public sealed class ParsedFormula
 {
     private static readonly FormulaReference[] NoReferences = new FormulaReference[0];
     private static readonly DynamicReference[] NoDynamicReferences = new DynamicReference[0];
+    private static readonly FormulaNode[] NoNodes = new FormulaNode[0];
+    private IReadOnlyList<FormulaNode>? _topLevelNodes;
 
     private ParsedFormula(string formula, FormulaContext context, string? error, FormulaNode? structure,
         IReadOnlyList<FormulaReference> references, IReadOnlyList<DynamicReference> dynamicReferences)
@@ -36,6 +38,32 @@ public sealed class ParsedFormula
     /// reference nodes hold the same objects as <see cref="References"/>.
     /// </summary>
     public FormulaNode? Structure { get; }
+
+    /// <summary>
+    /// The nodes a trace tree shows directly under the audited cell in "Evaluate functions &amp; groups" mode: the
+    /// root itself when it is a group, function call or reference (<c>=SUM(A1,B1)</c> gives the SUM node,
+    /// <c>=(A1+B1)</c> the group, <c>=A1</c> the reference), else its operands as
+    /// <see cref="FormulaNode.TraceChildren"/> finds them (<c>=A1+B1</c> gives A1 and B1). Empty for a constant or
+    /// if the formula could not be parsed.
+    /// </summary>
+    public IReadOnlyList<FormulaNode> TopLevelNodes
+    {
+        get
+        {
+            if (_topLevelNodes is null)
+            {
+                var nodes = new List<FormulaNode>();
+                if (Structure is not null)
+                {
+                    FormulaNode.AddOperands(Structure, nodes);
+                }
+
+                _topLevelNodes = nodes.Count == 0 ? NoNodes : nodes;
+            }
+
+            return _topLevelNodes;
+        }
+    }
 
     /// <summary>
     /// Every reference in the order written, duplicates included (Macabacus lists each reference as written).
