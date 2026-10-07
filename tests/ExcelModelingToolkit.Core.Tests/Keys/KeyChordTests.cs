@@ -44,7 +44,7 @@ public class KeyChordTests
         { "Ctrl+Alt+Shift+F12", "^%+{F12}" },
 
         // Coverage table: remaining Macabacus punctuation and named keys
-        { "Alt+Shift+;", "%+;" },
+        { "Alt+Shift+;", "%+;" }, // Ratio cycle (Macabacus factory key)
         { "Alt+Shift+,", "%+," },
         { "Alt+Shift+.", "%+." },
         { "Ctrl+Alt+Shift+'", "^%+'" },
@@ -69,7 +69,7 @@ public class KeyChordTests
         { "Ctrl+F2", "^{F2}" },
         { "Alt+F12", "%{F12}" },
         { "Ctrl+Alt+Home", "^%{HOME}" },
-        { "Ctrl+Shift+Y", "^+y" },
+        { "Ctrl+Shift+Y", "^+y" }, // Binary cycle (Macabacus factory key)
     };
 
     /// <summary>The v1 keymap of docs/PLAN.md section 4.2, including undo/redo and the v2 auditing keys.</summary>

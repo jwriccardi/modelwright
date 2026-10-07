@@ -7,4 +7,9 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The JSON reader/writer is internal; its edge cases are tested directly. -->
+    <InternalsVisibleTo Include="ExcelModelingToolkit.Core.Tests" />
+  </ItemGroup>
+
 </Project>

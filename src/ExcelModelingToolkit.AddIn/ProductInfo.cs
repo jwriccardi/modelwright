@@ -9,6 +9,12 @@ internal static class ProductInfo
     /// <summary>Working product name. Change it here only.</summary>
     public const string Name = "Modeling Toolkit";
 
+    /// <summary>
+    /// Folder name for per-user files under <c>%APPDATA%</c> and <c>%LOCALAPPDATA%</c>: <see cref="Name"/>
+    /// without spaces, e.g. <c>ModelingToolkit</c>.
+    /// </summary>
+    public static string FolderName { get; } = Name.Replace(" ", string.Empty);
+
     private static readonly Assembly ThisAssembly = typeof(ProductInfo).Assembly;
 
     /// <summary>Informational version, e.g. <c>0.1.0+1a2b3c4</c> (or <c>0.1.0+local</c> outside git).</summary>

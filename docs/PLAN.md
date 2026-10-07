@@ -1,6 +1,6 @@
 # Work plan — Excel Modeling Toolkit
 
-> **Status: Phase 2 (scaffold) APPROVED 2026-09-29, in progress.** Phase 0 (decisions) and Phase 1 (decision spikes) are complete; see [`spike-results.md`](spike-results.md). No product code has been written; the spikes are throwaway code in `spikes/`.
+> **Status: Phase 2 complete (PR #1 merged 2026-09-29). Phase 3 approved and in progress, in three slices (3a cycles, 3b undo, 3c settings dialog).** Phase 0 (decisions) and Phase 1 (decision spikes) are complete; see [`spike-results.md`](spike-results.md). No product code has been written; the spikes are throwaway code in `spikes/`.
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
 > - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
@@ -224,7 +224,7 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
 | K1 ✅ (the keys work, but ADR-0001 stays superseded: D11) | Office.js named punctuation keys (`Ctrl+Shift+BracketLeft`, `Ctrl+Quote`, `Ctrl+Semicolon`) | The keys register and fire on Windows | Stay with ADR-0002. **If they work → reopen ADR-0001.** |
 | K2 | `ExecuteMso` formatting keeps native undo | Type a value → cycle via ExecuteMso → Ctrl+Z twice undoes both | **Done:** partly passes (fixed formats only, outside macro context). v1 uses our own UndoManager (§4.4). |
 | K3 ✅ | Excel-DNA binds every key in §4.2 | 100% fire. Over 30 presses on a selection of ≤ 1,000 cells, p95 key → format ≤ 50 ms | Try a thread keyboard hook |
-| K4 ✅ (C and B pass; F2 on C is pending) | Trace window keyboard model: **A** WPF with focus, **B** WinForms with focus, **C** a window that doesn't take focus plus a thread keyboard hook (Macabacus-style) | Up/Down/Left/Right/Enter/Esc reach the tree through `Goto` to another sheet and to another workbook. For C, F2 also passes through to Excel. | Choose the best variant that passes; prefer C |
+| K4 ✅ (C and B pass; F2 on C passed 2026-10-06) | Trace window keyboard model: **A** WPF with focus, **B** WinForms with focus, **C** a window that doesn't take focus plus a thread keyboard hook (Macabacus-style) | Up/Down/Left/Right/Enter/Esc reach the tree through `Goto` to another sheet and to another workbook. For C, F2 also passes through to Excel. | Choose the best variant that passes; prefer C |
 
 **Exit:** a go/no-go note in `docs/spike-results.md`.
 
@@ -240,6 +240,13 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
   - One placeholder key fires.
 
 ### Phase 3 — Cycles and undo (features 1–3)
+
+Delivered as three PRs:
+- **3a:** the cycle engine and the 7 cycles plus Blue-Black on the exact keys, a settings JSON with defaults, ribbon buttons and a timing log.
+- **3b:** `UndoManager`, with Ctrl+Z / Ctrl+Y through the thread keyboard hook.
+- **3c:** the settings dialog.
+
+Defaults are the **Macabacus factory settings** (v9.9.5 settings export, 2026-10-06; see research/06). Binary (Ctrl+Shift+Y) and Ratio (Alt+Shift+;) cycles were added from the same source.
 - **Exit criteria:**
   - xUnit covers the cycle engine: wrap-around, the hybrid rule, mixed selections, color normalization and "No fill". Line coverage of `Toolkit.Core` is ≥ 90%.
   - All 7 v1 cycles fire on their Macabacus keys and meet the K3 latency target.
@@ -289,6 +296,8 @@ These are not v1 scope.
 | Keys stolen by other add-ins (CapIQ re-binds periodically; Macabacus if installed alongside) | Medium / High | "Override" command, and re-registering keys on `WorkbookActivate`. Optional keyboard hook in v2. |
 | Custom undo ordering or corruption bugs | Medium / High | Pure `UndoManager` in Core with thorough unit tests, the §4.4 ordering rule, and clearing the stack on structural changes. |
 | AltGr keyboard layouts have no Ctrl+[ | Low for US/UK users / Medium | Keys can be remapped. The keyboard hook (virtual-key codes) is a v2 option. |
+| Non-US layouts put `;`, `'` and `[` on different physical keys (for example `;` is Shift+comma on a German layout) | Medium for non-US users / Medium | `OnKey` maps through the active layout, so these chords may be unreachable or land on other keys. Users can remap in settings.json now, and in the dialog in 3c. A v2 option is binding by virtual-key code through the hook. |
+| Unloading the add-in while Macabacus is also installed | Medium / Low | `xlcOnKey` without a macro restores *Excel's* default, and the C API can't tell who owns a key. So unloading our add-in also unbinds Macabacus's copies of the shared keys until Macabacus re-registers them (restart Excel or use its Override). Document this in the README coexistence notes (Phase 5). |
 | WPF keyboard focus problems inside Excel | Medium / Medium | Spike K4, with a WinForms fallback. |
 | Mark-of-the-Web, SmartScreen and antivirus friction | High / Medium | Per-user installer, signing, and VirusTotal checks in the release checklist. |
 | Mac and web users left out | Certain / Low for now | JSON settings are portable, so a VBA (Mac) or Office.js (web) port can come later. Recorded as a follow-up. |
@@ -306,6 +315,7 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 ## Changelog
 - 2026-09-28: first draft (Office.js, ADR-0001).
 - 2026-09-28: build-vs-fork recommendation added (research/04).
+- 2026-09-29: PR #1 (scaffold) merged. Phase 3 approved and split into 3a, 3b and 3c.
 - 2026-09-29: Phase 2 (scaffold) approved and started on branch `phase2/scaffold`. The web colors-only edition is logged as a future development.
 - 2026-09-28: **Phase 1 complete.** ADR-0002 accepted. D11: cross-workbook trace essential. K1c: Office.js key names work; recorded as the v2 path.
 - 2026-09-28: Undo decision (owner): Macabacus parity in v1, with the Office.js hybrid for native undo as a v2 candidate. §4.4 rewritten from spike K2/K2b/K2c.

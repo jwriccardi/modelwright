@@ -40,6 +40,7 @@ A downloaded `.xll` is blocked by Mark-of-the-Web. If Excel refuses to load one 
 - **No COM in Core.** Excel access (C API, COM, ribbon, windows) lives only in `ExcelModelingToolkit.AddIn`, as thin adapters over Core.
 - **Every Core change comes with tests** in `tests/ExcelModelingToolkit.Core.Tests`.
 - Commands must never throw into Excel. Report failures in the status bar.
+- **`settings.json` has a versioned schema** (`schemaVersion`). The loader rejects unknown properties, so any change to the file's shape (a new, renamed or removed property, or a new cycle `kind`) must bump `ToolkitSettings.CurrentSchemaVersion` and still read the previous version, with tests. Otherwise users' existing files fall back to the defaults.
 - Follow `.editorconfig`: 4-space indents, file-scoped namespaces, nullable reference types enabled.
 
 ## Sign your commits (DCO)
