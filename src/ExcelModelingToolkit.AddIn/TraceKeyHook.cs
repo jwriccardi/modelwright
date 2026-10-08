@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -20,11 +21,19 @@ namespace ExcelModelingToolkit.AddIn;
 /// <remarks>
 /// <para>
 /// <b>Edit mode.</b> Excel's formula-edit state (<see cref="ExcelDnaUtil.IsInFormulaEditMode"/>: Ready, or Enter,
-/// Edit or Point) is read at every candidate press, the check <see cref="UndoKeyHook"/> already relies on. So F2
-/// passes through and puts Excel in Edit or Point mode with the window open, and from then on the arrows, Enter and
-/// Esc go to Excel until the edit ends, however it was started (F2, typing, a double-click, the formula bar) or
-/// ended. Keys also pass while the focus is not on a worksheet grid or this window (a dialog, the Name Box), and
-/// while the mouse is captured, a menu is open or a window is being moved or sized (no Excel call is made then).
+/// Edit or Point) is read at every candidate press, the check <see cref="UndoKeyHook"/> already relies on. So while a
+/// cell is being edited the arrows, Enter, Esc and F2 go to Excel until the edit ends, however it was started (F2,
+/// typing, a double-click, the formula bar) or ended. Keys also pass while the focus is not on a worksheet grid or
+/// this window (a dialog, the Name Box), and while the mouse is captured, a menu is open or a window is being moved
+/// or sized (no Excel call is made then).
+/// </para>
+/// <para>
+/// <b>F2.</b> Outside an edit, F2 is a Trace In command (<see cref="TraceKeyCommand.EditReference"/>): the session
+/// sends Excel the keys that edit the selected reference (<see cref="Send"/>, with <c>SendInput</c>). Those keys are
+/// partly Trace In keys and arrive before Excel is editing, so while they are in flight the hook passes them
+/// untouched, counting them off (<see cref="SyntheticKeyTracker"/>) until the last has arrived, a press that is not
+/// one of them arrives, the window closes, or <see cref="SynthesisTimeoutMilliseconds"/> pass. After such an edit,
+/// the Enter, Tab or Esc that ends it is passed to Excel and also tells the session to check the formula.
 /// </para>
 /// <para>
 /// <b>Coexistence with <see cref="UndoKeyHook"/>.</b> Both are thread hooks on the same thread. Windows calls the
@@ -69,6 +78,20 @@ internal static class TraceKeyHook
     /// <summary>How long, at most, the hook outlives the window to swallow the key that closed it.</summary>
     private const int LingerMilliseconds = 1000;
 
+    /// <summary>
+    /// How long, at most, keys sent with <see cref="Send"/> are passed untouched while they arrive. Once Excel has
+    /// taken the first F2 it is editing, and the hook passes the rest anyway.
+    /// </summary>
+    private const int SynthesisTimeoutMilliseconds = 2000;
+
+    /// <summary>How long <see cref="Send"/> waits, at most, for the user to let go of F2 and the modifiers.</summary>
+    private const int ReleaseWaitMilliseconds = 1000;
+
+    private const int VkF2 = 0x71;
+    private const uint InputKeyboard = 1;
+    private const uint KeyEventFExtendedKey = 0x1;
+    private const uint KeyEventFKeyUp = 0x2;
+
     // The hook holds only a native pointer to the delegate: it stays referenced for the life of the AppDomain (a
     // call can still be on its way in while the hook is being removed).
     private static readonly NativeMethods.HookProc HookCallback = Proc;
@@ -89,6 +112,12 @@ internal static class TraceKeyHook
     private static bool _lingering;
     private static long _lingerUntil;
     private static Timer? _lingerTimer;
+
+    // Keys sent with Send that the hook has not seen yet (null when none are in flight), when they were sent (a
+    // Stopwatch timestamp), and the timer that gives up on them.
+    private static SyntheticKeyTracker? _synthetic;
+    private static long _syntheticSent;
+    private static Timer? _syntheticTimer;
 
     /// <summary>True while the hook is installed.</summary>
     public static bool IsInstalled => _hook != IntPtr.Zero;
@@ -152,6 +181,7 @@ internal static class TraceKeyHook
     /// </summary>
     public static void Release()
     {
+        EndSynthesis("the window closed");
         if (!IsInstalled || _swallowedKey == 0 || TraceKeys.CloseMode(_swallowedCommand) is null)
         {
             Uninstall();
@@ -181,6 +211,7 @@ internal static class TraceKeyHook
         try
         {
             StopLingering();
+            EndSynthesis("the hook was removed");
             if (_hook != IntPtr.Zero)
             {
                 NativeMethods.UnhookWindowsHookEx(_hook);
@@ -232,6 +263,67 @@ internal static class TraceKeyHook
             // The window is gone (the hook is being removed); nothing can run.
             return false;
         }
+    }
+
+    /// <summary>
+    /// Sends <paramref name="keys"/> to Excel as if typed (one <c>SendInput</c> batch, so none of the user's keys
+    /// come in between), with the hook passing them untouched as they arrive (see the remarks). Waits first, up to
+    /// <see cref="ReleaseWaitMilliseconds"/>, for the user to let go of F2, Shift, Ctrl and Alt, so a held key does not
+    /// change what the keys do. Only to an Excel workbook window in the foreground, and only while the hook is
+    /// installed. Returns false, with the reason in <paramref name="failure"/>, if nothing was sent. Main thread,
+    /// outside the hook.
+    /// </summary>
+    internal static bool Send(IReadOnlyList<SyntheticKey> keys, out string failure)
+    {
+        failure = string.Empty;
+        if (!IsInstalled || _poster is null)
+        {
+            failure = "the keyboard is not connected";
+            return false;
+        }
+
+        var waited = Stopwatch.StartNew();
+        while (IsHeld(VkF2) || IsHeld(VkShift) || IsHeld(VkControl) || IsHeld(VkMenu))
+        {
+            if (waited.ElapsedMilliseconds > ReleaseWaitMilliseconds)
+            {
+                failure = "a key is still held down (F2, Shift, Ctrl or Alt)";
+                return false;
+            }
+
+            System.Threading.Thread.Sleep(10);
+        }
+
+        if (!IsExcelWorkbookWindow(NativeMethods.GetForegroundWindow()))
+        {
+            failure = "Excel's workbook window is not in front";
+            return false;
+        }
+
+        var inputs = new NativeMethods.Input[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+        {
+            inputs[i] = KeyInput(keys[i]);
+        }
+
+        EndSynthesis("replaced by new keys");
+        _synthetic = new SyntheticKeyTracker(keys);
+        _syntheticSent = Stopwatch.GetTimestamp();
+        var timer = new Timer { Interval = SynthesisTimeoutMilliseconds };
+        timer.Tick += (sender, e) => EndSynthesis("timed out");
+        timer.Start();
+        _syntheticTimer = timer;
+
+        var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(NativeMethods.Input)));
+        if (sent != inputs.Length)
+        {
+            var error = Marshal.GetLastWin32Error();
+            EndSynthesis("SendInput failed");
+            failure = string.Format(CultureInfo.InvariantCulture, "Windows took {0} of {1} key events (error {2})", sent, inputs.Length, error);
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -292,6 +384,65 @@ internal static class TraceKeyHook
         }
     }
 
+    // Stops passing sent keys untouched (all arrived, another key, the timeout, the window closed). Never throws.
+    private static void EndSynthesis(string how)
+    {
+        var synthetic = _synthetic;
+        if (synthetic is null)
+        {
+            return;
+        }
+
+        _synthetic = null;
+        try
+        {
+            _syntheticTimer?.Stop();
+            _syntheticTimer?.Dispose();
+        }
+        catch (Exception)
+        {
+            // A timer that will not stop only ends a sequence that is already over.
+        }
+
+        _syntheticTimer = null;
+        var fields = new[]
+        {
+            how,
+            "keys=" + synthetic.Seen.ToString(CultureInfo.InvariantCulture) + "/" + synthetic.Count.ToString(CultureInfo.InvariantCulture),
+            "ms=" + ((Stopwatch.GetTimestamp() - _syntheticSent) * 1000.0 / Stopwatch.Frequency).ToString("0.0", CultureInfo.InvariantCulture),
+        };
+
+        // From the hook only posted, as every log line there; elsewhere written at once (the hook may be going).
+        if (_inProc)
+        {
+            Log("TraceSynth", fields);
+        }
+        else
+        {
+            DiagnosticsLog.Write("TraceSynth", fields);
+        }
+    }
+
+    private static NativeMethods.Input KeyInput(SyntheticKey key)
+    {
+        // The navigation keys (PgUp to Del) are extended keys: without the flag an arrow is the numeric keypad's,
+        // which Windows may turn into a digit (Num Lock) or answer with a fake Shift release (Shift+Right).
+        var extended = key.VirtualKey >= 0x21 && key.VirtualKey <= 0x2E;
+        return new NativeMethods.Input
+        {
+            Type = InputKeyboard,
+            Union = new NativeMethods.InputUnion
+            {
+                Keyboard = new NativeMethods.KeyboardInput
+                {
+                    VirtualKey = (ushort)key.VirtualKey,
+                    ScanCode = (ushort)NativeMethods.MapVirtualKey((uint)key.VirtualKey, 0),
+                    Flags = (key.KeyUp ? KeyEventFKeyUp : 0) | (extended ? KeyEventFExtendedKey : 0),
+                },
+            },
+        };
+    }
+
     private static IntPtr Proc(int code, IntPtr wParam, IntPtr lParam)
     {
         if (_inProc)
@@ -302,6 +453,25 @@ internal static class TraceKeyHook
         _inProc = true;
         try
         {
+            // Keys we sent (Send): passed untouched until the last one. A stray release is handled as usual below;
+            // any other press ends them and is handled as usual.
+            if (code == HcAction && _synthetic is SyntheticKeyTracker synthetic)
+            {
+                var key = wParam.ToInt32();
+                var keyUp = (lParam.ToInt64() & 0x80000000L) != 0;
+                switch (synthetic.Observe(key, keyUp))
+                {
+                    case SyntheticKeyMatch.Expected:
+                        return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
+                    case SyntheticKeyMatch.Completed:
+                        EndSynthesis("complete");
+                        return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
+                    case SyntheticKeyMatch.Unexpected:
+                        EndSynthesis("ended by another key (0x" + key.ToString("X2", CultureInfo.InvariantCulture) + ")");
+                        break;
+                }
+            }
+
             if (code == HcAction && _lingering)
             {
                 var key = wParam.ToInt32();
@@ -372,7 +542,15 @@ internal static class TraceKeyHook
                 {
                     // A fresh press ends any swallowed key whose key-up we never saw (focus moved, say).
                     _swallowedKey = 0;
-                    var command = TraceKeys.Command(key, Modifiers());
+                    var modifiers = Modifiers();
+
+                    // The key that ends an F2 edit goes to Excel (below); after it the session checks the formula.
+                    if (session.AwaitsEditEnd && TraceKeys.EndsEdit(key, modifiers) && Context() == TraceKeyContext.Editing)
+                    {
+                        session.Enqueue(() => session.EndEdit(goBack: true, "key"));
+                    }
+
+                    var command = TraceKeys.Command(key, modifiers);
                     if (command != TraceKeyCommand.None)
                     {
                         if (hiddenAndStuck)
@@ -516,6 +694,9 @@ internal static class TraceKeyHook
 
     private static bool IsDown(int virtualKey) => (NativeMethods.GetKeyState(virtualKey) & 0x8000) != 0;
 
+    // Physically down now (IsDown: as of the key message being handled).
+    private static bool IsHeld(int virtualKey) => (NativeMethods.GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+
     private static class NativeMethods
     {
         public delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
@@ -538,6 +719,18 @@ internal static class TraceKeyHook
 
         [DllImport("user32.dll")]
         public static extern short GetKeyState(int nVirtKey);
+
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int vKey);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern uint SendInput(uint nInputs, [In] Input[] pInputs, int cbSize);
+
+        [DllImport("user32.dll")]
+        public static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetFocus();
@@ -583,6 +776,48 @@ internal static class TraceKeyHook
             public int CaretTop;
             public int CaretRight;
             public int CaretBottom;
+        }
+
+        /// <summary>INPUT (used for keys only; the union is as large as its largest member, MOUSEINPUT).</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct Input
+        {
+            public uint Type;
+            public InputUnion Union;
+        }
+
+        /// <summary>INPUT's union.</summary>
+        [StructLayout(LayoutKind.Explicit)]
+        public struct InputUnion
+        {
+            [FieldOffset(0)]
+            public MouseInput Mouse;
+
+            [FieldOffset(0)]
+            public KeyboardInput Keyboard;
+        }
+
+        /// <summary>MOUSEINPUT (only for the union's size).</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MouseInput
+        {
+            public int Dx;
+            public int Dy;
+            public uint MouseData;
+            public uint Flags;
+            public uint Time;
+            public IntPtr ExtraInfo;
+        }
+
+        /// <summary>KEYBDINPUT.</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KeyboardInput
+        {
+            public ushort VirtualKey;
+            public ushort ScanCode;
+            public uint Flags;
+            public uint Time;
+            public IntPtr ExtraInfo;
         }
     }
 }

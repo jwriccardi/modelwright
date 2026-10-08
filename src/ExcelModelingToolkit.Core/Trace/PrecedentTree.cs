@@ -121,6 +121,70 @@ public sealed class PrecedentTree
         return changed;
     }
 
+    /// <summary>
+    /// Where a node is: the position of each node among its parent's children, from the root's child down to it
+    /// (empty for the root). With <see cref="SelectPath"/> it brings the selection back after the tree is rebuilt.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="node"/> is null.</exception>
+    public IReadOnlyList<int> PathOf(PrecedentNode node)
+    {
+        if (node is null)
+        {
+            throw new ArgumentNullException(nameof(node));
+        }
+
+        var path = new List<int>();
+        for (var current = node; current.Parent is not null; current = current.Parent)
+        {
+            var siblings = current.Parent.Children;
+            var index = 0;
+            while (index < siblings.Count && !ReferenceEquals(siblings[index], current))
+            {
+                index++;
+            }
+
+            path.Add(index);
+        }
+
+        path.Reverse();
+        return path;
+    }
+
+    /// <summary>
+    /// Follows <paramref name="path"/> (see <see cref="PathOf"/>) from the root, expanding each node on the way, and
+    /// selects the deepest node it reaches: where the path ends, or the last node before a position that no longer
+    /// exists (the formula now has fewer references) or a node that cannot be expanded. If the provider throws, the
+    /// selection stays on the deepest node reached so far and the exception propagates.
+    /// </summary>
+    /// <returns>The selected node.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="path"/> is null.</exception>
+    public PrecedentNode SelectPath(IReadOnlyList<int> path)
+    {
+        if (path is null)
+        {
+            throw new ArgumentNullException(nameof(path));
+        }
+
+        Selected = Root;
+        foreach (var index in path)
+        {
+            var node = Selected;
+            if (!node.IsExpanded && !Expand(node))
+            {
+                break;
+            }
+
+            if (index < 0 || index >= node.Children.Count)
+            {
+                break;
+            }
+
+            Selected = node.Children[index];
+        }
+
+        return Selected;
+    }
+
     /// <summary>Up: selects the previous visible row.</summary>
     public TreeMove MoveUp()
     {

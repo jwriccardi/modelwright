@@ -29,6 +29,7 @@ public class TraceKeysTests
     [InlineData(Right, KeyModifiers.None, TraceKeyCommand.Right)]
     [InlineData(Enter, KeyModifiers.None, TraceKeyCommand.Close)]
     [InlineData(Escape, KeyModifiers.None, TraceKeyCommand.Cancel)]
+    [InlineData(F2, KeyModifiers.None, TraceKeyCommand.EditReference)] // edits the selected reference (Point mode)
     [InlineData(E, KeyModifiers.Ctrl, TraceKeyCommand.ToggleEvaluate)]
     [InlineData(Up, KeyModifiers.Ctrl, TraceKeyCommand.MoveWindowUp)]
     [InlineData(Down, KeyModifiers.Ctrl, TraceKeyCommand.MoveWindowDown)]
@@ -46,7 +47,7 @@ public class TraceKeysTests
     }
 
     [Theory]
-    [InlineData(F2, KeyModifiers.None)] // edits the active cell in Excel; the window stays open
+    [InlineData(F2, KeyModifiers.Shift)] // Excel's comment key
     [InlineData(Z, KeyModifiers.Ctrl)] // undo stays Excel's (and the undo hook's)
     [InlineData(OemOpenBracket, KeyModifiers.Ctrl | KeyModifiers.Shift)] // Ctrl+Shift+[ re-traces through OnKey
     [InlineData(Tab, KeyModifiers.None)]
@@ -98,6 +99,7 @@ public class TraceKeysTests
         Assert.False(TraceKeys.Repeats(TraceKeyCommand.Close));
         Assert.False(TraceKeys.Repeats(TraceKeyCommand.Cancel));
         Assert.False(TraceKeys.Repeats(TraceKeyCommand.ToggleEvaluate));
+        Assert.False(TraceKeys.Repeats(TraceKeyCommand.EditReference));
         Assert.False(TraceKeys.Repeats(TraceKeyCommand.SnapTopLeft));
         Assert.False(TraceKeys.Repeats(TraceKeyCommand.SnapBottomRight));
         Assert.False(TraceKeys.Repeats(TraceKeyCommand.None));
@@ -116,6 +118,22 @@ public class TraceKeysTests
                 TraceKeyCommand.ShrinkHeight, TraceKeyCommand.GrowHeight, TraceKeyCommand.ShrinkWidth, TraceKeyCommand.GrowWidth,
             },
             window);
+    }
+
+    [Theory]
+    [InlineData(Enter, KeyModifiers.None, true)]
+    [InlineData(Enter, KeyModifiers.Shift, true)]
+    [InlineData(Enter, KeyModifiers.Ctrl, true)] // fills the selection
+    [InlineData(Enter, KeyModifiers.Ctrl | KeyModifiers.Shift, true)] // an array formula
+    [InlineData(Tab, KeyModifiers.None, true)]
+    [InlineData(Tab, KeyModifiers.Shift, true)]
+    [InlineData(Escape, KeyModifiers.None, true)]
+    [InlineData(Enter, KeyModifiers.Alt, false)] // a line break in the formula
+    [InlineData(Down, KeyModifiers.None, false)] // points at another cell
+    [InlineData(F2, KeyModifiers.None, false)] // toggles Point and Edit mode
+    public void Enter_tab_and_escape_end_an_edit(int key, KeyModifiers modifiers, bool ends)
+    {
+        Assert.Equal(ends, TraceKeys.EndsEdit(key, modifiers));
     }
 
     [Fact]

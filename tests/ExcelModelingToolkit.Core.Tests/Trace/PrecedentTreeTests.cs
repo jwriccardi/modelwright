@@ -657,4 +657,57 @@ public class PrecedentTreeTests
         Assert.False(tree.Root.Children[0].Children[0].IsCycle);
         Assert.Equal("number1", tree.Root.Children[0].Item.Argument);
     }
+
+    [Fact]
+    public void A_path_brings_the_selection_back_in_a_rebuilt_tree()
+    {
+        var root = Cell("A1");
+        var c1 = Cell("C1");
+        var provider = new FakePrecedentProvider().Has(root, Cell("B1"), c1).Has(c1, Cell("D1"), Cell("E1"));
+        var tree = new PrecedentTree(provider, root);
+        tree.Select(tree.Root.Children[1]);
+        tree.MoveRight();
+        tree.MoveRight();
+        tree.MoveDown(); // E1, under C1
+
+        var path = tree.PathOf(tree.Selected);
+        var rebuilt = new PrecedentTree(provider, root);
+        var selected = rebuilt.SelectPath(path);
+
+        Assert.Equal(new[] { 1, 1 }, path);
+        Assert.Equal("Calc!E1", selected.Item.Label);
+        Assert.Same(selected, rebuilt.Selected);
+        Assert.Equal(tree.SelectedIndex, rebuilt.SelectedIndex);
+        Assert.Empty(rebuilt.PathOf(rebuilt.Root));
+        Assert.Same(rebuilt.Root, rebuilt.SelectPath(new int[0]));
+    }
+
+    [Fact]
+    public void A_path_that_no_longer_exists_stops_at_the_last_node_it_reached()
+    {
+        // The edited formula now has one reference fewer, or the cell no longer has precedents.
+        var root = Cell("A1");
+        var b1 = Cell("B1");
+        var tree = new PrecedentTree(new FakePrecedentProvider().Has(root, b1).Has(b1, Cell("C1", canExpand: false)), root);
+
+        Assert.Equal("Calc!A1", tree.SelectPath(new[] { 3, 0 }).Item.Label);
+        Assert.Equal("Calc!B1", tree.SelectPath(new[] { 0, 5 }).Item.Label);
+        Assert.Equal("Calc!C1", tree.SelectPath(new[] { 0, 0, 0 }).Item.Label);
+        Assert.Throws<ArgumentNullException>(() => tree.SelectPath(null!));
+        Assert.Throws<ArgumentNullException>(() => tree.PathOf(null!));
+    }
+
+    [Fact]
+    public void A_path_stops_where_the_provider_fails_and_the_failure_propagates()
+    {
+        var root = Cell("A1");
+        var b1 = Cell("B1");
+        var provider = new FakePrecedentProvider().Has(root, b1).Has(b1, Cell("C1"));
+        var tree = new PrecedentTree(provider, root);
+        provider.ThrowNext = new PrecedentsUnavailableException("busy");
+
+        Assert.Throws<PrecedentsUnavailableException>(() => tree.SelectPath(new[] { 0, 0 }));
+        Assert.Equal("Calc!B1", tree.Selected.Item.Label);
+        Assert.False(tree.Selected.IsLoaded);
+    }
 }

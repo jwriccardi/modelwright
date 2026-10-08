@@ -3,11 +3,13 @@
 #   powershell -ExecutionPolicy Bypass -File tests/excel-smoke/trace-smoke.ps1 [-Xll <path to packed xll>]
 # It (re)builds the fixture first (build-trace-fixture.ps1: %TEMP%\emt-trace-fixture), opens EMT_TraceMain.xlsx and
 # checks through COM, after every key, which workbook, sheet and cell is active, and whether the Trace In window is
-# open. Covered: cross-sheet and same-sheet navigation, names, a hidden sheet (Goto refused, no error), F2 passing
-# through to Excel with the window open, expanding into the closed external workbook (Trace In opens it), Left back
-# out of it, Enter (stay), Esc (back to the audited cell), Last Audited Cell through four levels, ROW() in OFFSET
-# evaluated for its own cell, a name whose target is in the closed external workbook, and native undo surviving a
-# trace that stays in the workbook (type in B1, trace + navigate + Esc, Ctrl+Z: B1 is empty again).
+# open. Covered: cross-sheet and same-sheet navigation, names, a hidden sheet (Goto refused, no error), F2 on a
+# reference row (back to the audited cell in Point mode; Esc cancels, the window stays), expanding into the closed
+# external workbook (Trace In opens it), Left back out of it, Enter (stay), Esc (back to the audited cell), Last
+# Audited Cell through four levels, ROW() in OFFSET evaluated for its own cell, a name whose target is in the closed
+# external workbook, native undo surviving a trace that stays in the workbook (type in B1, trace + navigate + Esc,
+# Ctrl+Z: B1 is empty again), and an F2 edit of a reference (B16 =A14+A2: Down to A2, F2, Down in Point mode, Enter:
+# B16 is =A14+A3, Excel is back on B16 with the window open, and Ctrl+Z restores =A14+A2).
 # Timings (open, and each Up/Down step) are read back from the diagnostics log and reported against the targets
 # (300 ms, 100 ms); they are reported, not failed on. With the diagnostics log off (diagnosticsLog: false in
 # settings.json) those log checks are skipped and the output says so; settings.json is never touched.
@@ -23,6 +25,8 @@
 #   *ModelingToolkit64-packed.xll in the add-in list, and puts all of them back in `finally` (each on its own), however
 #   the run ends: the add-in build under test is uninstalled again unless it was installed before, and the builds that
 #   were installed are installed again. Only the fixture workbooks (in the fixture folder) are closed, without saving.
+#   If Excel is still editing a cell then (a run that aborted in Point mode), one Esc is sent first, after the same
+#   foreground check.
 # The focus trick taps Shift (only when Excel is not already in front): an Alt tap would turn on ribbon KeyTips and
 # send the next key to the ribbon.
 param(
@@ -157,8 +161,19 @@ function Assert-SafeToSend([string]$what) {
 
 function Window-Open { [W]::HasWindow([uint32]$excelPid, 'Trace In') }
 
-# Sends keys, waits, then checks the active workbook/sheet/cell and (if given) whether the window is open. The first
-# step that does not end there aborts the run (throws): no further key is sent.
+# True while Excel is editing a cell: Application.Ready is false then (or the call is refused while Excel is busy).
+function Edit-Mode { try { return -not [bool]$xl.Ready } catch { return $true } }
+
+# The add-in's diagnostics log lines since the run started that match a pattern (none when the log is off).
+function Log-Lines([string]$pattern) {
+  if (-not (Test-Path $log)) { return @() }
+  $all = [IO.File]::ReadAllBytes($log)
+  $from = if ($all.Length -ge $logStart) { $logStart } else { 0 }
+  return @([Text.Encoding]::UTF8.GetString($all, $from, $all.Length - $from) -split "`r?`n" | Where-Object { $_ -match $pattern })
+}
+
+# Sends keys, waits, then checks the active workbook/sheet/cell (an empty cell: any) and (if given) whether the window
+# is open. The first step that does not end there aborts the run (throws): no further key is sent.
 function Step([string]$keys, [string]$label, [string]$book, [string]$sheet, [string]$cell, $window = $null, [int]$waitMs = 700) {
   Assert-SafeToSend $label
   [System.Windows.Forms.SendKeys]::SendWait($keys)
@@ -169,7 +184,7 @@ function Step([string]$keys, [string]$label, [string]$book, [string]$sheet, [str
     $s = Retry { $xl.ActiveSheet.Name }
     $c = Retry { $xl.ActiveCell.Address($false, $false) }
     $w = Window-Open
-    $ok = ($b -eq $book) -and ($s -eq $sheet) -and ($c -eq $cell) -and (($null -eq $window) -or ($w -eq $window))
+    $ok = ($b -eq $book) -and ($s -eq $sheet) -and (($cell -eq '') -or ($c -eq $cell)) -and (($null -eq $window) -or ($w -eq $window))
   } while (-not $ok -and (Get-Date) -lt $deadline)
   $sb = Retry { $xl.StatusBar }
   "{0} {1,-48} active=[{2}]{3}!{4} window={5} status=[{6}]" -f $(if ($ok) { 'ok  ' } else { 'FAIL' }), $label, $b, $s, $c, $w, $sb
@@ -240,11 +255,13 @@ try {
   foreach ($target in @('B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B10', 'B11', 'B13')) {
     Step '{DOWN}' "Down: $target"                $mainName 'Calc' $target $true
   }
-  $formulaBefore = Retry { $calc.Range('B13').Formula }
-  Step '{F2}'   'F2: edit B13, window stays'     $mainName 'Calc' 'B13' $true
-  Step '{ESC}'  'Esc in edit mode goes to Excel' $mainName 'Calc' 'B13' $true
-  $formulaAfter = Retry { $calc.Range('B13').Formula }
-  if ($formulaAfter -ne $formulaBefore) { throw "ABORT: F2/Esc changed B13: [$formulaBefore] -> [$formulaAfter]" }
+  # F2 on the B13 row edits that reference in A1's formula: back on A1, in Point mode; Esc cancels (Excel's) and
+  # leaves Excel on A1 with the window open.
+  $formulaBefore = Retry { $calc.Range('A1').Formula }
+  Step '{F2}'   'F2: A1, editing B13 in its formula' $mainName 'Calc' 'A1' $true -waitMs 1500
+  Step '{ESC}'  'Esc in Point mode goes to Excel' $mainName 'Calc' 'A1' $true -waitMs 1500
+  $formulaAfter = Retry { $calc.Range('A1').Formula }
+  if ($formulaAfter -ne $formulaBefore) { throw "ABORT: F2/Esc changed A1: [$formulaBefore] -> [$formulaAfter]" }
   Step '{UP}'    'Up: B11'                       $mainName 'Calc' 'B11' $true
   Step '{RIGHT}' 'Right: expand B11 (opens ext)' $mainName 'Calc' 'B11' $true -waitMs 15000
   $extOpen = $false; foreach ($open in @($xl.Workbooks)) { if ($open.Name -eq $extName -and (Is-Fixture $open)) { $extOpen = $true } }
@@ -295,6 +312,48 @@ try {
   Step '^+{[}'  'Ctrl+Shift+[ on B15 (opens ext)' $mainName 'Calc' 'B15' $true -waitMs 15000
   Step '{DOWN}' 'Down: ExtRate -> [External]Rates!B2' $extName 'Rates' 'B2' $true -waitMs 3000
   Step '{ESC}'  'Esc: back to B15'               $mainName 'Calc' 'B15' $false -waitMs 3000
+
+  # --- H. F2 edits a reference in Point mode: B16 =A14+A2, the A2 row, F2, Down (A3), Enter; then Ctrl+Z ---
+  $b16 = Retry { $calc.Range('B16').Formula }
+  if ($b16 -ne '=A14+A2') { throw "ABORT: the fixture's Calc!B16 is [$b16], not =A14+A2." }
+  Select-Cell 'B16'
+  Step '^+{[}'  'Ctrl+Shift+[ on B16'            $mainName 'Calc' 'B16' $true -waitMs 3000
+  Step '{DOWN}' 'Down: A14'                      $mainName 'Calc' 'A14' $true
+  Step '{DOWN}' 'Down: A2'                       $mainName 'Calc' 'A2' $true
+  Step '{F2}'   'F2: back on B16, editing A2'    $mainName 'Calc' 'B16' $true -waitMs 1500
+  $deadline = (Get-Date).AddSeconds(3)
+  while (-not (Edit-Mode) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+  if (-not (Edit-Mode)) { throw "ABORT: after F2 Excel is not editing B16 (Application.Ready is true)." }
+  "ok   Excel is editing B16 (Application.Ready is false)"
+  $synth = @(Log-Lines "`tTraceSynth`t")
+  if ($synth.Count -gt 0) {
+    if (-not ($synth[-1] -match "`tcomplete`t")) { throw "ABORT: the keys F2 sent did not all arrive: $($synth[-1])" }
+    "ok   the add-in's keys all arrived: $($synth[-1])"
+  }
+  else { "SKIP: no TraceSynth line in the diagnostics log (the log is off): only Application.Ready was checked" }
+  Step '{DOWN}' 'Down in Point mode: A2 -> A3'   $mainName 'Calc' '' $true
+  Step '~'      'Enter: commit, back on B16'     $mainName 'Calc' 'B16' $true -waitMs 3000
+  if (Edit-Mode) { throw "ABORT: Excel is still editing after Enter." }
+  $b16 = Retry { $calc.Range('B16').Formula }
+  if ($b16 -ne '=A14+A3') { throw "ABORT: after the F2 edit B16 is [$b16], not =A14+A3." }
+  "ok   B16 is now =A14+A3, Excel is back on B16 and the window is open"
+  $ended = @(Log-Lines "`tTraceEditEnd`t")
+  if ($ended.Count -gt 0) {
+    if (-not ($ended[-1] -match "`tchanged=true`t")) { $failures.Add("F2 edit: the log does not show the edit's end as a change: $($ended[-1])") }
+    else { "ok   the tree was rebuilt: $($ended[-1])" }
+  }
+  $canUndo = Retry { $xl.CommandBars.GetEnabledMso('Undo') }
+  if (-not $canUndo) {
+    $failures.Add('undo after an F2 edit: Excel cannot undo it; Ctrl+Z not sent')
+    "FAIL Excel's Undo is unavailable after the F2 edit; Ctrl+Z not sent"
+  }
+  else {
+    Step '^z'   'Ctrl+Z: undo the F2 edit'       $mainName 'Calc' 'B16' $true
+    $b16 = Retry { $calc.Range('B16').Formula }
+    if ($b16 -ne '=A14+A2') { $failures.Add("undo after an F2 edit: B16 is [$b16], not =A14+A2"); "FAIL B16 is [$b16] after Ctrl+Z" }
+    else { "ok   Ctrl+Z restored =A14+A2: Excel's undo of the F2 edit survived" }
+  }
+  Step '{ESC}'  'Esc: back to B16, closed'       $mainName 'Calc' 'B16' $false
 }
 catch {
   $failures.Add("aborted: $($_.Exception.Message)")
@@ -302,6 +361,17 @@ catch {
 }
 finally {
   "--- putting Excel back ---"
+  # 0. A run that aborted while Excel was editing (Point mode): one Esc, only to a fixture window of this Excel.
+  try {
+    if (Edit-Mode) {
+      Assert-SafeToSend 'Esc to end the cell edit'
+      [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+      Start-Sleep -Milliseconds 500
+      "Sent Esc: Excel was still editing a cell"
+    }
+  }
+  catch { "WARNING: Excel may still be editing a cell: $($_.Exception.Message)" }
+
   # 1. The add-in builds: the test build out unless it was installed before, then the builds that were installed.
   if (-not $testWasInstalled) {
     try {

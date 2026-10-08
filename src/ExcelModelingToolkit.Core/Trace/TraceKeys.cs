@@ -29,6 +29,12 @@ public enum TraceKeyCommand
     /// <summary>Ctrl+E: "Evaluate functions &amp; groups" (not in this version: says so).</summary>
     ToggleEvaluate,
 
+    /// <summary>
+    /// F2: edit the selected reference in the formula that holds it, in Excel's Point mode (see
+    /// <see cref="ReferenceEdit"/>); on a row that is not such a reference, F2 edits the active cell as usual.
+    /// </summary>
+    EditReference,
+
     /// <summary>Ctrl+Up: move the window up.</summary>
     MoveWindowUp,
 
@@ -86,7 +92,7 @@ public enum TraceKeyContext
 /// <summary>
 /// The Trace In keyboard (variant C of spike K4): which presses the thread keyboard hook takes while the window is
 /// open, and what they do. Every other key, and every key while a cell is being edited or the focus is not on a
-/// worksheet grid, goes to Excel untouched; so F2 edits the active cell with the window open.
+/// worksheet grid, goes to Excel untouched; so once F2 has started an edit, the arrows, Enter and Esc are Excel's.
 /// </summary>
 public static class TraceKeys
 {
@@ -98,6 +104,7 @@ public static class TraceKeys
     public const TraceCloseMode CancelCloseMode = TraceCloseMode.ReturnToAuditedCell;
 
     /// <summary>Virtual-key codes the table uses (Win32 <c>VK_*</c>).</summary>
+    private const int VkTab = 0x09;
     private const int VkReturn = 0x0D;
     private const int VkEscape = 0x1B;
     private const int VkEnd = 0x23;
@@ -107,11 +114,12 @@ public static class TraceKeys
     private const int VkRight = 0x27;
     private const int VkDown = 0x28;
     private const int VkE = 0x45;
+    private const int VkF2 = 0x71;
 
     /// <summary>
     /// The command for a press of <paramref name="virtualKey"/> with exactly <paramref name="modifiers"/> held, or
-    /// <see cref="TraceKeyCommand.None"/>: arrows, Enter and Esc alone; Ctrl with an arrow, Home, End or E; Shift with
-    /// an arrow. Anything with Alt, or with Ctrl and Shift together, is not ours.
+    /// <see cref="TraceKeyCommand.None"/>: arrows, Enter, Esc and F2 alone; Ctrl with an arrow, Home, End or E; Shift
+    /// with an arrow. Anything with Alt, or with Ctrl and Shift together, is not ours.
     /// </summary>
     public static TraceKeyCommand Command(int virtualKey, KeyModifiers modifiers)
     {
@@ -132,6 +140,8 @@ public static class TraceKeys
                         return TraceKeyCommand.Close;
                     case VkEscape:
                         return TraceKeyCommand.Cancel;
+                    case VkF2:
+                        return TraceKeyCommand.EditReference;
                 }
 
                 break;
@@ -198,7 +208,7 @@ public static class TraceKeys
 
     /// <summary>
     /// True if holding the key down repeats the command (the arrows, alone or with Ctrl or Shift). For the others
-    /// (Enter, Esc, Ctrl+Home, Ctrl+End, Ctrl+E) the auto-repeats are swallowed with the press.
+    /// (Enter, Esc, F2, Ctrl+Home, Ctrl+End, Ctrl+E) the auto-repeats are swallowed with the press.
     /// </summary>
     public static bool Repeats(TraceKeyCommand command)
     {
@@ -208,6 +218,7 @@ public static class TraceKeys
             case TraceKeyCommand.Close:
             case TraceKeyCommand.Cancel:
             case TraceKeyCommand.ToggleEvaluate:
+            case TraceKeyCommand.EditReference:
             case TraceKeyCommand.SnapTopLeft:
             case TraceKeyCommand.SnapBottomRight:
                 return false;
@@ -219,6 +230,14 @@ public static class TraceKeys
     /// <summary>True for the commands that only move, snap or resize the window (no Excel call is needed).</summary>
     public static bool IsWindowCommand(TraceKeyCommand command) =>
         command >= TraceKeyCommand.MoveWindowUp && command <= TraceKeyCommand.GrowWidth;
+
+    /// <summary>
+    /// True for a press that ends Excel's cell edit, so after an F2 edit (<see cref="TraceKeyCommand.EditReference"/>)
+    /// the add-in checks whether the formula changed: Enter or Tab (commit, with Shift, Ctrl or both: Ctrl+Shift+Enter
+    /// enters an array formula), and Esc (cancel). Not with Alt: Alt+Enter is a line break in the formula.
+    /// </summary>
+    public static bool EndsEdit(int virtualKey, KeyModifiers modifiers) =>
+        (virtualKey == VkReturn || virtualKey == VkTab || virtualKey == VkEscape) && (modifiers & KeyModifiers.Alt) == 0;
 
     /// <summary>
     /// Where the selection is left by a closing command: <see cref="TraceKeyCommand.Close"/> stays on the current

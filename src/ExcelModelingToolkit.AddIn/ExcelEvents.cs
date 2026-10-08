@@ -16,7 +16,7 @@ namespace ExcelModelingToolkit.AddIn;
 /// closed too.</item>
 /// <item><c>SheetChange</c> on whole rows or whole columns (a row or column inserted or deleted, or cleared): every
 /// snapshot of that sheet, since its cells may have moved. Other changes are ignored; the restore still checks
-/// every block before writing.</item>
+/// every block before writing. An open Trace In window is told of every change (to see an F2 edit end).</item>
 /// <item><c>WindowActivate</c>: an open Trace In window is re-owned to the workbook window just activated (the user
 /// clicked another workbook's window), so it stays in front of the window in use.</item>
 /// </list>
@@ -135,9 +135,13 @@ internal static class ExcelEvents
         }
     }
 
-    /// <summary>Handles <c>SheetChange</c>: acts only on whole rows or whole columns. Never throws.</summary>
+    /// <summary>
+    /// Handles <c>SheetChange</c>: tells an open Trace In window (an F2 edit may have been committed), then, for the
+    /// undo history, acts only on whole rows or whole columns. Never throws.
+    /// </summary>
     internal static void OnSheetChange(object worksheet, object target)
     {
+        TraceSession.Current?.OnSheetChange(worksheet, target);
         if (Session.Undo.UndoCount + Session.Undo.RedoCount == 0)
         {
             return;

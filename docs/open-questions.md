@@ -48,6 +48,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 | D8 | Mac / web follow-up | Office.js, which K1c showed can bind the exact punctuation keys. **Owner idea (2026-09-29): a web edition that just does the color cycles.** | Future (PLAN, v2 roadmap) |
 | D9 | Approve decision spikes K1–K4 (throwaway code) | — | **Approved 2026-09-28** |
 | D11 | Cross-workbook trace | — | **Decided 2026-09-28: essential.** This is why Excel-DNA was kept over Office.js. |
+| D12 | Product name | — | **Decided 2026-10-08: "Modelwright"** (repo `modelwright`, product and namespaces `Modelwright.*`). The working name clashed with ROV's commercial "Modeling Toolkit" add-in. Checked: no product, company or trademark found; Cellwright, SheetKit and ModelKit were taken; BlueCell has a registered mark in the software class. "Excel" is kept out of the name itself (Microsoft has enforced that against TurboExcel and ExcelEverywhere). |
 | D10 | Undo target | — | **Decided 2026-09-28: Macabacus parity in v1. The Excel-DNA + Office.js hybrid for full native undo is a v2 candidate.** |
 
 ## C. Development-machine note

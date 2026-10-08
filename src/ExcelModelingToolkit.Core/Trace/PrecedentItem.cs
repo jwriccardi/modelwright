@@ -26,11 +26,15 @@ public sealed class PrecedentItem
     /// Why the target cannot be seen (<c>hidden sheet</c>, <c>hidden rows</c>; see
     /// <see cref="TraceValueText.HiddenNote"/>), shown as a badge, or null if it is visible.
     /// </param>
+    /// <param name="span">
+    /// Where the item is written in a cell's formula (F2 edits it there), or null if it is not a reference written in
+    /// a cell's formula.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="label"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="cellCount"/> is below 1.</exception>
     public PrecedentItem(PrecedentKind kind, string label, string? workbook = null, string? sheet = null,
         string? address = null, long cellCount = 1, string? valueText = null, bool canExpand = true, string? argument = null,
-        string? hiddenNote = null)
+        string? hiddenNote = null, ReferenceSpan? span = null)
     {
         if (cellCount < 1)
         {
@@ -47,6 +51,7 @@ public sealed class PrecedentItem
         CanExpand = canExpand;
         Argument = argument;
         HiddenNote = hiddenNote;
+        Span = span;
     }
 
     /// <summary>What the item is.</summary>
@@ -81,6 +86,9 @@ public sealed class PrecedentItem
 
     /// <summary>The Argument column text, or null.</summary>
     public string? Argument { get; }
+
+    /// <summary>Where the item is written in a cell's formula, or null (see <see cref="ReferenceEdit.SpanOf"/>).</summary>
+    public ReferenceSpan? Span { get; }
 
     /// <summary>
     /// The canonical identity used for cycle detection, <c>WORKBOOK|SHEET|ADDRESS</c> in upper case with <c>$</c>
@@ -192,6 +200,15 @@ public sealed class PrecedentItem
         return new PrecedentItem(kind, label ?? reference.Text, reference.WorkbookName ?? context.WorkbookName, sheet,
             reference.Address, reference.Area?.CellCount ?? 1, valueText, canExpand, argument);
     }
+
+    /// <summary>
+    /// A copy of the item that knows where it is written (<paramref name="span"/>); every other property is the same.
+    /// A new object: a caller that keys anything by the item (a provider's lookups) moves it to the copy.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="span"/> is null.</exception>
+    public PrecedentItem WithSpan(ReferenceSpan span) =>
+        new PrecedentItem(Kind, Label, Workbook, Sheet, Address, CellCount, ValueText, CanExpand, Argument, HiddenNote,
+            span ?? throw new ArgumentNullException(nameof(span)));
 
     /// <summary>The label.</summary>
     public override string ToString() => Label;

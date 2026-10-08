@@ -15,7 +15,7 @@ namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
 /// The Trace In window (variant C of spike K4): a WPF window that never takes the focus (<c>WS_EX_NOACTIVATE</c>),
-/// owned by Excel's active workbook window, so Excel keeps the keyboard and F2 edits the active cell with the
+/// owned by Excel's active workbook window, so Excel keeps the keyboard and a cell can be edited (F2) with the
 /// window open. Its keys come from <see cref="TraceKeyHook"/>; WPF's own keyboard handling is not used (it is
 /// unreliable on Excel's thread). The mouse works: a click selects a row, a double-click or a click on the
 /// expander expands or collapses it.

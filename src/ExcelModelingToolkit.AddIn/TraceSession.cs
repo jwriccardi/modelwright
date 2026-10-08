@@ -30,6 +30,14 @@ namespace ExcelModelingToolkit.AddIn;
 /// workbook can pump messages) waits for it. While a cell is being edited, tree moves and clicks are ignored (Excel
 /// would reject the calls). Every open, navigation and close writes one diagnostics log line with its timing.
 /// </para>
+/// <para>
+/// <b>F2</b> edits the selected reference where it is written (<see cref="ReferenceEdit"/>): it goes to that cell
+/// and sends Excel the keys that select the reference and switch to Point mode (<see cref="TraceKeyHook.Send"/>).
+/// The edit is Excel's own, made with keys and <c>Application.Goto</c> only, so Excel's undo of it should survive.
+/// When the key that ends it (Enter, Tab, Esc) has gone to Excel, the session goes back to the cell; then, or when
+/// the cell changes otherwise (a click elsewhere commits), if the formula changed it rebuilds the tree in the same
+/// window.
+/// </para>
 /// </remarks>
 internal sealed class TraceSession
 {
@@ -51,6 +59,9 @@ internal sealed class TraceSession
 
     // True if a move left the tree's selection without going there (a newer move was queued).
     private bool _skippedGoTo;
+
+    // The F2 edit Excel is doing, from the keys sent until its end is seen; null when none.
+    private PendingEdit? _edit;
 
     private TraceSession(ExcelPrecedentProvider provider, PrecedentTree tree, object audited, string auditedWorkbook)
     {
@@ -77,6 +88,9 @@ internal sealed class TraceSession
     /// <summary>The Excel window that owns the window (the hook follows the keyboard away from it).</summary>
     public IntPtr OwnerHandle => _window.OwnerHandle;
 
+    /// <summary>True while an F2 edit has started and its end has not been seen (see <see cref="EndEdit"/>).</summary>
+    public bool AwaitsEditEnd => _edit is not null && !_closing;
+
     /// <summary>
     /// Shows a trace: opens the window, or, if one is open, shows the new trace in it, and makes sure the key hook is
     /// installed. Returns a note for the status bar (empty if none). If the window cannot be filled it is closed and
@@ -100,6 +114,7 @@ internal sealed class TraceSession
             session._auditedWorkbook = auditedWorkbook;
             session._queue.Clear(); // keys meant for the old trace
             session._pendingMoves = 0;
+            session._edit = null;
             session.ReOwn();
         }
 
@@ -182,6 +197,12 @@ internal sealed class TraceSession
             return;
         }
 
+        if (command == TraceKeyCommand.EditReference)
+        {
+            StartEdit(pressed, source);
+            return;
+        }
+
         var stopwatch = Stopwatch.StartNew();
         var move = TreeMove.None;
         var target = "-";
@@ -238,6 +259,87 @@ internal sealed class TraceSession
         catch (Exception ex)
         {
             DiagnosticsLog.Write("TraceWindowKey", command.ToString(), "error: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The end of an F2 edit (queued by the hook after the Enter, Tab or Esc that went to Excel, or after a change to
+    /// the edited cell): unless Excel is still editing (an Enter on a formula Excel rejected, say), goes back to the
+    /// edited cell if <paramref name="goBack"/> (Enter may have moved the selection), and if its formula changed,
+    /// rebuilds the tree in the same window with the selection where it was. Logs the end. Never throws.
+    /// </summary>
+    public void EndEdit(bool goBack, string source)
+    {
+        var edit = _edit;
+        if (edit is null || _closing || !ReferenceEquals(Current, this) || IsEditing())
+        {
+            return;
+        }
+
+        _edit = null;
+        var stopwatch = Stopwatch.StartNew();
+        var changed = false;
+        string result;
+        try
+        {
+            var formula = ExcelPrecedentProvider.FormulaText(edit.Cell);
+            changed = !string.Equals(formula, edit.Formula, StringComparison.Ordinal);
+            result = goBack ? GoTo(edit.Cell) : "stayed";
+            if (changed)
+            {
+                Reload(edit.Path);
+                result += "; tree rebuilt";
+            }
+        }
+        catch (Exception ex)
+        {
+            result = "error: " + ex.Message;
+            Message("Trace In: " + ex.Message);
+        }
+
+        DiagnosticsLog.Write(
+            "TraceEditEnd",
+            "source=" + source,
+            "changed=" + (changed ? "true" : "false"),
+            "ms=" + Ms(edit.Started.Elapsed.TotalMilliseconds),
+            "handleMs=" + Ms(stopwatch.Elapsed.TotalMilliseconds),
+            "owner=" + edit.Span,
+            result);
+    }
+
+    /// <summary>
+    /// Handles <c>SheetChange</c>: a change to the cell of an F2 edit (committed some other way than Enter or Tab, a
+    /// click elsewhere say) ends the edit once the event has returned (<see cref="EndEdit"/>, staying put). Never throws.
+    /// </summary>
+    public void OnSheetChange(object worksheet, object target)
+    {
+        var edit = _edit;
+        if (edit is null || _closing)
+        {
+            return;
+        }
+
+        try
+        {
+            dynamic sheet = worksheet;
+            string sheetName = sheet.Name;
+            string bookName = sheet.Parent.Name;
+            if (!string.Equals(sheetName, edit.Span.Sheet, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(bookName, edit.Span.Workbook, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            dynamic app = ExcelDnaUtil.Application;
+            object? overlap = app.Intersect(target, edit.Cell);
+            if (overlap is not null)
+            {
+                Enqueue(() => EndEdit(goBack: false, "sheet change"));
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("TraceWindowError", "SheetChange failed", ex.Message);
         }
     }
 
@@ -342,6 +444,152 @@ internal sealed class TraceSession
         _window.SetFormula(formula, segments, note);
         RefreshRows();
         _window.SetStatus(Where(_tree.Root));
+    }
+
+    // The audited cell's precedents changed (an F2 edit): a new tree in the same window, with the selection brought
+    // back along the same path, or as near as the new tree allows.
+    private void Reload(IReadOnlyList<int> path)
+    {
+        var provider = new ExcelPrecedentProvider();
+        var tree = new PrecedentTree(provider, provider.CreateRoot(_audited));
+        _provider = provider;
+        _tree = tree;
+        _pendingMoves = 0;
+        _skippedGoTo = false;
+        try
+        {
+            tree.SelectPath(path);
+        }
+        catch (PrecedentsUnavailableException)
+        {
+            // Excel is busy: the selection stays as deep as the path was followed.
+        }
+
+        Load();
+        _window.SetStatus(Where(_tree.Selected));
+    }
+
+    // F2 (outside macro context): see EditReference. Logs the start.
+    private void StartEdit(long pressed, string source)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var owner = "-";
+        var keyCount = 0;
+        string result;
+        try
+        {
+            result = EditReference(ref owner, ref keyCount);
+        }
+        catch (Exception ex)
+        {
+            result = "error: " + ex.Message;
+            Message("Trace In: " + ex.Message);
+        }
+
+        DiagnosticsLog.Write(
+            "TraceEditReference",
+            "source=" + source,
+            "ms=" + Ms(Elapsed(pressed)),
+            "handleMs=" + Ms(stopwatch.Elapsed.TotalMilliseconds),
+            "owner=" + owner,
+            "keys=" + keyCount.ToString(CultureInfo.InvariantCulture),
+            result);
+    }
+
+    // Goes to the cell whose formula holds the selected reference and sends Excel the keys that select the reference
+    // and switch to Point mode (ReferenceEdit.Keys). A row that is not such a reference, or a reference that cannot be
+    // selected that way, gets a plain F2 on the active cell, as without the window. Returns the log result.
+    private string EditReference(ref string owner, ref int keyCount)
+    {
+        _edit = null;
+        var span = ReferenceEdit.SpanOf(_tree.Selected);
+        if (span is null)
+        {
+            return PlainF2("not a reference in a cell's formula", null);
+        }
+
+        owner = span.ToString();
+        var place = span.Sheet + "!" + span.Address;
+        var cell = ExcelPrecedentProvider.CellAt(span.Workbook, span.Sheet, span.Address);
+        if (cell is null)
+        {
+            return PlainF2("its cell is gone", $"Edit the reference: {place} is no longer open.");
+        }
+
+        var formula = ExcelPrecedentProvider.FormulaText(cell);
+        if (!string.Equals(formula, span.Formula, StringComparison.Ordinal))
+        {
+            return PlainF2("the formula changed", $"Edit the reference: {place} changed since it was traced (Ctrl+Shift+[ traces it again).");
+        }
+
+        // The keys count characters in the formula as Excel's editor shows it; only en-US Excel shows the parsed text.
+        if (!string.Equals(ExcelPrecedentProvider.LocalFormulaText(cell), formula, StringComparison.Ordinal))
+        {
+            return PlainF2("the editor shows the formula localized", "Edit the reference: not available for this Excel language yet.");
+        }
+
+        if (IsLockedOnProtectedSheet(cell))
+        {
+            Message($"Edit the reference: {place} is locked on a protected sheet.");
+            return "protected";
+        }
+
+        var keys = ReferenceEdit.Keys(span);
+        if (keys is null)
+        {
+            return PlainF2("too many keys", "Edit the reference: the formula is too long to select it with keystrokes.");
+        }
+
+        keyCount = keys.Count;
+        var path = _tree.PathOf(_tree.Selected);
+        var went = GoTo(cell);
+        if (went != "ok")
+        {
+            return went;
+        }
+
+        if (!TraceKeyHook.Send(keys, out var failure))
+        {
+            Message("Edit the reference: " + failure + ".");
+            return "not sent: " + failure;
+        }
+
+        _edit = new PendingEdit(span, cell, formula!, path);
+        Message($"Editing {span.Text} in {place}: point at its replacement; Enter commits, Esc cancels.");
+        return "ok";
+    }
+
+    // F2 for the active cell, as Excel would have had it without the window. Returns the log result.
+    private string PlainF2(string reason, string? message)
+    {
+        if (message is not null)
+        {
+            Message(message);
+        }
+
+        if (TraceKeyHook.Send(ReferenceEdit.PlainF2, out var failure))
+        {
+            return "plain F2: " + reason;
+        }
+
+        Message("F2 could not be passed to Excel: " + failure + ".");
+        return "plain F2 not sent (" + failure + "): " + reason;
+    }
+
+    // True if Excel would refuse to edit the cell (locked, on a protected sheet). False if that cannot be read.
+    private static bool IsLockedOnProtectedSheet(object cell)
+    {
+        try
+        {
+            dynamic c = cell;
+            object protectedContents = c.Worksheet.ProtectContents;
+            object locked = c.Locked;
+            return protectedContents is true && locked is true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     // After a tree move: redraws the rows if they changed, and goes to the newly selected node (unless goThere is
@@ -722,6 +970,7 @@ internal sealed class TraceSession
         }
 
         _closed = true;
+        _edit = null;
         _queue.Clear();
         if (ReferenceEquals(Current, this))
         {
@@ -767,4 +1016,26 @@ internal sealed class TraceSession
         (Stopwatch.GetTimestamp() - pressed) * 1000.0 / Stopwatch.Frequency;
 
     private static string Ms(double milliseconds) => milliseconds.ToString("0.0", CultureInfo.InvariantCulture);
+
+    /// <summary>An F2 edit Excel is doing: the reference, its cell, the formula before, and where the selection was.</summary>
+    private sealed class PendingEdit
+    {
+        public PendingEdit(ReferenceSpan span, object cell, string formula, IReadOnlyList<int> path)
+        {
+            Span = span;
+            Cell = cell;
+            Formula = formula;
+            Path = path;
+        }
+
+        public ReferenceSpan Span { get; }
+
+        public object Cell { get; }
+
+        public string Formula { get; }
+
+        public IReadOnlyList<int> Path { get; }
+
+        public Stopwatch Started { get; } = Stopwatch.StartNew();
+    }
 }

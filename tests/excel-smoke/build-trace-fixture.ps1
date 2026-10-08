@@ -26,6 +26,7 @@
 #   B13 =Inputs!B6                             a hidden row (Inputs row 6)
 #   A14 14, B14 =OFFSET($A$1,ROW()-1,0)        ROW() must be B14's row (14: A14), not 1 (A1)
 #   B15 =ExtRate*1                             a name whose target is in the closed external workbook
+#   A2 2, A3 3, B16 =A14+A2                    F2 on the A2 row edits that reference; Down in Point mode makes it A3
 param(
     [object]$Excel,
     [string]$OutDir = (Join-Path $env:TEMP 'emt-trace-fixture')
@@ -170,6 +171,9 @@ try {
     $calc.Range('A14').Value2 = 14
     $calc.Range('B14').Formula = '=OFFSET($A$1,ROW()-1,0)'
     $calc.Range('B15').Formula = '=ExtRate*1'
+    $calc.Range('A2').Value2 = 2
+    $calc.Range('A3').Value2 = 3
+    $calc.Range('B16').Formula = '=A14+A2'
     $calc.Range('A1').Formula = '=B2+B3+B4+B5+B6+B7+B8+B10+B11+B13'
     $calc.Activate()
     $calc.Range('A1').Select() | Out-Null

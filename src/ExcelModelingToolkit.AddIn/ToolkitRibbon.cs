@@ -47,7 +47,7 @@ public class ToolkitRibbon : ExcelRibbon
         <group id='emtFormatGroup' label='Format'>{format}
         </group>
         <group id='emtAuditGroup' label='Audit'>
-          <button id='emtTraceIn' label='Trace In' screentip='Trace the precedents of the active cell' supertip='Default key: Ctrl+Shift+[. Opens the precedents of the active cell. Up and Down go to each precedent (on other sheets and in other workbooks, opening closed ones read-only); Right expands, Left goes back up; Enter closes and stays, Esc closes and returns to the audited cell. F2 edits the cell with the window open.' onAction='OnTraceIn' />
+          <button id='emtTraceIn' label='Trace In' screentip='Trace the precedents of the active cell' supertip='Default key: Ctrl+Shift+[. Opens the precedents of the active cell. Up and Down go to each precedent (on other sheets and in other workbooks, opening closed ones read-only); Right expands, Left goes back up; Enter closes and stays, Esc closes and returns to the audited cell. F2 edits the selected reference in its formula (Point mode: the arrows pick its replacement; Enter commits), with the window open.' onAction='OnTraceIn' />
           <button id='emtLastAuditedCell' label='Last Audited Cell' screentip='Go back to the last audited cell' supertip='Default key: Ctrl+Shift+\. Goes back to the cell Trace In was last opened on. Press again to go further back (up to 20 audits).' onAction='OnLastAuditedCell' />
         </group>
         <group id='emtToolkitGroup' label='Toolkit'>

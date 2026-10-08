@@ -308,21 +308,47 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             return DirectPrecedents(cell, area, parsed.Error ?? "unknown error");
         }
 
-        return Resolve(parsed, Origin.Of(cell, area));
+        return Resolve(parsed, Origin.Of(cell, area), LocalAddress(cell));
     }
 
-    // The rows of a parsed formula (a cell's, or a name's), each resolved from origin.
-    private IReadOnlyList<PrecedentItem> Resolve(ParsedFormula parsed, Origin origin)
+    // The rows of a parsed formula (a cell's, or a name's), each resolved from origin. For a cell's formula
+    // (ownerAddress is the cell's), each reference that resolved also records where it is written, for F2.
+    private IReadOnlyList<PrecedentItem> Resolve(ParsedFormula parsed, Origin origin, string? ownerAddress = null)
     {
         var items = new List<PrecedentItem>();
         foreach (var row in ClassicPrecedents.Of(parsed))
         {
-            items.Add(row.Dynamic is not null
-                ? ResolveDynamic(row.Dynamic, origin)
-                : ResolveReference(row.Reference!, origin, nameTarget: false));
+            if (row.Dynamic is not null)
+            {
+                items.Add(ResolveDynamic(row.Dynamic, origin));
+                continue;
+            }
+
+            var reference = row.Reference!;
+            var item = ResolveReference(reference, origin, nameTarget: false);
+            if (ownerAddress is not null && item.Kind != PrecedentKind.Error)
+            {
+                item = WithSpan(item, new ReferenceSpan(origin.Context.WorkbookName, origin.Context.SheetName, ownerAddress,
+                    parsed.Formula, reference.Start, reference.Length));
+            }
+
+            items.Add(item);
         }
 
         return items;
+    }
+
+    // The item with its span: a copy, which takes over what the item stands for.
+    private PrecedentItem WithSpan(PrecedentItem item, ReferenceSpan span)
+    {
+        var copy = item.WithSpan(span);
+        if (_targets.TryGetValue(item, out var target))
+        {
+            _targets.Remove(item);
+            _targets[copy] = target;
+        }
+
+        return copy;
     }
 
     private PrecedentItem ResolveReference(FormulaReference reference, Origin origin, bool nameTarget)
@@ -1344,6 +1370,66 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
 
         object formula = c.Formula;
         return formula;
+    }
+
+    /// <summary>
+    /// A cell's formula as Trace In parses it (see <see cref="FormulaOf"/>), or its constant as text, or null.
+    /// Throws if Excel rejects the call.
+    /// </summary>
+    internal static string? FormulaText(object cell) => Convert.ToString(FormulaOf(cell), CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The same formula as Excel's editor shows it, in Excel's language: <c>Range.Formula2Local</c>, or
+    /// <c>Range.FormulaLocal</c> where Formula2 does not exist. It equals <see cref="FormulaText"/> in English-language
+    /// Excel; elsewhere function names and separators differ, and so do the positions of the references. Throws if
+    /// Excel rejects the call.
+    /// </summary>
+    internal static string? LocalFormulaText(object cell)
+    {
+        dynamic c = cell;
+        if (!_noFormula2)
+        {
+            try
+            {
+                object local2 = c.Formula2Local;
+                return Convert.ToString(local2, CultureInfo.InvariantCulture);
+            }
+            catch (Exception ex) when (!IsBusy(ex))
+            {
+                // Not there: FormulaLocal below (if it differs from Formula2, F2 just edits the cell).
+            }
+        }
+
+        object local = c.FormulaLocal;
+        return Convert.ToString(local, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// The cell <paramref name="address"/> on worksheet <paramref name="sheet"/> of the open workbook
+    /// <paramref name="workbook"/>, or null if the workbook is not open or has no such sheet (closed, or renamed
+    /// since the trace). Throws if Excel rejects the call because it is busy.
+    /// </summary>
+    internal static object? CellAt(string workbook, string sheet, string address)
+    {
+        dynamic app = ExcelDnaUtil.Application;
+        object book;
+        try
+        {
+            book = app.Workbooks.Item(workbook);
+        }
+        catch (COMException ex) when (!IsBusy(ex))
+        {
+            return null;
+        }
+
+        if (FindSheet(book, sheet) is not object found)
+        {
+            return null;
+        }
+
+        dynamic ws = found;
+        object range = ws.Range(address);
+        return range;
     }
 
     private static bool IsRange(object? value)
