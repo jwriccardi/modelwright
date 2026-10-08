@@ -63,6 +63,10 @@ internal sealed class TraceSession
     // The F2 edit Excel is doing, from the keys sent until its end is seen; null when none.
     private PendingEdit? _edit;
 
+    // How many workbooks the provider had opened at the last ReturnAfterOpen check.
+    private int _openedCount;
+    private DispatcherTimer? _returnTimer;
+
     private TraceSession(ExcelPrecedentProvider provider, PrecedentTree tree, object audited, string auditedWorkbook)
     {
         _provider = provider;
@@ -115,12 +119,14 @@ internal sealed class TraceSession
             session._queue.Clear(); // keys meant for the old trace
             session._pendingMoves = 0;
             session._edit = null;
+            session._openedCount = 0;
             session.ReOwn();
         }
 
         try
         {
             session.Load();
+            session.ReturnAfterOpen(() => session.GoTo(session._audited));
         }
         catch (Exception)
         {
@@ -203,6 +209,7 @@ internal sealed class TraceSession
             return;
         }
 
+        CancelReturnAfterOpen();
         var stopwatch = Stopwatch.StartNew();
         var move = TreeMove.None;
         var target = "-";
@@ -229,6 +236,7 @@ internal sealed class TraceSession
             }
 
             result = Apply(move, command == TraceKeyCommand.Up || command == TraceKeyCommand.Down, goThere, ref target);
+            ReturnAfterOpen(() => Navigate(_tree.Selected));
             if (goThere && move != TreeMove.Moved && _skippedGoTo)
             {
                 // The last of a run of queued moves did not move (the end of the list): go where the run ended.
@@ -657,6 +665,7 @@ internal sealed class TraceSession
         var target = node.Item.Label;
         var move = TreeMove.None;
         string result;
+        CancelReturnAfterOpen();
         try
         {
             var index = IndexOf(node);
@@ -678,6 +687,7 @@ internal sealed class TraceSession
 
                 RefreshRows();
                 result = move.ToString().ToLowerInvariant();
+                ReturnAfterOpen(() => Navigate(_tree.Selected));
             }
             else if (_tree.Select(node))
             {
@@ -796,6 +806,59 @@ internal sealed class TraceSession
 
         ReOwn();
         return "ok";
+    }
+
+    // Opening a closed workbook (a reference or a name into it) makes Excel activate its window, but only after the
+    // current message: the provider's own re-activation of the previous window runs first and loses. So when the
+    // provider opened one, `go` (back to the audited cell, or the selected node) runs from a short timer, through the
+    // queue, and only if Excel's active window is no longer the one it was right after the open; three ticks, in case
+    // the activation is slow.
+    // A newer command (a navigation, say) makes the pending return wrong: it would undo that command.
+    private void CancelReturnAfterOpen()
+    {
+        _returnTimer?.Stop();
+        _returnTimer = null;
+    }
+
+    private void ReturnAfterOpen(Action go)
+    {
+        if (_provider.OpenedWorkbooks.Count == _openedCount)
+        {
+            return;
+        }
+
+        _openedCount = _provider.OpenedWorkbooks.Count;
+        var expected = ActiveWindowHandle();
+        var ticks = 0;
+        _returnTimer?.Stop();
+        var timer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(150) };
+        timer.Tick += (sender, e) =>
+        {
+            if (++ticks >= 3 || _closing || !ReferenceEquals(_returnTimer, timer))
+            {
+                timer.Stop();
+            }
+
+            if (_closing)
+            {
+                return;
+            }
+
+            Enqueue(() =>
+            {
+                var active = ActiveWindowHandle();
+                if (active == expected || active == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                go();
+                expected = ActiveWindowHandle();
+                DiagnosticsLog.Write("TraceReturnAfterOpen", "tick=" + ticks.ToString(CultureInfo.InvariantCulture), "ok");
+            });
+        };
+        _returnTimer = timer;
+        timer.Start();
     }
 
     private void ReOwn()

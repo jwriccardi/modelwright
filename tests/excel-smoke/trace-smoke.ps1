@@ -49,6 +49,7 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
   public static uint ProcessOf(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
   public static string ClassOf(IntPtr h) { var s = new StringBuilder(64); GetClassName(h, s, 64); return s.ToString(); }
+  public static string TitleOf(IntPtr h) { var s = new StringBuilder(256); GetWindowText(h, s, 256); return s.ToString(); }
   // True if process pid has a visible top-level window titled exactly title.
   public static bool HasWindow(uint pid, string title) {
     bool found = false;
@@ -153,6 +154,12 @@ function Assert-SafeToSend([string]$what) {
   if ($p -ne $excelPid) { throw "ABORT before [$what]: the foreground window belongs to process $p, not this Excel ($excelPid). No key sent." }
   $class = [W]::ClassOf($fg)
   if ($class -ne 'XLMAIN') { throw "ABORT before [$what]: the foreground window is not an Excel workbook window (class $class). No key sent." }
+  if (Edit-Mode) {
+    # Excel rejects every COM call while a cell is being edited, so the check is the window title: "<book> - Excel".
+    $title = [W]::TitleOf($fg)
+    if (-not (($title -like "$mainName*") -or ($title -like "$extName*"))) { throw "ABORT before [$what]: Excel is editing, and the foreground window is [$title], not a fixture workbook. No key sent." }
+    return
+  }
   $active = [int64](Retry { $xl.ActiveWindow.Hwnd })
   if (($active -band $low32) -ne ($fg.ToInt64() -band $low32)) { throw "ABORT before [$what]: the foreground window is not Excel's active window. No key sent." }
   $book = Retry { $xl.ActiveWorkbook }
@@ -174,10 +181,22 @@ function Log-Lines([string]$pattern) {
 
 # Sends keys, waits, then checks the active workbook/sheet/cell (an empty cell: any) and (if given) whether the window
 # is open. The first step that does not end there aborts the run (throws): no further key is sent.
-function Step([string]$keys, [string]$label, [string]$book, [string]$sheet, [string]$cell, $window = $null, [int]$waitMs = 700) {
+function Step([string]$keys, [string]$label, [string]$book, [string]$sheet, [string]$cell, $window = $null, [int]$waitMs = 700, [switch]$Editing) {
   Assert-SafeToSend $label
   [System.Windows.Forms.SendKeys]::SendWait($keys)
   $deadline = (Get-Date).AddMilliseconds([Math]::Max($waitMs, 700))
+  if ($Editing) {
+    # Expected to leave Excel editing a cell of $book: COM is rejected then, so only Win32 is consulted.
+    do {
+      Start-Sleep -Milliseconds 200
+      $fg = [W]::GetForegroundWindow(); $title = [W]::TitleOf($fg)
+      $w = Window-Open
+      $ok = (Edit-Mode) -and ([W]::ProcessOf($fg) -eq $excelPid) -and ($title -like "$book*") -and (($null -eq $window) -or ($w -eq $window))
+    } while (-not $ok -and (Get-Date) -lt $deadline)
+    "{0} {1,-48} editing in [{2}] window={3}" -f $(if ($ok) { 'ok  ' } else { 'FAIL' }), $label, $title, $w
+    if (-not $ok) { throw "step [$label] failed: expected Excel editing in [$book] window=$window, got editing=$(Edit-Mode) title=[$title] window=$w" }
+    return
+  }
   do {
     Start-Sleep -Milliseconds 200
     $b = Retry { $xl.ActiveWorkbook.Name }
@@ -229,9 +248,10 @@ try {
   Select-Cell 'B1'
   $b1 = Retry { $calc.Range('B1').Value2 }
   if ($null -ne $b1) { throw "ABORT: the fixture's Calc!B1 is not empty ([$b1])." }
-  Step '777~'   'type 777 in B1 + Enter'         $mainName 'Calc' 'B2' $false
+  Step '777~'   'type 777 in B1 + Enter'         $mainName 'Calc' '' $false   # where Enter leaves the cursor depends on the user's "move after Enter" setting
   $b1 = Retry { $calc.Range('B1').Value2 }
   if ($b1 -ne 777) { throw "ABORT: 777 did not land in the fixture's Calc!B1 (it holds [$b1]); Ctrl+Z will not be sent." }
+  Select-Cell 'B2'
   Step '^+{[}'  'Ctrl+Shift+[ on B2'             $mainName 'Calc' 'B2' $true -waitMs 3000
   Step '{DOWN}' 'Down: Inputs!B2'                $mainName 'Inputs' 'B2' $true
   Step '{DOWN}' 'Down: Growth -> Inputs!B4'      $mainName 'Inputs' 'B4' $true
@@ -258,7 +278,7 @@ try {
   # F2 on the B13 row edits that reference in A1's formula: back on A1, in Point mode; Esc cancels (Excel's) and
   # leaves Excel on A1 with the window open.
   $formulaBefore = Retry { $calc.Range('A1').Formula }
-  Step '{F2}'   'F2: A1, editing B13 in its formula' $mainName 'Calc' 'A1' $true -waitMs 1500
+  Step '{F2}'   'F2: A1, editing B13 in its formula' $mainName 'Calc' 'A1' $true -waitMs 1500 -Editing
   Step '{ESC}'  'Esc in Point mode goes to Excel' $mainName 'Calc' 'A1' $true -waitMs 1500
   $formulaAfter = Retry { $calc.Range('A1').Formula }
   if ($formulaAfter -ne $formulaBefore) { throw "ABORT: F2/Esc changed A1: [$formulaBefore] -> [$formulaAfter]" }
@@ -320,7 +340,7 @@ try {
   Step '^+{[}'  'Ctrl+Shift+[ on B16'            $mainName 'Calc' 'B16' $true -waitMs 3000
   Step '{DOWN}' 'Down: A14'                      $mainName 'Calc' 'A14' $true
   Step '{DOWN}' 'Down: A2'                       $mainName 'Calc' 'A2' $true
-  Step '{F2}'   'F2: back on B16, editing A2'    $mainName 'Calc' 'B16' $true -waitMs 1500
+  Step '{F2}'   'F2: back on B16, editing A2'    $mainName 'Calc' 'B16' $true -waitMs 1500 -Editing
   $deadline = (Get-Date).AddSeconds(3)
   while (-not (Edit-Mode) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
   if (-not (Edit-Mode)) { throw "ABORT: after F2 Excel is not editing B16 (Application.Ready is true)." }
@@ -331,7 +351,7 @@ try {
     "ok   the add-in's keys all arrived: $($synth[-1])"
   }
   else { "SKIP: no TraceSynth line in the diagnostics log (the log is off): only Application.Ready was checked" }
-  Step '{DOWN}' 'Down in Point mode: A2 -> A3'   $mainName 'Calc' '' $true
+  Step '{DOWN}' 'Down in Point mode: A2 -> A3'   $mainName 'Calc' '' $true -Editing
   Step '~'      'Enter: commit, back on B16'     $mainName 'Calc' 'B16' $true -waitMs 3000
   if (Edit-Mode) { throw "ABORT: Excel is still editing after Enter." }
   $b16 = Retry { $calc.Range('B16').Formula }
@@ -358,6 +378,7 @@ try {
 catch {
   $failures.Add("aborted: $($_.Exception.Message)")
   "ABORTED: $($_.Exception.Message)"
+  $_.InvocationInfo.PositionMessage
 }
 finally {
   "--- putting Excel back ---"

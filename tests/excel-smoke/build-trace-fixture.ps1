@@ -137,13 +137,15 @@ try {
     $wb.Names.Add('ExtRate', "='[" + $extName + "]Rates'!" + '$B$2') | Out-Null   # into the external workbook
 
     # Data: 60 numbers, a table with an unqualified structured reference and a totals row, a merged cell.
-    for ($i = 1; $i -le 60; $i++) { $data.Cells.Item($i, 1).Value2 = $i }
+    # Writes go through Range(address): PowerShell caches the first argument type of a COM setter per member path, and
+    # Cells.Item(r, c).Value2 refuses a string once it has taken a number ("Specified cast is not valid").
+    for ($i = 1; $i -le 60; $i++) { $data.Range("A$i").Value2 = $i }
     $data.Range('D1').Value2 = 'Region'; $data.Range('E1').Value2 = 'Qty'; $data.Range('F1').Value2 = 'Price'; $data.Range('G1').Value2 = 'Amount'
     $rows = @(@('North', 3, 10), @('South', 5, 12), @('East', 2, 9), @('West', 7, 11), @('Central', 4, 8))
     for ($r = 0; $r -lt $rows.Count; $r++) {
-        $data.Cells.Item($r + 2, 4).Value2 = $rows[$r][0]
-        $data.Cells.Item($r + 2, 5).Value2 = $rows[$r][1]
-        $data.Cells.Item($r + 2, 6).Value2 = $rows[$r][2]
+        $data.Range("D$($r + 2)").Value2 = [string]$rows[$r][0]
+        $data.Range("E$($r + 2)").Value2 = [int]$rows[$r][1]
+        $data.Range("F$($r + 2)").Value2 = [int]$rows[$r][2]
     }
     $table = $data.ListObjects.Add($xlSrcRange, $data.Range('D1:G6'), [Type]::Missing, $xlYes)
     $table.Name = 'Sales'
