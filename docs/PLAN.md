@@ -8,7 +8,7 @@
 
 ## 1. Requirements summary
 
-An open-source Excel add-in for financial modelers. It does four things:
+A source-available Excel add-in for financial modelers (PolyForm Shield 1.0.0, ADR 0003). It does four things:
 
 1. **Number format cycling**
 2. **Font color cycling**
@@ -20,7 +20,7 @@ An open-source Excel add-in for financial modelers. It does four things:
 **Other constraints:**
 - Undo must work at least as well as it does in Macabacus.
 - Settings are per user and can be exported.
-- The project will be open-sourced later.
+- The source will be published later (source-available: PolyForm Shield 1.0.0, see ADR 0003).
 
 **Platform:** **Windows desktop in v1.** Exact keys can't be bound in Office.js, which is the only way to run on the web (research/05). Mac and web are deferred.
 

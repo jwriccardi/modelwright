@@ -45,7 +45,7 @@ A downloaded `.xll` is blocked by Mark-of-the-Web. If Excel refuses to load one 
 
 ## Sign your commits (DCO)
 
-Every commit must carry a `Signed-off-by` line. It certifies the [Developer Certificate of Origin](https://developercertificate.org/) (DCO): you wrote the change, or otherwise have the right to submit it under this project's MIT license. Add it with `-s`:
+Every commit must carry a `Signed-off-by` line. It certifies the [Developer Certificate of Origin](https://developercertificate.org/) (DCO): you wrote the change, or otherwise have the right to submit it under this project's license (PolyForm Shield 1.0.0, see LICENSE). Add it with `-s`:
 
 ```powershell
 git commit -s -m "Describe the change"
@@ -57,4 +57,4 @@ Pull requests with unsigned commits cannot be merged.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).
+By contributing, you agree that your contributions are licensed under the [PolyForm Shield License 1.0.0](LICENSE), with Pegasus Technology Group LLC as the licensor.

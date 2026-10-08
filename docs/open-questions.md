@@ -39,7 +39,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 |---|---|---|---|
 | D0 | Exact Macabacus keys required? | — | **Decided 2026-09-28: yes, critical** |
 | D1 | Platform and architecture | — | **Decided 2026-09-28: Excel-DNA (C#, net48), Windows desktop first. ADR-0002 accepted.** |
-| D2 | License | MIT, with DCO sign-off for contributions (research/03) | **Adopted for the scaffold 2026-09-29.** The owner can still change it before the repo goes public. |
+| D2 | License | MIT, with DCO sign-off for contributions (research/03) | MIT adopted for the scaffold 2026-09-29. **Changed 2026-10-08 to PolyForm Shield 1.0.0** on the owner's requirements: private corporate use allowed, private modification with no obligation to contribute back, no selling the product or a derivative. That rules out every OSI license (all allow selling), so the project is "source-available". ADR 0003. |
 | D3 | Copyright holder | — | **Decided 2026-09-28: Pegasus Technology Group LLC** |
 | D4 | Build fresh vs fork XLerate | Build fresh; XLerate is a design reference only (it's TypeScript) | Proposed |
 | D5 | Cycles in v1 | Number, Date, Currency, Percent, Multiple, Font, Fill (7). Blue-black and decimals are stretch goals | Proposed |

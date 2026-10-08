@@ -1,6 +1,6 @@
 # Excel Modeling Toolkit *(working name)*
 
-An open-source Excel add-in for financial modelers:
+A source-available Excel add-in for financial modelers:
 
 1. **Number format cycling**: step the selected cells through your own list of formats with one shortcut.
 2. **Font color cycling**
@@ -54,4 +54,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions need a DCO sign-off.
 
 ## License
 
-[MIT](LICENSE), Copyright (c) 2026 Pegasus Technology Group LLC. Third-party components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[PolyForm Shield 1.0.0](LICENSE), Copyright (c) 2026 Pegasus Technology Group LLC. In short: you may use the add-in for any purpose, including inside your company, and change it privately with no obligation to share your changes; you may not offer a product that competes with it (selling it or a derivative, even free). This is a "source-available" license, not an [OSI open-source](https://opensource.org/osd) one. See [ADR 0003](docs/decisions/0003-polyform-shield-license.md). Third-party components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
