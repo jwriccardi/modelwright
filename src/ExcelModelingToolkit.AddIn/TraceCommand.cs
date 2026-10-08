@@ -205,8 +205,15 @@ internal static class TraceCommand
             return "hidden sheet";
         }
 
-        object range = ws.Range(audit.Address);
         dynamic workbook = book;
+        if (!ExcelPrecedentProvider.WorkbookIsVisible(book))
+        {
+            // As Trace In's own navigation says it (TraceSession.GoTo).
+            StatusBar.Show($"Last Audited Cell: {(string)workbook.Name} is a hidden workbook: unhide it to go there.");
+            return "hidden workbook";
+        }
+
+        object range = ws.Range(audit.Address);
         string? activeName = null;
         try
         {

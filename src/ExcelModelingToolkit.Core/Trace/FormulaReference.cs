@@ -32,7 +32,7 @@ public sealed class FormulaReference
     public string Text => _formula.Substring(Start, Length);
 
     /// <summary>The 0-based position of <see cref="Text"/> in the formula string (which starts with <c>=</c>).</summary>
-    public int Start { get; }
+    public int Start { get; internal set; }
 
     /// <summary>The length of <see cref="Text"/>.</summary>
     public int Length { get; internal set; }
@@ -48,6 +48,12 @@ public sealed class FormulaReference
     /// null when none is written (Excel writes the path only when the workbook is closed).
     /// </summary>
     public string? WorkbookPath { get; internal set; }
+
+    /// <summary>
+    /// True for a name or table written with a workbook and no sheet (<c>Book.xlsx!Rate</c>): a workbook-level name,
+    /// even when <c>Book.xlsx</c> is the formula's own workbook (then <see cref="WorkbookName"/> is null).
+    /// </summary>
+    public bool IsWorkbookLevelQualified { get; internal set; }
 
     /// <summary>True if the reference points into another workbook.</summary>
     public bool IsExternal => WorkbookName is not null;
@@ -91,7 +97,11 @@ public sealed class FormulaReference
     /// </summary>
     public bool NeedsTableContext => Kind == FormulaReferenceKind.StructuredReference && Name is null;
 
-    /// <summary>True for a spilled-range reference (<c>A1#</c>); <see cref="Text"/> includes the <c>#</c>.</summary>
+    /// <summary>
+    /// True for a spilled-range reference: <c>A1#</c> (<see cref="Text"/> includes the <c>#</c>), or
+    /// <c>_xlfn.ANCHORARRAY(A1)</c>, the form <c>Range.Formula</c> gives it in on some versions (<see cref="Text"/> is
+    /// the whole call).
+    /// </summary>
     public bool IsSpill { get; internal set; }
 
     /// <summary>

@@ -7,8 +7,9 @@ using ExcelDna.Integration;
 namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
-/// Drops undo history that can no longer be trusted, from two Excel <c>Application</c> events received late-bound
-/// (a COM connection point on <see cref="AppEvents"/>, so no Office PIA is needed):
+/// Drops undo history that can no longer be trusted, and keeps an open Trace In window with the workbook window in
+/// use, from three Excel <c>Application</c> events received late-bound (a COM connection point on
+/// <see cref="AppEvents"/>, so no Office PIA is needed):
 /// <list type="bullet">
 /// <item><c>WorkbookBeforeClose</c>: every snapshot of that workbook (by <c>FullName</c>). If the user then cancels
 /// the close, the history is gone anyway: the safe side. An open Trace In window on a cell of that workbook is
@@ -16,6 +17,8 @@ namespace ExcelModelingToolkit.AddIn;
 /// <item><c>SheetChange</c> on whole rows or whole columns (a row or column inserted or deleted, or cleared): every
 /// snapshot of that sheet, since its cells may have moved. Other changes are ignored; the restore still checks
 /// every block before writing.</item>
+/// <item><c>WindowActivate</c>: an open Trace In window is re-owned to the workbook window just activated (the user
+/// clicked another workbook's window), so it stays in front of the window in use.</item>
 /// </list>
 /// Events are raised on Excel's main thread. If <c>Application.EnableEvents</c> is off, none arrive.
 /// </summary>
@@ -109,6 +112,29 @@ internal static class ExcelEvents
         }
     }
 
+    /// <summary>
+    /// Handles <c>WindowActivate</c>: re-owns an open Trace In window to the activated workbook window (its
+    /// <c>Hwnd</c>; <see cref="TraceSession.Follow"/> accepts only an Excel workbook window). Never throws.
+    /// </summary>
+    internal static void OnWindowActivate(object window)
+    {
+        if (TraceSession.Current is not TraceSession trace)
+        {
+            return;
+        }
+
+        try
+        {
+            dynamic activated = window;
+            object hwnd = activated.Hwnd;
+            trace.Follow(new IntPtr(Convert.ToInt64(hwnd, CultureInfo.InvariantCulture)));
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("TraceWindowError", "WindowActivate failed", ex.Message);
+        }
+    }
+
     /// <summary>Handles <c>SheetChange</c>: acts only on whole rows or whole columns. Never throws.</summary>
     internal static void OnSheetChange(object worksheet, object target)
     {
@@ -150,9 +176,10 @@ internal static class ExcelEvents
 
 /// <summary>
 /// The Excel <c>Application</c> events interface (the <c>AppEvents</c> dispinterface), declaring only the events
-/// undo uses. The GUID and DispIds are Excel's, verified against the type library in <c>EXCEL.EXE</c> (Office 16):
-/// <c>SheetChange</c> is 0x61C, <c>WorkbookBeforeClose</c> 0x622. Excel calls the others too; with no member for
-/// their DispIds, the call is answered "member not found" and ignored.
+/// the add-in uses. The GUID and DispIds are Excel's, verified against the type library in <c>EXCEL.EXE</c> (Office
+/// 16, read with <c>LoadTypeLibEx</c>, without starting Excel): <c>SheetChange</c> is 0x61C, <c>WorkbookBeforeClose</c>
+/// 0x622, <c>WindowActivate</c> 0x614 (two parameters: the workbook and the window). Excel calls the others too; with
+/// no member for their DispIds, the call is answered "member not found" and ignored.
 /// </summary>
 [ComVisible(true)]
 [InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
@@ -166,6 +193,10 @@ public interface AppEvents
     /// <summary>A workbook is about to close.</summary>
     [DispId(0x622)]
     void WorkbookBeforeClose(object workbook, ref bool cancel);
+
+    /// <summary>A workbook window was activated.</summary>
+    [DispId(0x614)]
+    void WindowActivate(object workbook, object window);
 }
 
 /// <summary>Receives <see cref="AppEvents"/> from Excel and hands them to <see cref="ExcelEvents"/>. Not for other callers.</summary>
@@ -178,4 +209,7 @@ public sealed class ApplicationEventSink : AppEvents
 
     /// <inheritdoc />
     public void WorkbookBeforeClose(object workbook, ref bool cancel) => ExcelEvents.OnWorkbookBeforeClose(workbook);
+
+    /// <inheritdoc />
+    public void WindowActivate(object workbook, object window) => ExcelEvents.OnWindowActivate(window);
 }

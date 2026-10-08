@@ -128,6 +128,46 @@ public class FormulaParserTests
     }
 
     [Fact]
+    public void Anchorarray_is_a_spill_reference_spanning_the_call()
+    {
+        // Range.Formula's form of =SUM(Data!B2#)*2 on versions that write spill references as a function.
+        const string formula = "=SUM(_xlfn.ANCHORARRAY(Data!B2))*2";
+        var parsed = Parse(formula);
+        var reference = parsed.References.Single();
+
+        Assert.True(reference.IsSpill);
+        Assert.Equal("_xlfn.ANCHORARRAY(Data!B2)", reference.Text);
+        Assert.Equal(5, reference.Start);
+        Assert.Equal("B2", reference.Address);
+        Assert.Equal("Data", reference.Sheet);
+        var sum = parsed.Structure!.Children[0];
+        Assert.Equal(FormulaNodeKind.Reference, sum.Children[0].Kind);
+        Assert.Same(reference, sum.Children[0].Reference);
+        Assert.Equal(0, sum.Children[0].ArgumentIndex);
+    }
+
+    [Fact]
+    public void Anchorarray_of_something_other_than_a_cell_stays_a_function()
+    {
+        var parsed = Parse("=ROWS(_xlfn.ANCHORARRAY(INDEX(A1:A9,2)))");
+
+        Assert.False(parsed.References.Single().IsSpill);
+        Assert.Equal("ANCHORARRAY", parsed.Structure!.Children[0].FunctionName);
+    }
+
+    [Fact]
+    public void A_name_qualified_with_the_formulas_own_workbook_is_marked_workbook_level()
+    {
+        var own = Parse("=Model.xlsx!Rate+Rate+[Model.xlsx]Calc!Tax").References;
+
+        Assert.Null(own[0].WorkbookName);
+        Assert.True(own[0].IsWorkbookLevelQualified);
+        Assert.False(own[1].IsWorkbookLevelQualified);
+        Assert.False(own[2].IsWorkbookLevelQualified);
+        Assert.True(Parse("=Book.xlsx!Rate").References.Single().IsWorkbookLevelQualified);
+    }
+
+    [Fact]
     public void Unqualified_structured_reference_needs_table_context()
     {
         var references = Parse("=[@Qty]*Sales[@Price]").References;

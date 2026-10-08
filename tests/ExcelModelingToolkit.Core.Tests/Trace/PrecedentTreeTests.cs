@@ -405,6 +405,57 @@ public class PrecedentTreeTests
     }
 
     [Fact]
+    public void Excel_being_busy_leaves_the_node_unloaded_so_a_later_expand_reads_it()
+    {
+        var root = Cell("A1");
+        var b1 = Cell("B1");
+        var provider = new FakePrecedentProvider().Has(root, b1).Has(b1, Cell("C1"));
+        var tree = new PrecedentTree(provider, root);
+        tree.MoveDown();
+        provider.ThrowNext = new PrecedentsUnavailableException();
+
+        Assert.Throws<PrecedentsUnavailableException>(() => tree.MoveRight());
+
+        var node = tree.Root.Children[0];
+        Assert.False(node.IsLoaded);
+        Assert.True(node.CanExpand);
+        Assert.Same(node, tree.Selected);
+        Assert.Equal(TreeMove.Expanded, tree.MoveRight());
+        Assert.Equal("Calc!C1", node.Children.Single().Item.Label);
+    }
+
+    [Fact]
+    public void Excel_being_busy_on_a_next_page_keeps_the_more_cells_row()
+    {
+        var root = Cell("A1");
+        var range = Range("A1:A250", 250);
+        var provider = new FakePrecedentProvider().Has(root, range);
+        var tree = new PrecedentTree(provider, root);
+        var rangeNode = tree.Root.Children[0];
+        tree.Expand(rangeNode);
+        var more = rangeNode.Children.Last();
+        provider.ThrowNext = new PrecedentsUnavailableException();
+
+        Assert.Throws<PrecedentsUnavailableException>(() => tree.Expand(more));
+
+        Assert.Same(more, rangeNode.Children.Last());
+        Assert.Equal(PrecedentTree.PageSize + 1, rangeNode.Children.Count);
+        Assert.True(tree.Expand(more));
+        Assert.Equal("Calc!R101", rangeNode.Children[PrecedentTree.PageSize].Item.Label);
+    }
+
+    [Theory]
+    [InlineData(unchecked((int)0x800AC472), true)]
+    [InlineData(unchecked((int)0x80010001), true)]
+    [InlineData(unchecked((int)0x8001010A), true)]
+    [InlineData(unchecked((int)0x800A03EC), false)]
+    [InlineData(0, false)]
+    public void Only_the_busy_hresults_count_as_excel_being_busy(int hresult, bool busy)
+    {
+        Assert.Equal(busy, PrecedentsUnavailableException.IsExcelBusy(hresult));
+    }
+
+    [Fact]
     public void Root_that_cannot_expand_shows_alone()
     {
         var provider = new FakePrecedentProvider();

@@ -17,22 +17,25 @@ namespace ExcelModelingToolkit.AddIn;
 /// <remarks>
 /// <para>
 /// Main thread. Navigation only changes the selection (<c>Application.Goto</c>, and activating another workbook's
-/// window), so no cell is written. It also runs <b>outside macro context</b>: keys and clicks are posted to Excel's
-/// message loop (the hook's hidden window, the window's dispatcher) and call Excel there, not through
+/// window), so no cell is written. It also runs <b>outside macro context</b>: keys and clicks are queued and run from
+/// Excel's message loop (posted to the hook's hidden window, or the window's dispatcher) and call Excel there, not through
 /// <c>ExcelAsyncUtil.QueueAsMacro</c>. Spike K2/K2b found that work done in macro context loses Excel's earlier undo
 /// history while the same work from the message loop keeps it, so this is what keeps native undo across a trace
 /// (the C API is not available there, so navigation messages go to the window's footer, not the status bar). Opening
 /// Trace In itself is an OnKey (or ribbon) macro; see <see cref="TraceCommand"/>.
 /// </para>
 /// <para>
-/// A command that arrives while another is still running (opening a closed workbook can pump messages) is posted again
-/// rather than run inside it. Every open, navigation and close writes one diagnostics log line with its timing.
+/// Keys, clicks, OK and Cancel all go through one first-in, first-out queue (<see cref="SerialCommandQueue"/>), run one
+/// at a time in the order they arrived: a command that arrives while another is still running (opening a closed
+/// workbook can pump messages) waits for it. While a cell is being edited, tree moves and clicks are ignored (Excel
+/// would reject the calls). Every open, navigation and close writes one diagnostics log line with its timing.
 /// </para>
 /// </remarks>
 internal sealed class TraceSession
 {
     private readonly TraceWindow _window;
     private readonly Stopwatch _openFor = Stopwatch.StartNew();
+    private readonly SerialCommandQueue _queue;
     private ExcelPrecedentProvider _provider;
     private PrecedentTree _tree;
     private object _audited;
@@ -40,7 +43,6 @@ internal sealed class TraceSession
     private TraceUiState _ui;
     private bool _closing;
     private bool _closed;
-    private bool _busy;
     private int _navigations;
 
     // Up/Down/Left/Right presses posted by the hook and not yet run: while more are queued (an arrow held down), a
@@ -57,10 +59,11 @@ internal sealed class TraceSession
         _audited = audited;
         _auditedWorkbook = auditedWorkbook;
         _ui = UiStateStore.Load();
+        _queue = new SerialCommandQueue(ScheduleDrain, ex => DiagnosticsLog.Write("TraceWindowError", ex.ToString()));
         _window = new TraceWindow();
         _window.RowClicked += OnRowClicked;
-        _window.OkClicked += () => Post(() => CloseWhenFree(TraceCloseMode.StayOnCurrentCell, "ok"));
-        _window.CancelClicked += () => Post(() => CloseWhenFree(TraceKeys.CancelCloseMode, "cancel"));
+        _window.OkClicked += () => Enqueue(() => Close(TraceCloseMode.StayOnCurrentCell, "ok"));
+        _window.CancelClicked += () => Enqueue(() => Close(TraceKeys.CancelCloseMode, "cancel"));
         _window.WrapChanged += wrap => _ui = _ui.WithWrapFormula(wrap);
         _window.Closed += (sender, e) => OnWindowClosed();
     }
@@ -70,6 +73,9 @@ internal sealed class TraceSession
 
     /// <summary>The window's handle, for the hook's focus check.</summary>
     public IntPtr WindowHandle => _window.Handle;
+
+    /// <summary>The Excel window that owns the window (the hook follows the keyboard away from it).</summary>
+    public IntPtr OwnerHandle => _window.OwnerHandle;
 
     /// <summary>
     /// Shows a trace: opens the window, or, if one is open, shows the new trace in it, and makes sure the key hook is
@@ -92,6 +98,7 @@ internal sealed class TraceSession
             session._tree = tree;
             session._audited = audited;
             session._auditedWorkbook = auditedWorkbook;
+            session._queue.Clear(); // keys meant for the old trace
             session._pendingMoves = 0;
             session.ReOwn();
         }
@@ -115,36 +122,38 @@ internal sealed class TraceSession
         return string.Empty;
     }
 
-    /// <summary>Counts a move key the hook has posted (see <see cref="Handle"/>).</summary>
+    /// <summary>
+    /// Queues a command (a key from <see cref="TraceKeyHook"/>, a click, OK, Cancel) behind those already queued; it
+    /// runs from Excel's message loop, outside macro context, after the caller returns. False if it could not be
+    /// queued.
+    /// </summary>
+    public bool Enqueue(Action command) => _queue.Enqueue(command);
+
+    /// <summary>Counts a move key the hook has queued (see <see cref="Handle"/>).</summary>
     public void MoveQueued() => _pendingMoves++;
 
     /// <summary>
-    /// Re-owns the window to <paramref name="excelWindow"/>, the top-level window of the worksheet grid that has the
-    /// keyboard (the user switched workbooks), so the window the keys drive stays in front. No Excel call.
+    /// Re-owns the window to <paramref name="excelWindow"/> (the user switched workbooks: the top-level window of the
+    /// worksheet grid that has the keyboard, or the workbook window Excel activated), so the window the keys drive
+    /// stays in front. Only an Excel workbook window (class XLMAIN) of Excel's main thread is followed. No Excel call.
     /// </summary>
     public void Follow(IntPtr excelWindow)
     {
-        if (!_closing && excelWindow != IntPtr.Zero && excelWindow != _window.Handle && excelWindow != _window.OwnerHandle)
+        if (!_closing && excelWindow != _window.Handle && excelWindow != _window.OwnerHandle &&
+            TraceKeyHook.IsExcelWorkbookWindow(excelWindow))
         {
             _window.ReOwn(excelWindow);
         }
     }
 
     /// <summary>
-    /// Runs a key's command (posted by <see cref="TraceKeyHook"/> at <paramref name="pressed"/>, a
-    /// <see cref="Stopwatch"/> timestamp) from Excel's message loop, outside macro context, and logs it with the time
-    /// from the key press. Never throws.
+    /// Runs a key's command (queued by <see cref="TraceKeyHook"/> at <paramref name="pressed"/>, a
+    /// <see cref="Stopwatch"/> timestamp) and logs it with the time from the key press. Never throws.
     /// </summary>
     public void Handle(TraceKeyCommand command, long pressed, string source)
     {
         var isMove = command == TraceKeyCommand.Up || command == TraceKeyCommand.Down ||
             command == TraceKeyCommand.Left || command == TraceKeyCommand.Right;
-        if (_busy)
-        {
-            Post(() => Handle(command, pressed, source));
-            return;
-        }
-
         if (isMove && _pendingMoves > 0)
         {
             _pendingMoves--;
@@ -155,15 +164,13 @@ internal sealed class TraceSession
             return;
         }
 
-        _busy = true;
-        try
+        if (TraceKeys.CloseMode(command) is null && IsEditing())
         {
-            Run(command, pressed, source, goThere: !isMove || _pendingMoves == 0);
+            LogNavigation(command.ToString(), source, Elapsed(pressed), Stopwatch.StartNew(), TreeMove.None, "-", "ignored: editing a cell");
+            return;
         }
-        finally
-        {
-            _busy = false;
-        }
+
+        Run(command, pressed, source, goThere: !isMove || _pendingMoves == 0);
     }
 
     private void Run(TraceKeyCommand command, long pressed, string source, bool goThere)
@@ -323,8 +330,9 @@ internal sealed class TraceSession
 
     private void Load()
     {
-        var formula = _provider.ReadFormula(_tree.Root.Item, out var context) ?? string.Empty;
-        var segments = context is null ? new FormulaSegment[0] : FormulaColoring.Segment(FormulaParser.Parse(formula, context));
+        var parsed = _provider.ParsedFormulaOf(_tree.Root.Item);
+        var formula = parsed?.Formula ?? string.Empty;
+        var segments = parsed is null ? new FormulaSegment[0] : FormulaColoring.Segment(parsed);
         string? note = null;
         if (_provider.ParseFallbacks.Count > 0)
         {
@@ -378,26 +386,25 @@ internal sealed class TraceSession
         {
             var node = visible[index];
             var tree = _tree;
-            Post(() => Click(tree, node, doubleClick, onExpander));
+            Enqueue(() => Click(tree, node, doubleClick, onExpander));
         }
     }
 
     // A click on a row (outside macro context): selects it and goes there; a double-click or a click on the expander
-    // expands or collapses it instead. Ignored if the trace changed since.
+    // expands or collapses it instead. Ignored if the trace changed since, or while a cell is being edited.
     private void Click(PrecedentTree tree, PrecedentNode node, bool doubleClick, bool onExpander)
     {
-        if (_busy)
-        {
-            Post(() => Click(tree, node, doubleClick, onExpander));
-            return;
-        }
-
         if (_closing || !ReferenceEquals(Current, this) || !ReferenceEquals(tree, _tree))
         {
             return;
         }
 
-        _busy = true;
+        if (IsEditing())
+        {
+            Message("Finish editing the cell (Enter or Esc) to use Trace In.");
+            return;
+        }
+
         var stopwatch = Stopwatch.StartNew();
         var target = node.Item.Label;
         var move = TreeMove.None;
@@ -437,12 +444,10 @@ internal sealed class TraceSession
         }
         catch (Exception ex)
         {
+            // Excel was busy, say: the click may have selected the row before the expand failed.
             result = "error: " + ex.Message;
             Message("Trace In: " + ex.Message);
-        }
-        finally
-        {
-            _busy = false;
+            _window.Select(_tree.SelectedIndex);
         }
 
         LogNavigation(doubleClick ? "DoubleClick" : onExpander ? "ExpanderClick" : "Click", "mouse",
@@ -630,38 +635,37 @@ internal sealed class TraceSession
     // avoids; see the remarks.)
     private void Message(string text) => _window.SetStatus(text);
 
-    // OK and Cancel: wait for a running command (an expand opening a workbook) to finish first.
-    private void CloseWhenFree(TraceCloseMode mode, string source)
-    {
-        if (_busy)
-        {
-            Post(() => CloseWhenFree(mode, source));
-            return;
-        }
-
-        Close(mode, source);
-    }
-
-    // Runs work from Excel's message loop after the current handler returns (outside macro context). Never throws.
-    private void Post(Action work)
+    // True while Excel is editing a cell (Enter, Edit or Point mode); false if that cannot be read.
+    private static bool IsEditing()
     {
         try
         {
-            _window.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-            {
-                try
-                {
-                    work();
-                }
-                catch (Exception ex)
-                {
-                    DiagnosticsLog.Write("TraceWindowError", ex.ToString());
-                }
-            }));
+            return ExcelDnaUtil.IsInFormulaEditMode();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    // Has the queue drained from Excel's message loop after the current handler returns (outside macro context): the
+    // key hook's hidden window, or the window's dispatcher if the keyboard could not be connected. Never throws.
+    private bool ScheduleDrain(Action drain)
+    {
+        if (TraceKeyHook.RunLater(drain))
+        {
+            return true;
+        }
+
+        try
+        {
+            _window.Dispatcher.BeginInvoke(DispatcherPriority.Background, drain);
+            return true;
         }
         catch (Exception ex)
         {
             DiagnosticsLog.Write("TraceWindowError", "could not post", ex.Message);
+            return false;
         }
     }
 
@@ -718,10 +722,11 @@ internal sealed class TraceSession
         }
 
         _closed = true;
+        _queue.Clear();
         if (ReferenceEquals(Current, this))
         {
             Current = null;
-            TraceKeyHook.Uninstall();
+            TraceKeyHook.Release();
         }
 
         if (_window.LastBounds is WindowRect bounds)

@@ -704,7 +704,28 @@ public static class FormulaParser
             }
 
             function.Children = built;
-            return function;
+            return AnchorArray(function) ?? function;
+        }
+
+        // _xlfn.ANCHORARRAY(A1) is how Range.Formula writes the spill reference A1# on some versions: the reference,
+        // spilled, spanning the whole call. Null if the call is anything else.
+        private static FormulaNode? AnchorArray(FormulaNode function)
+        {
+            if (function.FunctionName != "ANCHORARRAY" || function.Children.Count != 1 ||
+                function.Children[0].Kind != FormulaNodeKind.Reference ||
+                function.Children[0].Reference is not FormulaReference anchor || anchor.IsSpill ||
+                (anchor.Kind != FormulaReferenceKind.Cell && anchor.Kind != FormulaReferenceKind.Range))
+            {
+                return null;
+            }
+
+            var node = function.Children[0];
+            anchor.IsSpill = true;
+            anchor.Start = function.Start;
+            anchor.Length = function.Length;
+            node.Start = function.Start;
+            node.Length = function.Length;
+            return node;
         }
 
         private static bool IsDeclaration(string function, int index, int count) =>
@@ -747,6 +768,7 @@ public static class FormulaParser
             reference.WorkbookName = prefix.File;
             reference.Sheet = prefix.Sheet;
             reference.LastSheet = prefix.LastSheet;
+            reference.IsWorkbookLevelQualified = prefix.File is not null && prefix.Sheet is null;
             if (reference.WorkbookName is not null && reference.WorkbookPath is null &&
                 string.Equals(reference.WorkbookName, _context.WorkbookName, StringComparison.OrdinalIgnoreCase))
             {

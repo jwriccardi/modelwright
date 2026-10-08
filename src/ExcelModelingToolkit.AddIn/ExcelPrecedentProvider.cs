@@ -8,25 +8,34 @@ using System.Runtime.InteropServices;
 using ExcelDna.Integration;
 using ExcelModelingToolkit.Core.Trace;
 using ExcelModelingToolkit.Core.Undo;
+using Microsoft.CSharp.RuntimeBinder;
 
 namespace ExcelModelingToolkit.AddIn;
 
 /// <summary>
 /// Reads the Trace In tree from Excel (docs/PLAN.md section 4.5): a thin COM adapter over the Core trace logic.
-/// A cell's precedents come from its <c>Range.Formula</c> (en-US, A1) parsed by <see cref="FormulaParser"/>; each
-/// reference is resolved to cells: A1 references through <c>Range</c>, names through <c>Names</c> (a name with no
-/// cells shows its value), table references through <c>ListObjects</c> and <see cref="TableLayout"/>, and the
-/// calls that compute a reference (INDEX, OFFSET, INDIRECT, CHOOSE) through <c>Worksheet.Evaluate</c> in the
-/// formula's sheet. A formula the parser rejects falls back to Excel's <c>Range.DirectPrecedents</c> (same sheet
-/// only, and labelled so).
+/// A cell's precedents come from its formula (<c>Range.Formula2</c>, or <c>Range.Formula</c> before Excel 365; en-US,
+/// A1) parsed by <see cref="FormulaParser"/>; each reference is resolved to cells: A1 references through
+/// <c>Range</c>, names through <c>Names</c> (the name's formula, converted for the formula's cell, parsed and resolved
+/// the same way; a name with no cells shows its value), table references through <c>ListObjects</c> and
+/// <see cref="TableLayout"/>, and the calls that compute a reference (INDEX, OFFSET, INDIRECT, CHOOSE) through
+/// <c>Worksheet.Evaluate</c> in the formula's sheet. A formula the parser rejects falls back to Excel's
+/// <c>Range.DirectPrecedents</c> (same sheet only, and labelled so).
 /// </summary>
 /// <remarks>
 /// <para>
 /// Main thread: in the Trace In macro, or from Excel's message loop while navigating (see
-/// <see cref="TraceSession"/>). No member throws: a failure becomes a <see cref="PrecedentKind.Error"/> item that
-/// says why. Nothing here writes to a cell, with one exception: a precedent in a closed workbook opens that workbook
-/// (read-only, links not updated, macros disabled, no prompts), which is what Macabacus does; the workbook stays
-/// open. Excel may treat the open as an action that clears its undo history.
+/// <see cref="TraceSession"/>). No member throws, with one exception: when Excel rejects a call because it is busy
+/// (a cell is being edited, a dialog is open), <see cref="GetPrecedents"/> and <see cref="GetRangeCells"/> throw
+/// <see cref="PrecedentsUnavailableException"/> so the tree can try again later; any other failure becomes a
+/// <see cref="PrecedentKind.Error"/> item that says why. Nothing here writes to a cell, with one exception: a precedent
+/// in a closed workbook opens that workbook (read-only, links not updated, macros disabled, no prompts), which is what
+/// Macabacus does; the workbook stays open. Excel may treat the open as an action that clears its undo history.
+/// </para>
+/// <para>
+/// <c>Worksheet.Evaluate</c> has no calling cell, so before a computed reference or a name's formula is evaluated,
+/// argument-less <c>ROW()</c> and <c>COLUMN()</c> are replaced by the formula cell's (<see cref="CallingCell"/>); what
+/// cannot be made exact that way (INDIRECT of relative R1C1 text) is labelled "(evaluated outside its cell)".
 /// </para>
 /// <para>
 /// Values come from <c>Range.Text</c> (as displayed) for a reference's first cell, and from one <c>Value2</c> read
@@ -38,23 +47,52 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
 {
     private const int XlSheetVisible = -1;
     private const int MsoAutomationSecurityForceDisable = 3;
+    private const int XlA1 = 1;
+    private const int XlR1C1 = -4150;
 
     // Worksheet.Evaluate accepts at most 255 characters.
     private const int MaxEvaluateLength = 255;
+
+    // Names whose formula is just another name (A = B, B = C, ...) are followed this deep: a circular pair stops here.
+    private const int MaxNameDepth = 16;
 
     // A password no workbook has: opening a password-protected workbook then fails at once instead of prompting.
     // An unprotected workbook ignores it.
     private const string NotAPassword = "emt-not-a-password-7c1e";
 
+    private const string OutsideItsCell = " (evaluated outside its cell)";
+
+    // IDispatch: the member does not exist (Range.Formula2 before Excel 365).
+    private const int DispUnknownName = unchecked((int)0x80020006);
+    private const int DispMemberNotFound = unchecked((int)0x80020003);
+
     private static readonly IReadOnlyList<PrecedentItem> None = new PrecedentItem[0];
+
+    // Set once Range.Formula2 is found missing (Excel before 365): Range.Formula is read from then on.
+    private static bool _noFormula2;
 
     // What each item stands for in Excel. PrecedentItem compares by reference, as wanted here.
     private readonly Dictionary<PrecedentItem, Target> _targets = new Dictionary<PrecedentItem, Target>();
 
+    // Each cell item's parsed formula, parsed once per trace (the window shows the audited cell's too).
+    private readonly Dictionary<PrecedentItem, ParsedFormula> _parsed = new Dictionary<PrecedentItem, ParsedFormula>();
+
     // "hidden workbook" / "hidden sheet" / "" (visible), by workbook|sheet, read once per trace.
     private readonly Dictionary<string, string> _sheetNotes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+    // Whether a row (workbook|sheet|R5) or column (workbook|sheet|C3) is hidden, read once per trace.
+    private readonly Dictionary<string, bool> _hiddenLines = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+    // Each workbook's tables by name, and each table's layout (workbook|table), read once per trace.
+    private readonly Dictionary<string, Dictionary<string, object>> _tables =
+        new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, TableLayout> _layouts = new Dictionary<string, TableLayout>(StringComparer.OrdinalIgnoreCase);
+
     private readonly CultureInfo _culture = CultureInfo.CurrentCulture;
+
+    // How many names are being followed inside each other (see MaxNameDepth).
+    private int _nameDepth;
 
     /// <summary>The workbooks this trace opened (file names), for the status bar.</summary>
     public List<string> OpenedWorkbooks { get; } = new List<string>();
@@ -80,12 +118,11 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
     }
 
     /// <summary>
-    /// The formula of a cell item (the root, or a cell found in the tree) and its context, or null if it is not a
-    /// cell with a formula. Never throws.
+    /// The parsed formula of a cell item (the root, or a cell found in the tree): the parse the tree's precedents came
+    /// from, so the formula is parsed once per trace. Null if it is not a cell with a formula. Never throws.
     /// </summary>
-    public string? ReadFormula(PrecedentItem item, out FormulaContext? context)
+    public ParsedFormula? ParsedFormulaOf(PrecedentItem item)
     {
-        context = null;
         try
         {
             if (!_targets.TryGetValue(item, out var target) || target.Areas is null || target.Areas.Count == 0)
@@ -93,16 +130,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
                 return null;
             }
 
-            var area = target.Areas[0];
-            dynamic cell = FirstCell(area.Range);
-            object formula = cell.Formula;
-            if (formula is string text && text.StartsWith("=", StringComparison.Ordinal))
-            {
-                context = new FormulaContext(area.WorkbookName, area.SheetName);
-                return text;
-            }
-
-            return null;
+            return Parse(item, target.Areas[0]);
         }
         catch (Exception)
         {
@@ -162,13 +190,23 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
                 return new[] { target.Child };
             }
 
+            if (target.Formula is not null && target.FormulaOrigin is not null)
+            {
+                // A name holding a formula (=Rate*2): the references in it.
+                return Resolve(target.Formula, target.FormulaOrigin);
+            }
+
             if (target.Areas is not null && target.Areas.Count == 1 &&
                 (item.Kind == PrecedentKind.Cell || item.CellCount == 1))
             {
-                return CellPrecedents(target.Areas[0]);
+                return CellPrecedents(item, target.Areas[0]);
             }
 
             return None;
+        }
+        catch (Exception ex) when (IsBusy(ex))
+        {
+            throw Busy(ex);
         }
         catch (Exception ex)
         {
@@ -203,18 +241,22 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
                 dynamic r = blockRange;
                 object values = r.Value2;
                 object formulas = r.Formula;
-                var hidden = SheetNote(area.Book, area.Sheet, area.WorkbookName, area.SheetName);
+                var sheetNote = SheetNote(area.Book, area.Sheet, area.WorkbookName, area.SheetName);
+                var lines = sheetNote.Length == 0 ? new HiddenLines(this, area, blockRange) : null;
                 for (var i = 0; i < block.Take; i++)
                 {
                     var (row, column) = block.Offset(i);
                     var local = CellRect.ColumnName(block.Block.Column + column) +
                         (block.Block.Row + row).ToString(CultureInfo.InvariantCulture);
                     var formula = Element(formulas, row, column) as string;
+                    var hiddenNote = lines is null
+                        ? sheetNote
+                        : TraceValueText.HiddenNote(false, false, lines.Row(block.Block.Row + row), lines.Column(block.Block.Column + column));
                     var item = new PrecedentItem(PrecedentKind.Cell, oneSheet ? local : area.SheetName + "!" + local,
                         area.WorkbookName, area.SheetName, local, 1,
                         TraceValueText.FromValue(Element(values, row, column), _culture),
                         canExpand: formula is not null && formula.StartsWith("=", StringComparison.Ordinal),
-                        hiddenNote: hidden.Length == 0 ? null : hidden);
+                        hiddenNote: string.IsNullOrEmpty(hiddenNote) ? null : hiddenNote);
                     _targets[item] = Target.ForCell(area, local);
                     cells.Add(item);
                 }
@@ -222,43 +264,68 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
 
             return cells;
         }
+        catch (Exception ex) when (IsBusy(ex))
+        {
+            throw Busy(ex);
+        }
         catch (Exception ex)
         {
             return new[] { ErrorItem(range.Label, "could not read its cells: " + ex.Message) };
         }
     }
 
+    // A cell's formula, parsed once per item.
+    private ParsedFormula? Parse(PrecedentItem item, Area area)
+    {
+        if (_parsed.TryGetValue(item, out var parsed))
+        {
+            return parsed;
+        }
+
+        if (FormulaOf(FirstCell(area.Range)) is not string formula || !formula.StartsWith("=", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        parsed = FormulaParser.Parse(formula, new FormulaContext(area.WorkbookName, area.SheetName));
+        _parsed[item] = parsed;
+        return parsed;
+    }
+
     // A cell's precedents: its formula's references in the order written, or Excel's same-sheet direct precedents
     // if the formula cannot be parsed.
-    private IReadOnlyList<PrecedentItem> CellPrecedents(Area area)
+    private IReadOnlyList<PrecedentItem> CellPrecedents(PrecedentItem item, Area area)
     {
-        object cell = FirstCell(area.Range);
-        dynamic c = cell;
-        object value = c.Formula;
-        if (value is not string formula || !formula.StartsWith("=", StringComparison.Ordinal))
+        var parsed = Parse(item, area);
+        if (parsed is null)
         {
             return None;
         }
 
-        var context = new FormulaContext(area.WorkbookName, area.SheetName);
-        var parsed = FormulaParser.Parse(formula, context);
+        object cell = FirstCell(area.Range);
         if (!parsed.IsParsed)
         {
             return DirectPrecedents(cell, area, parsed.Error ?? "unknown error");
         }
 
+        return Resolve(parsed, Origin.Of(cell, area));
+    }
+
+    // The rows of a parsed formula (a cell's, or a name's), each resolved from origin.
+    private IReadOnlyList<PrecedentItem> Resolve(ParsedFormula parsed, Origin origin)
+    {
         var items = new List<PrecedentItem>();
         foreach (var row in ClassicPrecedents.Of(parsed))
         {
             items.Add(row.Dynamic is not null
-                ? ResolveDynamic(row.Dynamic, cell, area)
-                : ResolveReference(row.Reference!, context, cell, area));
+                ? ResolveDynamic(row.Dynamic, origin)
+                : ResolveReference(row.Reference!, origin, nameTarget: false));
         }
 
         return items;
     }
 
-    private PrecedentItem ResolveReference(FormulaReference reference, FormulaContext context, object formulaCell, Area formulaArea)
+    private PrecedentItem ResolveReference(FormulaReference reference, Origin origin, bool nameTarget)
     {
         try
         {
@@ -268,31 +335,32 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
                 case FormulaReferenceKind.Range:
                 case FormulaReferenceKind.WholeColumn:
                 case FormulaReferenceKind.WholeRow:
-                    return ResolveA1(reference, context, formulaArea);
+                    return ResolveA1(reference, origin, nameTarget);
                 case FormulaReferenceKind.Name:
-                    return ResolveName(reference, context, formulaCell, formulaArea);
+                    return ResolveName(reference, origin);
                 case FormulaReferenceKind.StructuredReference:
-                    return ResolveTable(reference, reference.Name, reference.TableSpecifiers, reference.TableColumns, formulaCell, formulaArea);
+                    return ResolveTable(reference, reference.Name, reference.TableSpecifiers, reference.TableColumns, origin);
                 case FormulaReferenceKind.RefError:
                     return new PrecedentItem(PrecedentKind.Error, reference.Text, valueText: "#REF!", canExpand: false);
                 default:
                     return ErrorItem(reference.Text, "not a reference that can be traced");
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             return ErrorItem(reference.Text, ex.Message);
         }
     }
 
     // Cell, range, whole column or row, 3-D (Sheet1:Sheet3!A1) and spill (A1#) references, here or in another
-    // workbook (opened if closed).
-    private PrecedentItem ResolveA1(FormulaReference reference, FormulaContext context, Area formulaArea)
+    // workbook (opened if closed). A name's target is labelled with its address ([Book.xlsx]Sheet!A1) rather than as
+    // the name's formula writes it.
+    private PrecedentItem ResolveA1(FormulaReference reference, Origin origin, bool nameTarget)
     {
         string? bookError = null;
         var book = reference.WorkbookName is null
-            ? formulaArea.Book
-            : FindWorkbook(reference.WorkbookName, reference.WorkbookPath, mayOpen: true, formulaArea.Book, out bookError);
+            ? origin.Book
+            : FindWorkbook(reference.WorkbookName, reference.WorkbookPath, mayOpen: true, origin.Book, out bookError);
         if (book is null)
         {
             return ErrorItem(reference.Text, bookError ?? reference.WorkbookName + " is not open");
@@ -300,7 +368,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
 
         dynamic wb = book;
         string workbookName = wb.Name;
-        var sheetName = reference.Sheet ?? (reference.WorkbookName is null ? context.SheetName : null);
+        var sheetName = reference.Sheet ?? (reference.WorkbookName is null ? origin.Context.SheetName : null);
         if (sheetName is null)
         {
             return ErrorItem(reference.Text, "the reference names no sheet");
@@ -324,7 +392,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             range = SpillRange(range);
         }
 
-        return RangeItem(reference.Text, range);
+        return RangeItem(nameTarget ? DisplayAddress(range, origin.FormulaWorkbook) : reference.Text, range);
     }
 
     // A1# is the anchor's spill range while it spills, else the anchor itself.
@@ -336,7 +404,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             object spill = cell.SpillingToRange;
             return spill ?? anchor;
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             return anchor;
         }
@@ -394,22 +462,29 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         return item;
     }
 
-    private PrecedentItem ResolveName(FormulaReference reference, FormulaContext context, object formulaCell, Area formulaArea)
+    private PrecedentItem ResolveName(FormulaReference reference, Origin origin)
     {
-        foreach (var lookup in NameLookup.Candidates(reference, context))
+        string? bookError = null;
+        foreach (var lookup in NameLookup.Candidates(reference, origin.Context))
         {
+            string? error = null;
             var book = lookup.WorkbookName is null
-                ? formulaArea.Book
-                : FindWorkbook(lookup.WorkbookName, reference.WorkbookPath, lookup.MayOpenWorkbook, formulaArea.Book, out _);
+                ? origin.Book
+                : FindWorkbook(lookup.WorkbookName, reference.WorkbookPath, lookup.MayOpenWorkbook, origin.Book, out error);
             if (book is null)
             {
+                if (lookup.MayOpenWorkbook)
+                {
+                    bookError ??= error;
+                }
+
                 continue;
             }
 
             var name = lookup.SheetName is null ? WorkbookLevelName(book, lookup.Name) : SheetLevelName(book, lookup.SheetName, lookup.Name);
             if (name is not null)
             {
-                return NameItem(reference, context, name, book, lookup);
+                return NameItem(reference, origin, name, book, lookup);
             }
         }
 
@@ -417,67 +492,185 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         if (reference.Sheet is null && reference.Name is not null)
         {
             var book = reference.WorkbookName is null
-                ? formulaArea.Book
-                : FindWorkbook(reference.WorkbookName, reference.WorkbookPath, mayOpen: true, formulaArea.Book, out _);
+                ? origin.Book
+                : FindWorkbook(reference.WorkbookName, reference.WorkbookPath, mayOpen: true, origin.Book, out _);
             if (book is not null && FindTable(book, reference.Name) is not null)
             {
-                return ResolveTable(reference, reference.Name, new string[0], new string[0], formulaCell, formulaArea);
+                return ResolveTable(reference, reference.Name, new string[0], new string[0], origin);
             }
         }
 
-        return ErrorItem(reference.Text, $"no name '{reference.Name}' is defined");
+        return ErrorItem(reference.Text, bookError ?? $"no name '{reference.Name}' is defined");
     }
 
-    private PrecedentItem NameItem(FormulaReference reference, FormulaContext context, object name, object book, NameLookup lookup)
+    // A defined name: its formula, converted for the formula's cell (a relative name moves with the cell that uses
+    // it), parsed and resolved like a cell's references. One reference (=Inputs!$B$3, ='C:\dir\[Ext.xlsx]Rates'!$B$2,
+    // =Sales[Amount]) is the name's target: expanding and going to the name go there, opening a closed workbook as a
+    // direct reference would. Anything else (=0.05, =Rate*2, =OFFSET(...)) is evaluated: a range result is the target;
+    // otherwise the value is shown, and the references the formula holds are the name's children.
+    private PrecedentItem NameItem(FormulaReference reference, Origin origin, object name, object book, NameLookup lookup)
     {
-        var basis = PrecedentItem.TryFromReference(reference, context)!;
-        PrecedentItem? child = null;
-        string? value;
-        object? target = null;
-        try
+        var basis = PrecedentItem.TryFromReference(reference, origin.Context)!;
+        dynamic wb = book;
+        string bookName = wb.Name;
+
+        // References without a sheet are on the name's sheet, or for a workbook-level name, the sheet using it.
+        var sheet = lookup.SheetName is null ? null : FindSheet(book, lookup.SheetName);
+        if (sheet is null)
         {
-            dynamic n = name;
-            target = n.RefersToRange;
-        }
-        catch (Exception)
-        {
-            // A constant (=0.05) or a formula (=Rate*2, or one that computes a range): evaluate it below.
+            sheet = string.Equals(bookName, origin.FormulaWorkbook, StringComparison.OrdinalIgnoreCase)
+                ? origin.FormulaSheet
+                : FirstWorksheet(book);
         }
 
-        if (target is null)
+        if (sheet is null)
         {
-            var sheet = (lookup.SheetName is null ? null : FindSheet(book, lookup.SheetName)) ?? FirstWorksheet(book);
-            dynamic ws = sheet!;
-            object result = ws.Evaluate(lookup.Name);
+            return ErrorItem(reference.Text, bookName + " has no worksheet to evaluate the name on");
+        }
+
+        dynamic ws = sheet;
+        string sheetName = ws.Name;
+        var home = origin.In(book, sheet, new FormulaContext(bookName, sheetName));
+        var refersTo = RefersTo(name, origin, out var converted);
+        var parsed = FormulaParser.Parse(refersTo, home.Context);
+        var label = reference.Text;
+        if (parsed.IsParsed && (CallingCell.HasRelativeR1C1Indirect(refersTo) ||
+            (!converted && parsed.References.Count > 0 && AnyRelative(parsed))))
+        {
+            label += OutsideItsCell;
+        }
+
+        if (parsed.IsParsed && SingleReference(parsed) is FormulaReference only)
+        {
+            if (_nameDepth >= MaxNameDepth)
+            {
+                return ErrorItem(reference.Text, "names refer to each other too deeply (a circular name?)");
+            }
+
+            _nameDepth++;
+            PrecedentItem target;
+            try
+            {
+                target = ResolveReference(only, home, nameTarget: true);
+            }
+            finally
+            {
+                _nameDepth--;
+            }
+
+            return Named(label, basis, target);
+        }
+
+        var text = CallingCell.SubstituteRowAndColumn(refersTo.StartsWith("=", StringComparison.Ordinal) ? refersTo.Substring(1) : refersTo,
+            origin.Row, origin.Column);
+        string value;
+        if (text.Length > MaxEvaluateLength)
+        {
+            value = $"(not evaluated: longer than Excel's {MaxEvaluateLength}-character limit)";
+        }
+        else
+        {
+            object result = ws.Evaluate(text);
             if (IsRange(result))
             {
-                target = result;
+                return Named(label, basis, RangeItem(DisplayAddress(result, origin.FormulaWorkbook), result));
             }
-            else
-            {
-                value = TraceValueText.FromValue(result, _culture);
-                var leaf = new PrecedentItem(PrecedentKind.Name, reference.Text, basis.Workbook, basis.Sheet,
-                    valueText: value, canExpand: false);
-                return leaf;
-            }
+
+            value = TraceValueText.FromValue(result, _culture);
         }
 
-        child = RangeItem(DisplayAddress(target, context.WorkbookName), target);
-        value = child.ValueText;
-        var item = new PrecedentItem(PrecedentKind.Name, reference.Text, basis.Workbook, basis.Sheet,
-            valueText: value, canExpand: true, hiddenNote: child.HiddenNote);
-        _targets[item] = Indirect(child);
+        var hasReferences = parsed.IsParsed && ClassicPrecedents.Of(parsed).Count > 0;
+        var item = new PrecedentItem(PrecedentKind.Name, label, basis.Workbook, basis.Sheet, valueText: value, canExpand: hasReferences);
+        if (hasReferences)
+        {
+            _targets[item] = Target.ForFormula(parsed, home);
+        }
+
         return item;
     }
 
-    // Table1[Col], Table1[[#Headers],[A]:[B]], [@Col] (the table holding the formula's cell), Table1 alone.
+    // The name's item, expanding to (and going to) target.
+    private PrecedentItem Named(string label, PrecedentItem basis, PrecedentItem target)
+    {
+        var item = new PrecedentItem(PrecedentKind.Name, label, basis.Workbook, basis.Sheet,
+            valueText: target.ValueText, canExpand: true, hiddenNote: target.HiddenNote);
+        _targets[item] = Indirect(target);
+        return item;
+    }
+
+    // The name's formula (=...) as it reads from the formula's cell: Name.RefersToR1C1 converted to A1 relative to that
+    // cell, so a relative name is exact; if Excel cannot convert it (255 characters at most), Name.RefersTo, which is
+    // relative to the active cell (converted is then false).
+    private static string RefersTo(object name, Origin origin, out bool converted)
+    {
+        dynamic n = name;
+        try
+        {
+            string r1c1 = n.RefersToR1C1;
+            dynamic app = ExcelDnaUtil.Application;
+            object result = app.ConvertFormula(r1c1, XlR1C1, XlA1, Type.Missing, origin.Cell);
+            if (result is string a1 && a1.StartsWith("=", StringComparison.Ordinal))
+            {
+                converted = true;
+                return a1;
+            }
+        }
+        catch (Exception ex) when (!IsBusy(ex))
+        {
+            // Too long to convert, say: fall back to RefersTo below.
+        }
+
+        converted = false;
+        string refersTo = n.RefersTo;
+        return refersTo;
+    }
+
+    private static bool AnyRelative(ParsedFormula parsed)
+    {
+        foreach (var reference in parsed.References)
+        {
+            if (CallingCell.IsRelative(reference))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // The formula's only reference, when the formula is nothing but that reference (=Inputs!$B$3, =Sales[Amount],
+    // =Rate); else null.
+    private static FormulaReference? SingleReference(ParsedFormula parsed)
+    {
+        if (parsed.Structure is not { Kind: FormulaNodeKind.Reference, Reference: FormulaReference reference })
+        {
+            return null;
+        }
+
+        switch (reference.Kind)
+        {
+            case FormulaReferenceKind.Cell:
+            case FormulaReferenceKind.Range:
+            case FormulaReferenceKind.WholeColumn:
+            case FormulaReferenceKind.WholeRow:
+            case FormulaReferenceKind.Name:
+            case FormulaReferenceKind.StructuredReference:
+            case FormulaReferenceKind.RefError:
+                return reference;
+            default:
+                return null;
+        }
+    }
+
+    // Table1[Col], Table1[[#Headers],[A]:[B]], [@Col] (the table holding the formula's cell), Table1 alone. [@Col]
+    // means the table's row on the formula's row number, also from another sheet (Excel's implicit intersection).
     private PrecedentItem ResolveTable(FormulaReference reference, string? tableName, IReadOnlyList<string> specifiers,
-        IReadOnlyList<string> columns, object formulaCell, Area formulaArea)
+        IReadOnlyList<string> columns, Origin origin)
     {
         object? table;
         if (tableName is null)
         {
-            table = TableOf(formulaCell);
+            table = TableOf(origin.Cell);
             if (table is null)
             {
                 return ErrorItem(reference.Text, "the formula's cell is not in a table");
@@ -485,12 +678,13 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         }
         else
         {
+            string? bookError = null;
             var book = reference.WorkbookName is null
-                ? formulaArea.Book
-                : FindWorkbook(reference.WorkbookName, reference.WorkbookPath, mayOpen: true, formulaArea.Book, out _);
+                ? origin.Book
+                : FindWorkbook(reference.WorkbookName, reference.WorkbookPath, mayOpen: true, origin.Book, out bookError);
             if (book is null)
             {
-                return ErrorItem(reference.Text, $"{reference.WorkbookName} is not open");
+                return ErrorItem(reference.Text, bookError ?? $"{reference.WorkbookName} is not open");
             }
 
             table = FindTable(book, tableName);
@@ -507,59 +701,57 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         object book2 = ws.Parent;
         dynamic wb = book2;
         string workbookName = wb.Name;
-        var layout = Layout(table);
-        int? formulaRow = null;
-        if (string.Equals(sheetName, formulaArea.SheetName, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(workbookName, formulaArea.WorkbookName, StringComparison.OrdinalIgnoreCase))
-        {
-            dynamic cell = formulaCell;
-            formulaRow = Convert.ToInt32((object)cell.Row, CultureInfo.InvariantCulture);
-        }
-
-        var rect = layout.Resolve(specifiers, columns, formulaRow, out var error);
+        var layout = Layout(table, workbookName);
+        var rect = layout.Resolve(specifiers, columns, origin.Row, out var error);
         if (rect is not CellRect cells)
         {
             return ErrorItem(reference.Text, error ?? "the table reference matches no cells");
         }
 
         object range = ws.Range(cells.Address);
-        var child = RangeItem(DisplayAddress(range, formulaArea.WorkbookName), range);
+        var child = RangeItem(DisplayAddress(range, origin.FormulaWorkbook), range);
         var item = new PrecedentItem(PrecedentKind.Table, reference.Text, workbookName, sheetName,
             valueText: child.ValueText, canExpand: true, hiddenNote: child.HiddenNote);
         _targets[item] = Indirect(child);
         return item;
     }
 
-    // INDEX(...), OFFSET(...), INDIRECT(...), CHOOSE(...): evaluated in the formula's sheet; a range result can be
-    // expanded and gone to, any other result is shown as the value.
-    private PrecedentItem ResolveDynamic(DynamicReference dynamicReference, object formulaCell, Area formulaArea)
+    // INDEX(...), OFFSET(...), INDIRECT(...), CHOOSE(...): evaluated in the formula's sheet, with ROW() and COLUMN()
+    // made the formula cell's; a range result can be expanded and gone to, any other result is shown as the value.
+    private PrecedentItem ResolveDynamic(DynamicReference dynamicReference, Origin origin)
     {
-        var text = dynamicReference.Text;
+        var label = dynamicReference.Text;
         try
         {
+            var text = CallingCell.SubstituteRowAndColumn(label, origin.Row, origin.Column);
+            if (CallingCell.HasRelativeR1C1Indirect(text))
+            {
+                label += OutsideItsCell;
+            }
+
             if (text.Length > MaxEvaluateLength)
             {
-                return new PrecedentItem(PrecedentKind.DynamicReference, text,
+                return new PrecedentItem(PrecedentKind.DynamicReference, label,
                     valueText: $"(not evaluated: longer than Excel's {MaxEvaluateLength}-character limit)", canExpand: false);
             }
 
-            dynamic ws = formulaArea.Sheet;
+            dynamic ws = origin.Sheet;
             object result = ws.Evaluate(text);
             if (!IsRange(result))
             {
-                return new PrecedentItem(PrecedentKind.DynamicReference, text,
+                return new PrecedentItem(PrecedentKind.DynamicReference, label,
                     valueText: TraceValueText.FromValue(result, _culture), canExpand: false);
             }
 
-            var child = RangeItem(DisplayAddress(result, formulaArea.WorkbookName), result);
-            var item = new PrecedentItem(PrecedentKind.DynamicReference, text, valueText: child.ValueText,
+            var child = RangeItem(DisplayAddress(result, origin.FormulaWorkbook), result);
+            var item = new PrecedentItem(PrecedentKind.DynamicReference, label, valueText: child.ValueText,
                 canExpand: true, hiddenNote: child.HiddenNote);
             _targets[item] = Indirect(child);
             return item;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsBusy(ex))
         {
-            return ErrorItem(text, "could not evaluate it: " + ex.Message);
+            return ErrorItem(label, "could not evaluate it: " + ex.Message);
         }
     }
 
@@ -582,7 +774,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             dynamic c = cell;
             precedents = c.DirectPrecedents;
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             // Excel throws when there are none.
             return new[] { ErrorItem("(formula not parsed)", parseError + "; Excel lists no precedents on this sheet") };
@@ -670,7 +862,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         {
             text = cell.Text;
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             // Text can fail on some cells (e.g. while Excel recalculates); Value2 still says something.
         }
@@ -704,7 +896,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
                 columns = hidden is bool b ? b : (bool?)null;
             }
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             return null;
         }
@@ -729,7 +921,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             var workbookHidden = !WorkbookIsVisible(book);
             note = TraceValueText.HiddenNote(workbookHidden, Convert.ToInt32(visible, CultureInfo.InvariantCulture) != XlSheetVisible, false, false) ?? string.Empty;
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             // Unknown: no badge.
         }
@@ -767,20 +959,39 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
     /// <summary>
     /// The open workbook named <paramref name="name"/>; if none and <paramref name="mayOpen"/>, the file is opened
     /// from <paramref name="folder"/> (as the formula wrote it) or else the folder of <paramref name="formulaBook"/>.
-    /// Null with the reason in <paramref name="error"/> if it is not open and cannot be opened.
+    /// Null with the reason in <paramref name="error"/> if it is not open and cannot be opened, or if the formula names
+    /// a folder and the open workbook of that name is from a different one (Excel opens one workbook of a name at a
+    /// time, so the reference still points at the closed file).
     /// </summary>
     private object? FindWorkbook(string name, string? folder, bool mayOpen, object formulaBook, out string? error)
     {
         error = null;
         dynamic app = ExcelDnaUtil.Application;
+        object? open = null;
         try
         {
-            object open = app.Workbooks.Item(name);
-            return open;
+            open = app.Workbooks.Item(name);
         }
-        catch (COMException)
+        catch (COMException ex) when (!IsBusy(ex))
         {
             // Not open under that name.
+        }
+
+        if (open is not null)
+        {
+            if (folder is not null)
+            {
+                dynamic wb = open;
+                string fullName = wb.FullName;
+                string openName = wb.Name;
+                if (WorkbookPaths.SameFolder(folder, fullName, openName) == false)
+                {
+                    error = $"a different {openName} is open (from {WorkbookPaths.FolderOf(fullName, openName)})";
+                    return null;
+                }
+            }
+
+            return open;
         }
 
         if (!mayOpen)
@@ -836,7 +1047,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         {
             previousWindow = app.ActiveWindow;
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             // No window is active (all hidden); nothing to go back to.
         }
@@ -858,7 +1069,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             DiagnosticsLog.Write("TraceWorkbookOpen", path, Ms(stopwatch), "opened read-only");
             return book;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             error = "could not open " + path + ": " + ex.Message;
             DiagnosticsLog.Write("TraceWorkbookOpen", path, Ms(stopwatch), "failed: " + ex.Message);
@@ -881,6 +1092,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             {
                 Restore(() => app.ScreenUpdating = updating);
             }
+
             if (previousWindow is not null)
             {
                 Restore(() => ((dynamic)previousWindow).Activate());
@@ -931,7 +1143,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             object sheet = wb.Worksheets.Item(name);
             return sheet;
         }
-        catch (COMException)
+        catch (COMException ex) when (!IsBusy(ex))
         {
             return null;
         }
@@ -963,7 +1175,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
                 return found;
             }
         }
-        catch (COMException)
+        catch (COMException ex) when (!IsBusy(ex))
         {
             return null;
         }
@@ -997,7 +1209,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             object found = ws.Names.Item(name);
             return found;
         }
-        catch (COMException)
+        catch (COMException ex) when (!IsBusy(ex))
         {
             // Not found by its short name: try the workbook's collection, where it is written Sheet!Name.
         }
@@ -1009,37 +1221,42 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             object found = wb.Names.Item(prefix + "!" + name);
             return found;
         }
-        catch (COMException)
+        catch (COMException ex) when (!IsBusy(ex))
         {
             return null;
         }
     }
 
-    // The table (ListObject) named name in any worksheet of the workbook, or null.
-    private static object? FindTable(object book, string name)
+    // The table (ListObject) named name in any worksheet of the workbook, or null. The workbook's tables are listed
+    // once per trace.
+    private object? FindTable(object book, string name)
     {
         dynamic wb = book;
-        object sheetsObject = wb.Worksheets;
-        dynamic sheets = sheetsObject;
-        int sheetCount = sheets.Count;
-        for (var s = 1; s <= sheetCount; s++)
+        string workbookName = wb.Name;
+        if (!_tables.TryGetValue(workbookName, out var tables))
         {
-            object tablesObject = sheets.Item(s).ListObjects;
-            dynamic tables = tablesObject;
-            int count = tables.Count;
-            for (var t = 1; t <= count; t++)
+            tables = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            object sheetsObject = wb.Worksheets;
+            dynamic sheets = sheetsObject;
+            int sheetCount = sheets.Count;
+            for (var s = 1; s <= sheetCount; s++)
             {
-                object table = tables.Item(t);
-                dynamic lo = table;
-                string tableName = lo.Name;
-                if (string.Equals(tableName, name, StringComparison.OrdinalIgnoreCase))
+                object tablesObject = sheets.Item(s).ListObjects;
+                dynamic listObjects = tablesObject;
+                int count = listObjects.Count;
+                for (var t = 1; t <= count; t++)
                 {
-                    return table;
+                    object table = listObjects.Item(t);
+                    dynamic lo = table;
+                    string tableName = lo.Name;
+                    tables[tableName] = table;
                 }
             }
+
+            _tables[workbookName] = tables;
         }
 
-        return null;
+        return tables.TryGetValue(name, out var found) ? found : null;
     }
 
     // The table holding the cell, or null.
@@ -1051,15 +1268,23 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             object table = c.ListObject;
             return table;
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             return null;
         }
     }
 
-    private static TableLayout Layout(object table)
+    // The table's layout, read once per table per trace.
+    private TableLayout Layout(object table, string workbookName)
     {
         dynamic lo = table;
+        string tableName = lo.Name;
+        var key = workbookName + "|" + tableName;
+        if (_layouts.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
         object rangeObject = lo.Range;
         var rect = RectOf(rangeObject);
         bool headers = lo.ShowHeaders;
@@ -1074,7 +1299,51 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             names.Add(name);
         }
 
-        return new TableLayout(rect, headers, totals, names);
+        var layout = new TableLayout(rect, headers, totals, names);
+        _layouts[key] = layout;
+        return layout;
+    }
+
+    // Whether a row (isRow) or column of the area's sheet is hidden, read once per trace.
+    private bool IsLineHidden(Area area, bool isRow, int index)
+    {
+        var key = area.WorkbookName + "|" + area.SheetName + "|" + (isRow ? "R" : "C") + index.ToString(CultureInfo.InvariantCulture);
+        if (!_hiddenLines.TryGetValue(key, out var hidden))
+        {
+            dynamic ws = area.Sheet;
+            object cell = ws.Cells.Item(isRow ? index : 1, isRow ? 1 : index);
+            dynamic c = cell;
+            object value = isRow ? c.EntireRow.Hidden : c.EntireColumn.Hidden;
+            hidden = value is true;
+            _hiddenLines[key] = hidden;
+        }
+
+        return hidden;
+    }
+
+    // A cell's formula: Range.Formula2 (Excel 365: spill references as A1#, no implicit-intersection @), or
+    // Range.Formula where Formula2 does not exist.
+    private static object FormulaOf(object cell)
+    {
+        dynamic c = cell;
+        if (!_noFormula2)
+        {
+            try
+            {
+                object formula2 = c.Formula2;
+                return formula2;
+            }
+            catch (Exception ex) when (!IsBusy(ex))
+            {
+                if (ex is RuntimeBinderException || (ex is COMException com && (com.HResult == DispUnknownName || com.HResult == DispMemberNotFound)))
+                {
+                    _noFormula2 = true;
+                }
+            }
+        }
+
+        object formula = c.Formula;
+        return formula;
     }
 
     private static bool IsRange(object? value)
@@ -1090,11 +1359,30 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             object address = range.Address;
             return address is string;
         }
-        catch (Exception)
+        catch (Exception ex) when (!IsBusy(ex))
         {
             return false;
         }
     }
+
+    // True if the call failed only because Excel was busy (see PrecedentsUnavailableException.IsExcelBusy).
+    private static bool IsBusy(Exception exception)
+    {
+        for (var ex = exception; ex is not null; ex = ex.InnerException)
+        {
+            if (ex is PrecedentsUnavailableException ||
+                (ex is COMException com && PrecedentsUnavailableException.IsExcelBusy(com.HResult)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static PrecedentsUnavailableException Busy(Exception exception) =>
+        exception as PrecedentsUnavailableException ??
+        new PrecedentsUnavailableException("Excel is busy (a cell is being edited or a dialog is open): try again.", exception);
 
     private static object FirstCell(object range)
     {
@@ -1165,6 +1453,33 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
     private static string Ms(Stopwatch stopwatch) =>
         "ms=" + stopwatch.Elapsed.TotalMilliseconds.ToString("0.0", CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// Which rows and columns of a page's block are hidden, for the cells' badges: one <c>Hidden</c> read for all the
+    /// block's rows (and one for its columns), and only where those differ, one per row or column (cached per trace).
+    /// </summary>
+    private sealed class HiddenLines
+    {
+        private readonly ExcelPrecedentProvider _provider;
+        private readonly Area _area;
+        private readonly bool? _allRows;
+        private readonly bool? _allColumns;
+
+        public HiddenLines(ExcelPrecedentProvider provider, Area area, object block)
+        {
+            _provider = provider;
+            _area = area;
+            dynamic b = block;
+            object rows = b.EntireRow.Hidden;
+            object columns = b.EntireColumn.Hidden;
+            _allRows = rows is bool r ? r : (bool?)null;
+            _allColumns = columns is bool c ? c : (bool?)null;
+        }
+
+        public bool Row(int row) => _allRows ?? _provider.IsLineHidden(_area, true, row);
+
+        public bool Column(int column) => _allColumns ?? _provider.IsLineHidden(_area, false, column);
+    }
+
     /// <summary>One rectangle of a range, with its sheet and workbook.</summary>
     private sealed class Area
     {
@@ -1192,9 +1507,59 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
     }
 
     /// <summary>
-    /// What an item stands for: a range (with its areas, for paging and for a cell's formula), or, for a name,
-    /// table reference or computed reference, the child item it resolves to. A paged cell's range is made only when
-    /// it is first needed.
+    /// Where a formula's references are resolved from: the formula's cell (for <c>ROW()</c>, <c>[@Col]</c> and a
+    /// relative name), and the workbook and sheet a reference without them means (the cell's own, or for a name's
+    /// formula, the name's).
+    /// </summary>
+    private sealed class Origin
+    {
+        private Origin(object cell, int row, int column, string formulaWorkbook, object formulaSheet, object book, object sheet,
+            FormulaContext context)
+        {
+            Cell = cell;
+            Row = row;
+            Column = column;
+            FormulaWorkbook = formulaWorkbook;
+            FormulaSheet = formulaSheet;
+            Book = book;
+            Sheet = sheet;
+            Context = context;
+        }
+
+        /// <summary>The formula's cell.</summary>
+        public object Cell { get; }
+
+        public int Row { get; }
+
+        public int Column { get; }
+
+        /// <summary>The formula cell's workbook name (labels outside it get a [Book] prefix).</summary>
+        public string FormulaWorkbook { get; }
+
+        public object FormulaSheet { get; }
+
+        /// <summary>The workbook of references written without one.</summary>
+        public object Book { get; }
+
+        /// <summary>The sheet computed references are evaluated on.</summary>
+        public object Sheet { get; }
+
+        /// <summary>The workbook and sheet names the formula is parsed against.</summary>
+        public FormulaContext Context { get; }
+
+        public static Origin Of(object cell, Area area) =>
+            new Origin(cell, area.Rect.Row, area.Rect.Column, area.WorkbookName, area.Sheet, area.Book, area.Sheet,
+                new FormulaContext(area.WorkbookName, area.SheetName));
+
+        /// <summary>The same formula cell, with references resolved in another workbook and sheet (a name's).</summary>
+        public Origin In(object book, object sheet, FormulaContext context) =>
+            new Origin(Cell, Row, Column, FormulaWorkbook, FormulaSheet, book, sheet, context);
+    }
+
+    /// <summary>
+    /// What an item stands for: a range (with its areas, for paging and for a cell's formula); for a name, table
+    /// reference or computed reference, the child item it resolves to; or for a name holding a formula, that formula
+    /// and where to resolve it. A paged cell's range is made only when it is first needed.
     /// </summary>
     private sealed class Target
     {
@@ -1216,7 +1581,17 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             _cellAddress = cellAddress;
         }
 
+        private Target(ParsedFormula formula, Origin origin)
+        {
+            Formula = formula;
+            FormulaOrigin = origin;
+        }
+
         public PrecedentItem? Child { get; }
+
+        public ParsedFormula? Formula { get; }
+
+        public Origin? FormulaOrigin { get; }
 
         public List<Area>? Areas
         {
@@ -1237,6 +1612,8 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         public static Target ForRange(object range, Area area) => new Target(range, new List<Area> { area }, null);
 
         public static Target ForCell(Area area, string address) => new Target(area, address);
+
+        public static Target ForFormula(ParsedFormula formula, Origin origin) => new Target(formula, origin);
 
         public object? GetRange()
         {

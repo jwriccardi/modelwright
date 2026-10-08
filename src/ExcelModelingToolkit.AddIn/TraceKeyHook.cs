@@ -14,8 +14,8 @@ namespace ExcelModelingToolkit.AddIn;
 /// The Trace In keyboard (variant C of spike K4): a thread keyboard hook (<c>WH_KEYBOARD</c>) on Excel's main
 /// thread, installed only while the Trace In window is open. For each press it asks <see cref="TraceKeys"/> whether
 /// the key is a Trace In command and whether Excel can hand it over now; if so it swallows the key (with its
-/// key-up, and its auto-repeats unless the command repeats) and runs the command after the hook returns; every
-/// other key passes untouched.
+/// key-up, and its auto-repeats unless the command repeats) and queues the command on the session; every other key
+/// passes untouched.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -33,10 +33,16 @@ namespace ExcelModelingToolkit.AddIn;
 /// In never takes those keys.
 /// </para>
 /// <para>
-/// <b>Running commands.</b> As in <see cref="UndoKeyHook"/>, the decision is made in the hook and the work is posted to
-/// a hidden window on the main thread. Unlike the undo hook, the work then runs there, from Excel's message loop, not
-/// as a queued macro: Trace In writes nothing, and spike K2/K2b showed that macro context, not the message loop, is
-/// what loses Excel's undo history (see <see cref="TraceSession"/>).
+/// <b>Running commands.</b> As in <see cref="UndoKeyHook"/>, the decision is made in the hook and the work runs after
+/// it returns, from a hidden window on the main thread: the command joins the session's queue
+/// (<see cref="TraceSession.Enqueue"/>), with clicks and buttons, and runs there in order, from Excel's message loop,
+/// not as a queued macro: Trace In writes nothing, and spike K2/K2b showed that macro context, not the message loop,
+/// is what loses Excel's undo history (see <see cref="TraceSession"/>).
+/// </para>
+/// <para>
+/// <b>Closing.</b> When Enter or Esc closes the window, the hook stays until that key is released (at most
+/// <see cref="LingerMilliseconds"/>), swallowing only that key's auto-repeats and key-up, so a held Enter does not go
+/// on to move Excel's selection; any other key ends that at once and passes.
 /// </para>
 /// </remarks>
 internal static class TraceKeyHook
@@ -57,8 +63,16 @@ internal static class TraceKeyHook
     /// <summary>Window class of a worksheet grid window, which has the keyboard focus while cells are selected.</summary>
     private const string GridWindowClass = "EXCEL7";
 
-    // The hook holds only a native pointer to the delegate: keep it referenced while installed.
-    private static NativeMethods.HookProc? _proc;
+    /// <summary>Window class of an Excel workbook's top-level window (Excel 2013 and later: one per workbook window).</summary>
+    private const string WorkbookWindowClass = "XLMAIN";
+
+    /// <summary>How long, at most, the hook outlives the window to swallow the key that closed it.</summary>
+    private const int LingerMilliseconds = 1000;
+
+    // The hook holds only a native pointer to the delegate: it stays referenced for the life of the AppDomain (a
+    // call can still be on its way in while the hook is being removed).
+    private static readonly NativeMethods.HookProc HookCallback = Proc;
+
     private static IntPtr _hook;
     private static Control? _poster;
     private static uint _thread;
@@ -69,6 +83,12 @@ internal static class TraceKeyHook
     // are swallowed too. Zero when none.
     private static int _swallowedKey;
     private static TraceKeyCommand _swallowedCommand;
+
+    // After the window closed on Enter or Esc: the hook stays (until _lingerUntil, a Stopwatch timestamp) to swallow
+    // that key's repeats and key-up; the timer removes it.
+    private static bool _lingering;
+    private static long _lingerUntil;
+    private static Timer? _lingerTimer;
 
     /// <summary>True while the hook is installed.</summary>
     public static bool IsInstalled => _hook != IntPtr.Zero;
@@ -81,6 +101,8 @@ internal static class TraceKeyHook
     {
         if (IsInstalled)
         {
+            // Still there after a close (swallowing its key): a new trace keeps it.
+            StopLingering();
             return true;
         }
 
@@ -101,8 +123,7 @@ internal static class TraceKeyHook
             _poster = poster;
 
             _thread = NativeMethods.GetCurrentThreadId();
-            _proc = Proc;
-            _hook = NativeMethods.SetWindowsHookEx(WhKeyboard, _proc, IntPtr.Zero, _thread);
+            _hook = NativeMethods.SetWindowsHookEx(WhKeyboard, HookCallback, IntPtr.Zero, _thread);
             var error = Marshal.GetLastWin32Error();
             DiagnosticsLog.Write(
                 "TraceHook",
@@ -125,11 +146,41 @@ internal static class TraceKeyHook
         }
     }
 
+    /// <summary>
+    /// The window has closed: removes the hook, or, if it closed on Enter or Esc and that key is still down, once the
+    /// key is released (at most <see cref="LingerMilliseconds"/> later). Never throws.
+    /// </summary>
+    public static void Release()
+    {
+        if (!IsInstalled || _swallowedKey == 0 || TraceKeys.CloseMode(_swallowedCommand) is null)
+        {
+            Uninstall();
+            return;
+        }
+
+        try
+        {
+            StopLingering();
+            _lingering = true;
+            _lingerUntil = Stopwatch.GetTimestamp() + (LingerMilliseconds * Stopwatch.Frequency / 1000);
+            var timer = new Timer { Interval = LingerMilliseconds + 50 };
+            timer.Tick += (sender, e) => EndLingering();
+            timer.Start();
+            _lingerTimer = timer;
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("TraceHook", "linger failed", ex.Message);
+            Uninstall();
+        }
+    }
+
     /// <summary>Removes the hook and its hidden window (the window closed, AutoClose, or the AppDomain unloading). Never throws.</summary>
     public static void Uninstall()
     {
         try
         {
+            StopLingering();
             if (_hook != IntPtr.Zero)
             {
                 NativeMethods.UnhookWindowsHookEx(_hook);
@@ -144,9 +195,101 @@ internal static class TraceKeyHook
         }
 
         _hook = IntPtr.Zero;
-        _proc = null;
         _poster = null;
         _swallowedKey = 0;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on the main thread after the current handler returns, from the hook's hidden
+    /// window (outside macro context). False if the hook is not installed. An exception from the work is logged.
+    /// Never throws.
+    /// </summary>
+    internal static bool RunLater(Action work)
+    {
+        try
+        {
+            if (_poster is null)
+            {
+                return false;
+            }
+
+            _poster.BeginInvoke(new Action(() =>
+            {
+                // Runs in WinForms' message dispatch: an exception escaping here would show its error dialog in Excel.
+                try
+                {
+                    work();
+                }
+                catch (Exception ex)
+                {
+                    DiagnosticsLog.Write("TraceHook", "posted work failed", ex.ToString());
+                }
+            }));
+            return true;
+        }
+        catch (Exception)
+        {
+            // The window is gone (the hook is being removed); nothing can run.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// True if <paramref name="window"/> is a workbook's top-level window (class XLMAIN) on Excel's main thread: the
+    /// only windows the Trace In window is ever re-owned to (never another process's window or a dialog). Never throws.
+    /// </summary>
+    internal static bool IsExcelWorkbookWindow(IntPtr window)
+    {
+        try
+        {
+            if (window == IntPtr.Zero || !NativeMethods.IsWindow(window) || NativeMethods.GetAncestor(window, GaRoot) != window)
+            {
+                return false;
+            }
+
+            var thread = _thread != 0 ? _thread : NativeMethods.GetCurrentThreadId();
+            if (NativeMethods.GetWindowThreadProcessId(window, out _) != thread)
+            {
+                return false;
+            }
+
+            var name = new StringBuilder(16);
+            return NativeMethods.GetClassName(window, name, name.Capacity) > 0 &&
+                string.Equals(name.ToString(), WorkbookWindowClass, StringComparison.Ordinal);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static void StopLingering()
+    {
+        _lingering = false;
+        if (_lingerTimer is not null)
+        {
+            _lingerTimer.Stop();
+            _lingerTimer.Dispose();
+            _lingerTimer = null;
+        }
+    }
+
+    // The timer: the key that closed the window was released, or not within the limit. Removes the hook unless a new
+    // trace has opened since.
+    private static void EndLingering()
+    {
+        try
+        {
+            StopLingering();
+            if (TraceSession.Current is null)
+            {
+                Uninstall();
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("TraceHook", "linger end failed", ex.Message);
+        }
     }
 
     private static IntPtr Proc(int code, IntPtr wParam, IntPtr lParam)
@@ -159,6 +302,28 @@ internal static class TraceKeyHook
         _inProc = true;
         try
         {
+            if (code == HcAction && _lingering)
+            {
+                var key = wParam.ToInt32();
+                var flags = lParam.ToInt64();
+                var keyUp = (flags & 0x80000000L) != 0;
+                var repeat = (flags & 0x40000000L) != 0;
+                if (key == _swallowedKey && (keyUp || repeat) && Stopwatch.GetTimestamp() < _lingerUntil)
+                {
+                    if (keyUp)
+                    {
+                        _lingering = false;
+                        _swallowedKey = 0;
+                    }
+
+                    return new IntPtr(1);
+                }
+
+                // Any other key, or too late: stop swallowing and pass it (the timer removes the hook).
+                _lingering = false;
+                _swallowedKey = 0;
+            }
+
             if (code == HcAction && _poster is not null && TraceSession.Current is TraceSession session)
             {
                 var key = wParam.ToInt32();
@@ -172,15 +337,19 @@ internal static class TraceKeyHook
                     return new IntPtr(1);
                 }
 
-                // Never drive a window that is gone or hidden (closed without its Closed event, say): pass the key
-                // and close the trace.
+                // Never drive a window that is gone (closed without its Closed event, say): pass the key and close the
+                // trace.
                 var window = session.WindowHandle;
-                if (window == IntPtr.Zero || !NativeMethods.IsWindow(window) || !NativeMethods.IsWindowVisible(window))
+                if (window == IntPtr.Zero || !NativeMethods.IsWindow(window))
                 {
                     _swallowedKey = 0;
-                    Post(() => TraceSession.Current?.Abort("window gone"));
+                    RunLater(() => TraceSession.Current?.Abort("window gone"));
                     return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
                 }
+
+                // Hidden because the workbook window that owns it is minimized: a command key is taken only if the
+                // keyboard is on another workbook window it can be re-owned to (Dispatch does that first).
+                var hiddenAndStuck = !NativeMethods.IsWindowVisible(window) && !CanFollowFocus(session);
 
                 if (!keyUp && repeat && key == _swallowedKey)
                 {
@@ -191,7 +360,7 @@ internal static class TraceKeyHook
 
                     // The modifiers may have changed while the key was held (Ctrl released during Ctrl+Down).
                     var held = TraceKeys.Command(key, Modifiers());
-                    if (held != TraceKeyCommand.None && TraceKeys.Takes(held, Context()) && Dispatch(held))
+                    if (!hiddenAndStuck && held != TraceKeyCommand.None && TraceKeys.Takes(held, Context()) && Dispatch(session, held))
                     {
                         _swallowedCommand = held;
                         return new IntPtr(1);
@@ -206,8 +375,14 @@ internal static class TraceKeyHook
                     var command = TraceKeys.Command(key, Modifiers());
                     if (command != TraceKeyCommand.None)
                     {
+                        if (hiddenAndStuck)
+                        {
+                            Log("TraceKey", command.ToString(), "passed to Excel: the window is hidden (its workbook window is minimized)");
+                            return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
+                        }
+
                         var context = Context();
-                        if (TraceKeys.Takes(command, context) && Dispatch(command))
+                        if (TraceKeys.Takes(command, context) && Dispatch(session, command))
                         {
                             _swallowedKey = key;
                             _swallowedCommand = command;
@@ -232,38 +407,51 @@ internal static class TraceKeyHook
     }
 
     /// <summary>
-    /// Runs the command after the hook returns, from Excel's message loop and not as a macro (see
-    /// <see cref="TraceSession"/>: macro context would cost Excel's undo history). If the keyboard is on another
-    /// workbook's grid than the one that owns the window (the user switched workbooks), the window is re-owned to it
-    /// first, so the keys never drive a window hidden behind another.
+    /// Queues the command on the session, to run after the hook returns, from Excel's message loop and not as a macro
+    /// (see <see cref="TraceSession"/>: macro context would cost Excel's undo history). If the keyboard is on another
+    /// workbook's window than the one that owns the Trace In window (the user switched workbooks), the window is
+    /// re-owned to it first, so the keys never drive a window hidden behind another.
     /// </summary>
-    private static bool Dispatch(TraceKeyCommand command)
+    private static bool Dispatch(TraceSession session, TraceKeyCommand command)
     {
         var pressed = Stopwatch.GetTimestamp();
-        var focusRoot = NativeMethods.GetAncestor(NativeMethods.GetFocus(), GaRoot);
-        if (!Post(() => TraceSession.Current?.Follow(focusRoot)))
+        var focusRoot = FocusRoot();
+        if (focusRoot != IntPtr.Zero && focusRoot != session.OwnerHandle && !session.Enqueue(() => session.Follow(focusRoot)))
         {
             return false;
         }
 
         if (TraceKeys.IsWindowCommand(command))
         {
-            return Post(() => TraceSession.Current?.ApplyWindowCommand(command));
+            return session.Enqueue(() => session.ApplyWindowCommand(command));
         }
 
-        var isMove = command == TraceKeyCommand.Up || command == TraceKeyCommand.Down ||
-            command == TraceKeyCommand.Left || command == TraceKeyCommand.Right;
-        if (!Post(() => TraceSession.Current?.Handle(command, pressed, "key")))
+        if (!session.Enqueue(() => session.Handle(command, pressed, "key")))
         {
             return false;
         }
 
-        if (isMove)
+        if (command == TraceKeyCommand.Up || command == TraceKeyCommand.Down ||
+            command == TraceKeyCommand.Left || command == TraceKeyCommand.Right)
         {
-            TraceSession.Current?.MoveQueued();
+            session.MoveQueued();
         }
 
         return true;
+    }
+
+    // The workbook window that has the keyboard focus, or zero if the focus is not in one (see IsExcelWorkbookWindow).
+    private static IntPtr FocusRoot()
+    {
+        var root = NativeMethods.GetAncestor(NativeMethods.GetFocus(), GaRoot);
+        return IsExcelWorkbookWindow(root) ? root : IntPtr.Zero;
+    }
+
+    // True if the keyboard is on a workbook window other than the one that owns the (hidden) Trace In window.
+    private static bool CanFollowFocus(TraceSession session)
+    {
+        var root = FocusRoot();
+        return root != IntPtr.Zero && root != session.OwnerHandle;
     }
 
     /// <summary>Whether Excel can hand keys to Trace In now (see the remarks). Never throws.</summary>
@@ -322,37 +510,7 @@ internal static class TraceKeyHook
     {
         if (DiagnosticsLog.Enabled)
         {
-            Post(() => DiagnosticsLog.Write(eventName, fields));
-        }
-    }
-
-    private static bool Post(Action work)
-    {
-        try
-        {
-            if (_poster is null)
-            {
-                return false;
-            }
-
-            _poster.BeginInvoke(new Action(() =>
-            {
-                // Runs in WinForms' message dispatch: an exception escaping here would show its error dialog in Excel.
-                try
-                {
-                    work();
-                }
-                catch (Exception ex)
-                {
-                    DiagnosticsLog.Write("TraceHook", "posted work failed", ex.ToString());
-                }
-            }));
-            return true;
-        }
-        catch (Exception)
-        {
-            // The window is gone (the hook is being removed); nothing can run.
-            return false;
+            RunLater(() => DiagnosticsLog.Write(eventName, fields));
         }
     }
 
@@ -374,6 +532,9 @@ internal static class TraceKeyHook
 
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
         [DllImport("user32.dll")]
         public static extern short GetKeyState(int nVirtKey);

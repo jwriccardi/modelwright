@@ -120,7 +120,6 @@ internal sealed class TraceWindow : Window
 </DockPanel>";
 
     private const int GwlExStyle = -20;
-    private const int GwlpHwndParent = -8;
     private const long WsExNoActivate = 0x08000000L;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
@@ -256,7 +255,8 @@ internal sealed class TraceWindow : Window
             return;
         }
 
-        NativeMethods.SetWindowLongPtr(_hwnd, GwlpHwndParent, owner);
+        // Through WPF, which sets the native owner (GWLP_HWNDPARENT) and keeps its own record of it in step.
+        new WindowInteropHelper(this).Owner = owner;
         NativeMethods.SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate | SwpShowWindow);
         _owner = owner;
     }

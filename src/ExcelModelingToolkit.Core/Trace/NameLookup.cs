@@ -45,7 +45,8 @@ public sealed class NameLookup
     /// <item><c>Inputs!Rate</c>: the scope of sheet <c>Inputs</c> in the formula's workbook; then, since an unsaved
     /// workbook has no extension to tell it from a sheet (docs/PLAN.md, notes for 4b), the workbook level of an open
     /// workbook named <c>Inputs</c>.</item>
-    /// <item><c>Book.xlsx!Rate</c>: the workbook level of <c>Book.xlsx</c>.</item>
+    /// <item><c>Book.xlsx!Rate</c>: the workbook level of <c>Book.xlsx</c>, also when it is the formula's own
+    /// workbook (a sheet-level <c>Rate</c> on the formula's sheet does not hide it).</item>
     /// <item><c>[Book.xlsx]Inputs!Rate</c>: the scope of sheet <c>Inputs</c> in <c>Book.xlsx</c>.</item>
     /// </list>
     /// </summary>
@@ -76,6 +77,12 @@ public sealed class NameLookup
         if (reference.WorkbookName is not null)
         {
             return new[] { new NameLookup(reference.WorkbookName, reference.Sheet, name, mayOpenWorkbook: true) };
+        }
+
+        if (reference.IsWorkbookLevelQualified)
+        {
+            // Model.xlsx!Rate in Model.xlsx itself: the workbook-level name, even where a sheet has its own Rate.
+            return new[] { new NameLookup(null, null, name, mayOpenWorkbook: false) };
         }
 
         if (reference.Sheet is not null)

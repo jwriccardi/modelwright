@@ -53,8 +53,10 @@ internal static class UndoKeyHook
     /// <summary>Window class of a worksheet grid window, which has the keyboard focus while cells are selected.</summary>
     private const string GridWindowClass = "EXCEL7";
 
-    // The hook holds only a native pointer to the delegate: keep it referenced while installed.
-    private static NativeMethods.HookProc? _proc;
+    // The hook holds only a native pointer to the delegate: it stays referenced for the life of the AppDomain (a
+    // call can still be on its way in while the hook is being removed).
+    private static readonly NativeMethods.HookProc HookCallback = Proc;
+
     private static IntPtr _hook;
     private static Control? _poster;
     private static uint _thread;
@@ -93,8 +95,7 @@ internal static class UndoKeyHook
             _poster = poster;
 
             _thread = NativeMethods.GetCurrentThreadId();
-            _proc = Proc;
-            _hook = NativeMethods.SetWindowsHookEx(WhKeyboard, _proc, IntPtr.Zero, _thread);
+            _hook = NativeMethods.SetWindowsHookEx(WhKeyboard, HookCallback, IntPtr.Zero, _thread);
             var error = Marshal.GetLastWin32Error();
             DiagnosticsLog.Write(
                 "UndoHook",
@@ -136,7 +137,6 @@ internal static class UndoKeyHook
         }
 
         _hook = IntPtr.Zero;
-        _proc = null;
         _poster = null;
         _swallowedKey = 0;
     }

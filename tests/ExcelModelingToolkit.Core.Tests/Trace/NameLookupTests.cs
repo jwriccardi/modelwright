@@ -35,6 +35,13 @@ public class NameLookupTests
     }
 
     [Fact]
+    public void A_name_qualified_with_the_formulas_own_workbook_is_only_the_workbook_level_one()
+    {
+        // Calc may have its own Rate; Model.xlsx!Rate means the workbook's.
+        Assert.Equal("Rate", Candidates("=Model.xlsx!Rate"));
+    }
+
+    [Fact]
     public void An_external_sheet_scoped_name_is_that_sheets()
     {
         Assert.Equal("[Book.xlsx]Inputs!Rate (may open)", Candidates("=[Book.xlsx]Inputs!Rate"));

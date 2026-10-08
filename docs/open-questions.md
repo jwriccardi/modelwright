@@ -23,7 +23,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
    - How are named ranges shown?
    - Can the range node be expanded into its 10 cells?
    - Does moving with Up/Down switch sheets?
-7. **OK vs Cancel vs Esc.** Where does the cursor end up after each?
+7. ✅ *Answered by the owner, 2026-10-08.* **OK vs Cancel vs Esc.** Enter/OK stays on the cell you navigated to (F5, Enter then returns to the audited cell, which is Excel's own Go To memory). Esc/Cancel returns to the audited cell. **F2** returns to the audited cell, enters edit mode with the traced reference selected, and switches to Point mode, so the arrow keys (and tab switches) replace that reference; Enter commits and returns to the audited cell with the window still open. Macabacus loses Ctrl+Z after that edit.
 8. ◐ *Key confirmed as Ctrl+Shift+\. History depth still open.* **"Last Audited Cell."** Is Ctrl+Shift+\ the key? How deep is its history?
 9. **Hard cases.** What does the dialog show for:
    - INDIRECT / OFFSET;

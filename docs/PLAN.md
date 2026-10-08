@@ -204,9 +204,9 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
 | Up / Down | `Application.Goto` the node's range |
 | Right | Expand one level (children load only then) |
 | Left | Go up a level or collapse |
-| Enter / OK | Stay on the current cell |
-| Esc / Cancel | Return to the audited cell (confirm, open-questions A7) |
-| F2 | Edit in Point mode with the dialog open (depends on variant C) |
+| Enter / OK | Stay on the current cell (confirmed by the owner, 2026-10-08) |
+| Esc / Cancel | Return to the audited cell (confirmed by the owner, 2026-10-08) |
+| F2 | **Edit the traced reference** (confirmed, 2026-10-08): go back to the cell whose formula holds the selected reference, enter edit mode with that reference's text selected, and switch to Point mode, so the arrow keys and sheet tabs replace it. Enter commits, returns to that cell and rebuilds the tree; the window stays open. Done with keystrokes outside macro context, so Excel's own undo of the edit should survive (Macabacus loses it). Rows that are not references in a formula pass F2 to Excel unchanged. |
 | Ctrl+E | Evaluate mode (v1.1) |
 | Ctrl+Arrows / Ctrl+Home / Ctrl+End / Shift+Arrows | Move, snap and resize the dialog |
 

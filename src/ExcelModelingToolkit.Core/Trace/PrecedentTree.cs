@@ -19,8 +19,10 @@ namespace ExcelModelingToolkit.Core.Trace;
 /// <see cref="PrecedentNode.IsCycle"/> (↻) and not expanded.
 /// </para>
 /// <para>
-/// If the provider throws, the tree is unchanged and the exception propagates. Not thread-safe; the add-in uses it
-/// on Excel's main thread.
+/// If the provider throws, the tree is unchanged and the exception propagates: the node stays unloaded, so expanding
+/// it again asks the provider again. A provider throws <see cref="PrecedentsUnavailableException"/> when Excel is
+/// busy, rather than return an error row that would stay in the tree. Not thread-safe; the add-in uses it on Excel's
+/// main thread.
 /// </para>
 /// </remarks>
 public sealed class PrecedentTree
