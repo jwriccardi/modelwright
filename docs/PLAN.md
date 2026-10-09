@@ -2,7 +2,7 @@
 
 > Renamed to Modelwright on 2026-10-08 (D12).
 >
-> **Status: Phases 0–4 complete on the `phase4b/trace-window` branch (PR #10, awaiting the owner's merge): Trace In classic mode (4b), F2 reference editing, Evaluate functions & groups (4c), the Modelwright rename (D12), the PolyForm Shield license (ADR 0003) and the Phase 5 install/release work (install scripts, release workflow, README guide). Every Excel smoke suite passes (`tests/excel-smoke/`). Left for Phase 5: code signing and the MSI (owner decisions, issues #7/#8), 32-bit testing (#9), screenshots.**
+> **Status: Phases 0–4 complete on the `phase4b/trace-window` branch (PR #10, awaiting the owner's merge): Trace In classic mode (4b), F2 reference editing, Evaluate functions & groups (4c), the Modelwright rename (D12), the PolyForm Shield license (ADR 0003) and the Phase 5 install/release work (install scripts, release workflow, README guide). Every Excel smoke suite passes (`tests/excel-smoke/`). Left for Phase 5: code signing and the MSI (owner decisions, issues #7/#8), 32-bit testing (#9), screenshots.** **2026-10-09 (branch `phase5/msi-and-release`):** owner decisions D-scope (64-bit only), D-msi (optional per-user WiX 5 MSI, built) and D-sign (v0.1 unsigned); see Phase 5.
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
 > - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
@@ -295,11 +295,35 @@ Defaults are the **Macabacus factory settings** (v9.9.5 settings export, 2026-10
 
 ### Phase 5 — Release
 - **Contents:**
-  - A per-user installer and Authenticode signing.
+  - The per-user install paths: the install script, an optional per-user MSI, the manual path, and IT / build from source. Authenticode signing is deferred: v0.1 ships unsigned (D-sign below).
   - Antivirus check: VirusTotal shows 0 detections from major engines.
   - README with install, the Unblock fallback, and Macabacus coexistence notes.
   - A manual test run recorded on Microsoft 365 Current Channel and Office LTSC 2024.
 - **Exit:** the repo is made public and v0.1.0 is released.
+- **Owner decisions (2026-10-09)** (research/08 R4):
+  - **D-scope: 64-bit only.** Supported: 64-bit Windows Excel (Microsoft 365, 2021, 2024). Not supported: 32-bit Excel, Excel for Mac, Excel for the web. Windows on Arm is untested.
+    - The build no longer makes `Modelwright32.xll` (`ExcelDnaCreate32BitAddIn=false`). The release assets, zip, `SHA256SUMS.txt`, attestations and CI artifact carry only `Modelwright64.xll`.
+    - `install.ps1` keeps its bitness detection. On 32-bit Excel, or with `-ExcelBitness 32`, it stops with exit code 8: "Modelwright is 64-bit only; your Excel is 32-bit…".
+    - The install scripts still recognise and replace a `Modelwright32.xll` entry left by an earlier build.
+    - This supersedes R3.1 and the 32-bit testing item (#9).
+  - **D-msi: an optional per-user WiX v5 MSI** (`installer/msi`, `Modelwright-<version>-x64.msi`). It is option B of four, never the only path.
+    - It installs to `%LOCALAPPDATA%\Programs\Modelwright`, so the file is owned by the MSI and not shared with the script's `%APPDATA%\Microsoft\AddIns` copy.
+    - A C# (WixToolset.Dtf) custom action registers it as the next free `OPEN`/`OPENn` value with `install.ps1`'s rules (unit-tested), and removes and renumbers on uninstall, with rollback.
+    - It refuses while Excel is running (Retry/Cancel), on 32-bit Excel, and without .NET 4.8. It upgrades in place by UpgradeCode and has an entry in Settings › Apps.
+    - **WiX 5, not 6+:** WiX 5 has no Open Source Maintenance Fee EULA.
+    - CI and the release workflow build it, run the ICE checks, list it and extract it (`msiexec /a`). No install runs on the runners.
+    - Trade-offs: [installer/msi/README.md](../installer/msi/README.md).
+  - **D-sign: v0.1 is unsigned**, both the `.xll` and the MSI.
+    - The README and INSTALL.txt explain the SmartScreen "More info › Run anyway" prompt and Excel's internet block (Unblock).
+    - They also say that companies requiring signed add-ins must wait for a signed build (planned) and have IT trust its publisher.
+    - The gated signing steps stay in `release.yml` for that build (`.xll`, then MSI), and the release notes stub says "unsigned".
+    - The signing route (SignPath, Artifact Signing, OV) is still open.
+- **Left for v0.1.0:**
+  - an install/upgrade/uninstall run of the MSI on a VM or spare profile (installer/msi/README.md, "Not verified yet");
+  - the recorded manual test run;
+  - VirusTotal;
+  - screenshots;
+  - enabling immutable releases.
 
 
 ### v2 roadmap: validated during Phase 1
@@ -350,6 +374,7 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 - 2026-10-06: Phase 4a (Trace In core): formula parser on XLParser 1.7.5 (MPL-2.0) + Irony (MIT), reference extraction, formula structure, precedent tree model and audit history.
 - 2026-10-07: PR #5 (4a) merged after two review rounds (stack safety on long formulas, parser timeouts, linear memory, name and table ids). Phase 4b started; Evaluate mode split out as 4c.
 - 2026-10-08/09: Phase 4b verified in Excel (owner away; automated keystroke suites): Trace In, cross-sheet/-workbook/OneDrive navigation, F2 reference editing (Point mode + Go To; Ctrl+Tab + same-window Go To for other workbooks), Excel undo preserved. Renamed to Modelwright (D12); license PolyForm Shield 1.0.0 (ADR 0003); install scripts, release workflow and README install guide (research/08); Phase 4c Evaluate mode (Ctrl+E) implemented and verified. PR #10 open for the owner. Issues #6–#9.
+- 2026-10-09: PR #10 merged. Phase 5 owner decisions: 64-bit only (32-bit add-in dropped; install.ps1 exit code 8), an optional per-user WiX 5 MSI (`installer/msi`, built and validated in CI and the release workflow), v0.1 unsigned (README/INSTALL.txt explain the SmartScreen and Unblock prompts). README and INSTALL.txt install options are now A script, B MSI, C by hand, D IT / from source.
 - 2026-09-28: **Phase 1 complete.** ADR-0002 accepted. D11: cross-workbook trace essential. K1c: Office.js key names work; recorded as the v2 path.
 - 2026-09-28: Undo decision (owner): Macabacus parity in v1, with the Office.js hybrid for native undo as a v2 candidate. §4.4 rewritten from spike K2/K2b/K2c.
 - 2026-09-28: Trace In spec from the Macabacus help PDF (research/07): the Argument column, Evaluate mode as v1.1, the focus/hook keyboard model, and the K4 variant C.

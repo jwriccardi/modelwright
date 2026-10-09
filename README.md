@@ -11,7 +11,14 @@ These are the features people pay for in Macabacus, FactSet Spreadsheet Tools, T
 
 ## Install
 
-Modelwright runs in **Excel for Windows**: Microsoft 365, Excel 2024 and Excel 2021, 32-bit or 64-bit. Windows on Arm is untested. **Excel for Mac and Excel for the web are not supported**: the add-in is a Windows-only file type (`.xll`) that they cannot load. You do **not** need administrator rights.
+Modelwright runs in **64-bit Windows Excel**: Microsoft 365, Excel 2024 and Excel 2021. **32-bit Excel, Excel for Mac and Excel for the web are not supported**: the add-in is a 64-bit Windows file (`.xll`) that they cannot load. Windows on Arm is untested. You do **not** need administrator rights.
+
+| Option | Use it when |
+|---|---|
+| **A. Install script** (recommended) | You can run PowerShell scripts. It checks your Excel, unblocks the add-in and registers it; the fewest mistakes. |
+| **B. Windows installer (MSI)** | You prefer a normal installer with an entry in Settings › Apps, or scripts are blocked but installers are not. Per user, no admin rights. |
+| **C. By hand** | Neither scripts nor installers are allowed. Uses only File Explorer and Excel's own Add-ins dialog. |
+| **D. IT, or build from source** | Your company requires signed add-ins, controls software centrally, or forbids downloaded binaries. |
 
 <!--
 Screenshots to add (docs/research/08-install-and-distribution.md section 10). Not captured yet; link them
@@ -27,6 +34,7 @@ only once the files exist:
   docs/images/ribbon-tab.png              the Modelwright ribbon tab
   docs/images/motw-security-notice.png    "Microsoft Excel Security Notice" (quote its text verbatim below)
   docs/images/bitness-mismatch.png        "The file format and extension of ... don't match"
+  docs/images/msi-smartscreen.png         SmartScreen "Windows protected your PC" for the unsigned MSI (More info > Run anyway)
   docs/images/untrusted-publisher.png     signed-but-untrusted-publisher notice (once releases are signed)
   docs/images/run-with-powershell.png     right-click install.ps1 > Run with PowerShell, and its output
   docs/images/com-addins-macabacus.png    Manage: COM Add-ins dialog with Macabacus listed
@@ -36,8 +44,14 @@ only once the files exist:
 ### Before you start
 
 1. **Close Excel.**
-2. **Find out whether your Excel is 64-bit or 32-bit:** in Excel, File › Account › About Excel. The first line ends in "64-bit" or "32-bit". Most computers have 64-bit. (Option A works this out for you.)
-3. **Why you must "Unblock" the download.** Windows marks every file that comes from the internet. Excel refuses to load a marked add-in: it shows a "Microsoft Excel Security Notice" whose only button is **Leave this add-in disabled**. Unblocking tells Windows you trust this one file; it doesn't change any security setting. If you unblock the zip *before* extracting it, everything inside is clean.
+2. **Check that your Excel is 64-bit:** in Excel, File › Account › About Excel. The first line ends in "64-bit" or "32-bit". Most computers have 64-bit; Modelwright can't load in 32-bit Excel. (Options A and B check this for you.)
+3. **Why you must "Unblock" the download.** Windows marks every file that comes from the internet. Excel refuses to load a marked add-in: it shows a "Microsoft Excel Security Notice" whose only button is **Leave this add-in disabled**. Unblocking tells Windows you trust this one file; it doesn't change any security setting. If you unblock the zip *before* extracting it, everything inside is clean. (Options A and B unblock the add-in for you.)
+
+### Why Windows warns you
+
+Release v0.1 is **not code-signed** (signed builds are planned). So when you run the MSI, Windows SmartScreen may show **"Windows protected your PC"**: click **More info**, check the file name, then **Run anyway**. And Excel refuses the downloaded add-in until it is unblocked (above); the script and the MSI do that for you.
+
+**If your company requires signed add-ins** ("Require that application add-ins are signed by Trusted Publisher", part of Microsoft's Microsoft 365 Apps security baseline), an unsigned add-in can't load there, whatever you do. Ask IT to trust Modelwright's publisher once a signed build exists, or to build and deploy it themselves (Option D).
 
 ### Option A: download and run the install script (recommended)
 
@@ -51,29 +65,36 @@ only once the files exist:
    ```
 5. Start Excel. The **Modelwright** tab appears on the ribbon.
 
-The script refuses to run while Excel is open. It picks the right add-in for your Excel, copies it to your own add-ins folder (`%APPDATA%\Microsoft\AddIns`), unblocks it, and adds it to Excel's add-in list (the same registry entry Excel's Add-ins dialog writes). Running it again is safe. Add `-WhatIf` to see what it would do without changing anything.
+The script refuses to run while Excel is open, and stops with a clear message (exit code 8) on 32-bit Excel. It copies the add-in to your own add-ins folder (`%APPDATA%\Microsoft\AddIns`), unblocks it, and adds it to Excel's add-in list (the same registry entry Excel's Add-ins dialog writes). Running it again is safe. Add `-WhatIf` to see what it would do without changing anything. `INSTALL.txt` in the zip lists every exit code.
 
-### Option B: add it to Excel by hand (no scripts)
+### Option B: the Windows installer (MSI)
 
-Use this if your computer doesn't allow PowerShell scripts.
+1. On the [Releases](https://github.com/jwriccardi/modelwright/releases) page, under **Assets**, download `Modelwright-<version>-x64.msi`.
+2. Close Excel, then double-click the `.msi`. If SmartScreen says **Windows protected your PC**, click **More info › Run anyway** ([why](#why-windows-warns-you)). It needs no administrator password; if Windows asks for one, your company blocks installers, so use Option A or C.
+3. A progress window appears for a few seconds. If Excel is still open, it asks you to close it and click **Retry**.
+4. Start Excel. The **Modelwright** tab appears on the ribbon.
+
+The MSI installs for you only, into `%LOCALAPPDATA%\Programs\Modelwright`, and registers the add-in with Excel exactly as the script does (an earlier script install is replaced, not duplicated). It refuses 32-bit Excel. A newer MSI upgrades it in place. Uninstall it from **Settings › Apps › Installed apps › Modelwright**. For IT: `msiexec /i Modelwright-<version>-x64.msi /qn /l*v install.log` installs silently. Design notes: [installer/msi/README.md](installer/msi/README.md).
+
+### Option C: add it to Excel by hand (no scripts, no installer)
 
 1. Do steps 1–3 of Option A.
-2. Copy `Modelwright64.xll` (or `Modelwright32.xll` for 32-bit Excel) to your add-ins folder: paste `%APPDATA%\Microsoft\AddIns` into the File Explorer address bar and press Enter. (You can instead browse to the extracted file in step 4, but then don't move or delete it.)
+2. Copy `Modelwright64.xll` to your add-ins folder: paste `%APPDATA%\Microsoft\AddIns` into the File Explorer address bar and press Enter. (You can instead browse to the extracted file in step 4, but then don't move or delete it.)
 3. Start Excel and go to **File › Options › Add-ins**. At the bottom, set **Manage: Excel Add-ins** and click **Go…**.
 4. Click **Browse…**, select the `.xll`, and click **OK**.
 5. Make sure **Modelwright** is ticked, then click **OK**. The **Modelwright** tab appears.
 
 The zip also has these steps in `INSTALL.txt`.
 
-### Option C: ask IT, or build from source
+### Option D: ask IT, or build from source
 
 <details>
 <summary>For IT staff, and for anyone who must not run downloaded binaries</summary>
 
 - **Verify the files.** Each release has a `SHA256SUMS.txt`, and GitHub shows a SHA-256 digest next to each asset: `Get-FileHash .\Modelwright64.xll -Algorithm SHA256` (or `certutil -hashfile Modelwright64.xll SHA256`). Each asset also has a build-provenance attestation that ties it to the workflow run and commit that built it: `gh attestation verify .\Modelwright64.xll -R jwriccardi/modelwright`. The release notes say whether that release is code-signed.
-- **Deploy.** Copy the `.xll` to a local folder (not a network share; Program Files is fine for a per-machine copy). With Excel closed, set the user's next free `HKCU\Software\Microsoft\Office\16.0\Excel\Options` value (`OPEN`, `OPEN1`, `OPEN2`… with no gaps) to the string `/R "C:\path\to\Modelwright64.xll"`, for example with a Group Policy Preferences registry item or Intune. `install.ps1` does exactly this, and runs in Constrained Language mode.
+- **Deploy.** Copy the `.xll` to a local folder (not a network share; Program Files is fine for a per-machine copy). With Excel closed, set the user's next free `HKCU\Software\Microsoft\Office\16.0\Excel\Options` value (`OPEN`, `OPEN1`, `OPEN2`… with no gaps) to the string `/R "C:\path\to\Modelwright64.xll"`, for example with a Group Policy Preferences registry item or Intune. `install.ps1` does exactly this, and runs in Constrained Language mode. The per-user MSI (Option B) does it too and installs silently with `/qn`; it is unsigned in v0.1, so AppLocker's default rules block it for standard users.
 - **Policies that block it.** Excel's block on `.xll` files from the internet (remove the mark of the web from the file); "Require that application add-ins are signed by Trusted Publisher", which Microsoft's Microsoft 365 Apps security baseline turns on (an unsigned add-in can never load there); AppLocker or App Control DLL rules (they need a path or publisher rule). See [research/08](docs/research/08-install-and-distribution.md) §1.5 and §2.
-- **Build from source.** Windows 10/11, the .NET SDK 10 (`global.json` pins 10.0.100 with `rollForward: latestFeature`; it installs without admin rights with [dotnet-install.ps1](https://learn.microsoft.com/dotnet/core/tools/dotnet-install-script)), and access to nuget.org or your NuGet proxy. From the source of a release tag, run `dotnet build Modelwright.sln -c Release`. The add-ins are written to `src\Modelwright.AddIn\bin\Release\net48\publish\` as `Modelwright64.xll` and `Modelwright32.xll`; install one with Option B, or with `install.ps1 -SourceFolder <that folder>`. The build embeds its date, so a rebuilt file's hash differs from the release file's.
+- **Build from source.** Windows 10/11, the .NET SDK 10 (`global.json` pins 10.0.100 with `rollForward: latestFeature`; it installs without admin rights with [dotnet-install.ps1](https://learn.microsoft.com/dotnet/core/tools/dotnet-install-script)), and access to nuget.org or your NuGet proxy. From the source of a release tag, run `dotnet build Modelwright.sln -c Release`. The add-in is written to `src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright64.xll`; install it with Option C, or with `install.ps1 -SourceFolder <that folder>`. To build the MSI too, see [CONTRIBUTING.md](CONTRIBUTING.md#build-the-msi). The build embeds its date, so a rebuilt file's hash differs from the release file's.
 
 </details>
 
@@ -82,7 +103,8 @@ The zip also has these steps in `INSTALL.txt`.
 | What you see | What to do |
 |---|---|
 | "Microsoft Excel Security Notice" with only **Leave this add-in disabled** | The file is still marked as downloaded. Close Excel, right-click the `.xll` in `%APPDATA%\Microsoft\AddIns` › Properties › tick **Unblock** (or run `install.ps1` again), then start Excel. Don't turn the block off in the Trust Center: that lowers security for every add-in. |
-| "The file format and extension of '…xll' don't match" | Wrong bitness: use the other `.xll` (`Modelwright32.xll` for 32-bit Excel). |
+| "The file format and extension of '…xll' don't match" | Your Excel is 32-bit, which Modelwright doesn't support (it is 64-bit only). |
+| SmartScreen: "Windows protected your PC" when running the MSI | Expected for this unsigned release: **More info › Run anyway** ([why](#why-windows-warns-you)). |
 | The Modelwright tab is missing | File › Options › Add-ins › Manage: **Disabled Items** › Go… › select Modelwright › **Enable**. |
 | "Sorry, we couldn't find …xll" | The file was moved or deleted. Run `install.ps1` again, or untick it in the Add-ins dialog. |
 | Shortcuts do nothing, or do something else | Another add-in (often Macabacus) took the keys. See below. |
@@ -103,7 +125,9 @@ Uninstalling never deletes them. Delete those folders yourself if you want them 
 
 ### Uninstall
 
-- **Script:** close Excel, then right-click `uninstall.ps1` › **Run with PowerShell**, or paste:
+Close Excel first, and remove Modelwright the way you installed it.
+- **MSI:** **Settings › Apps › Installed apps › Modelwright › Uninstall**.
+- **Script:** right-click `uninstall.ps1` › **Run with PowerShell**, or paste:
   ```powershell
   powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\Modelwright\uninstall.ps1" -RemoveFile
   ```
@@ -119,7 +143,7 @@ The architecture is decided: an **Excel-DNA (C#) add-in for Windows desktop Exce
 - **Settings dialog** (Modelwright › Settings…).
 - **Trace In** (Ctrl+Shift+[): a tree of the formula's precedents across sheets and workbooks (closed ones are opened read-only, OneDrive/SharePoint links included); Up/Down go there, Right/Left expand and collapse, Enter stays, Esc returns, **F2** edits the traced reference in Point mode, **Ctrl+E** evaluates functions and groups with Excel's argument names, **Ctrl+Shift+\** returns to the last audited cell.
 
-Left before a first release ([PLAN](docs/PLAN.md)): code signing and an MSI (owner decisions), testing on 32-bit Excel, screenshots.
+Left before a first release ([PLAN](docs/PLAN.md)): an install/upgrade/uninstall test of the MSI on a spare profile, the recorded manual test run, VirusTotal checks and screenshots. v0.1 ships unsigned, 64-bit only, with the MSI as an optional path (owner decisions, 2026-10-09).
 
 ### Build and test
 
@@ -141,7 +165,7 @@ Requires the .NET SDK 10 on Windows; no Visual Studio needed. See [CONTRIBUTING.
 | [docs/research/05-keys-and-undo.md](docs/research/05-keys-and-undo.md) | Which architectures can bind Macabacus's keys, and the options for undo |
 | [docs/research/06-macabacus-observed-config.md](docs/research/06-macabacus-observed-config.md) | The owner's Macabacus settings: cycles, colors and the full keymap |
 | [docs/research/07-macabacus-trace-in-spec.md](docs/research/07-macabacus-trace-in-spec.md) | How Macabacus's Trace In behaves, and what that means for our design |
-| [docs/research/08-install-and-distribution.md](docs/research/08-install-and-distribution.md) | No-admin install, the internet block, signing, release assets and 32-bit |
+| [docs/research/08-install-and-distribution.md](docs/research/08-install-and-distribution.md) | No-admin install, the internet block, signing, the MSI, release assets and bitness |
 
 ## License
 

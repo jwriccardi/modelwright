@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Modelwright per-user MSI (WiX v5). Built by installer/msi/build-msi.ps1, which passes:
+    Version    the numeric product version (major.minor.patch, from Directory.Build.props)
+    XllSource  the packed Modelwright64.xll
+    CaDll      Modelwright.Installer.CustomActions.CA.dll (installer/msi/CustomActions)
+    RepoRoot   the repository root (LICENSE, THIRD_PARTY_NOTICES.md, install/INSTALL.txt)
+
+  What it does, for the installing user only (no administrator rights, nothing outside the user's profile and HKCU):
+  - installs Modelwright64.xll, LICENSE, THIRD_PARTY_NOTICES.md and INSTALL.txt to
+    %LOCALAPPDATA%\Programs\Modelwright (Windows Installer's own per-user programs folder; see installer/msi/README.md
+    for why not %APPDATA%\Microsoft\AddIns);
+  - registers the add-in with Excel as the next free OPEN/OPENn value of HKCU\Software\Microsoft\Office\16.0\Excel\Options
+    (the same rules as install.ps1), and removes it again on uninstall, through the custom actions in CustomActions/;
+  - refuses while Excel is running (Retry/Cancel; a silent install fails with 1603), on 32-bit Excel, and without
+    .NET Framework 4.8;
+  - upgrades in place: one UpgradeCode for every version; the old version is removed first and the add-in keeps its
+    OPENn slot.
+  The UpgradeCode must never change.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Modelwright"
+           Manufacturer="Pegasus Technology Group LLC"
+           Version="$(Version)"
+           UpgradeCode="0E923366-728F-4E26-BB5E-A47529469E72"
+           Scope="perUser"
+           Language="1033"
+           Compressed="yes">
+
+    <SummaryInformation Description="Modelwright Excel add-in (64-bit Excel), installed for the current user" />
+
+    <!--
+      AllowSameVersionUpgrades: a prerelease and its release (0.1.0-rc.1, 0.1.0) share the MSI version 0.1.0, which
+      only has three numeric parts; without it the second would install beside the first. (It raises ICE61, a
+      warning that build-msi.ps1 suppresses for this reason.)
+    -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of Modelwright is already installed. Uninstall it first (Settings &gt; Apps), then run this again." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Add/remove programs (Settings > Apps > Installed apps). -->
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/jwriccardi/modelwright" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/jwriccardi/modelwright#install" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/jwriccardi/modelwright/releases" />
+    <Property Id="ARPCOMMENTS" Value="Excel add-in for financial modelers (64-bit Windows Excel). Installed for this user only." />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Modelwright" />
+      </Directory>
+    </StandardDirectory>
+
+    <!--
+      Per-user components keep their key path in HKCU (ICE38) and remove the folders they create from the profile
+      (ICE64; a folder is only removed when it is empty, so other programs' files in Programs are safe).
+    -->
+    <Component Id="AddIn" Directory="INSTALLFOLDER" Guid="137496D5-6156-41BE-9C04-D4A5EB4B7AC8">
+      <File Id="Xll" Name="Modelwright64.xll" Source="$(XllSource)" />
+      <File Id="License" Name="LICENSE.txt" Source="$(RepoRoot)\LICENSE" />
+      <File Id="Notices" Name="THIRD_PARTY_NOTICES.md" Source="$(RepoRoot)\THIRD_PARTY_NOTICES.md" />
+      <File Id="InstallGuide" Name="INSTALL.txt" Source="$(RepoRoot)\install\INSTALL.txt" />
+      <RegistryValue Root="HKCU" Key="Software\Modelwright\Installer" Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+      <RemoveRegistryKey Root="HKCU" Key="Software\Modelwright" Action="removeOnUninstall" />
+      <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+      <RemoveFolder Id="RemoveLocalProgramsFolder" Directory="LocalProgramsFolder" On="uninstall" />
+    </Component>
+
+    <Feature Id="Main" Title="Modelwright" Level="1">
+      <ComponentRef Id="AddIn" />
+    </Feature>
+
+    <!-- Custom actions: installer/msi/CustomActions/CustomActions.cs. -->
+    <Binary Id="MwCustomActions" SourceFile="$(CaDll)" />
+    <CustomAction Id="MwCheckPrerequisites" BinaryRef="MwCustomActions" DllEntry="MwCheckPrerequisites" Execute="immediate" Return="check" />
+    <CustomAction Id="MwScheduleRegistration" BinaryRef="MwCustomActions" DllEntry="MwScheduleRegistration" Execute="immediate" Return="check" />
+    <!-- Scheduled (with their data) by MwScheduleRegistration; deferred and rollback actions run as the user. -->
+    <CustomAction Id="MwApplyRegistration" BinaryRef="MwCustomActions" DllEntry="MwApplyRegistration" Execute="deferred" Impersonate="yes" Return="check" />
+    <CustomAction Id="MwRollbackRegistration" BinaryRef="MwCustomActions" DllEntry="MwRollbackRegistration" Execute="rollback" Impersonate="yes" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="MwCheckPrerequisites" Before="InstallValidate" />
+      <Custom Action="MwScheduleRegistration" After="InstallFiles" />
+    </InstallExecuteSequence>
+
+  </Package>
+</Wix>

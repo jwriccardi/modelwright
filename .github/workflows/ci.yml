@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       DOTNET_NOLOGO: true
       DOTNET_CLI_TELEMETRY_OPTOUT: true
@@ -69,11 +69,30 @@ jobs:
           path: '**/TestResults/**/coverage.cobertura.xml'
           if-no-files-found: error
 
+      # The optional per-user MSI (installer/msi), built and checked as in release.yml: WiX 5 as a .NET tool; ICE
+      # validation, a listing of its files, registry entries and custom actions, and an msiexec /a extraction
+      # (files only: nothing is installed on the runner).
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install the WiX tool.' }
+          "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+
+      - name: Build and check the MSI
+        shell: pwsh
+        run: ./installer/msi/build-msi.ps1 -Validate
+
       - name: Upload packed add-in
         uses: actions/upload-artifact@v7
         with:
           name: Modelwright-xll
-          path: |
-            src/Modelwright.AddIn/bin/Release/net48/publish/Modelwright64.xll
-            src/Modelwright.AddIn/bin/Release/net48/publish/Modelwright32.xll
+          path: src/Modelwright.AddIn/bin/Release/net48/publish/Modelwright64.xll
+          if-no-files-found: error
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v7
+        with:
+          name: Modelwright-msi
+          path: dist/Modelwright-*-x64.msi
           if-no-files-found: error

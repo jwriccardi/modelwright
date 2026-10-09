@@ -6,8 +6,9 @@
     1. Stops if Excel is running (Excel rewrites its add-in list when it closes, which would undo the install).
     2. Works out whether Excel is 32-bit or 64-bit, from the header of EXCEL.EXE (found through the registry),
        falling back to the Click-to-Run "Platform" setting. -ExcelBitness overrides the detection.
+       Modelwright is 64-bit only: on 32-bit Excel it stops with exit code 8 and changes nothing.
     3. Checks that .NET Framework 4.8 or later is installed.
-    4. Copies Modelwright64.xll or Modelwright32.xll from this script's folder (or -SourceFolder) to
+    4. Copies Modelwright64.xll from this script's folder (or -SourceFolder) to
        %APPDATA%\Microsoft\AddIns, after checking it against SHA256SUMS.txt when that file is present, and
        unblocks the copy (removes the "downloaded from the internet" mark that makes Excel refuse it).
     5. Registers it in HKCU\Software\Microsoft\Office\16.0\Excel\Options as the next free OPEN/OPENn value
@@ -21,12 +22,13 @@
     Works in Windows PowerShell 5.1 and in Constrained Language mode (only built-in cmdlets are used).
 
     Exit codes: 0 installed (or already installed); 1 unexpected error; 2 Excel is running;
-    3 Excel's bitness could not be worked out or is not supported (pass -ExcelBitness); 4 the add-in file is
-    missing; 5 .NET Framework 4.8 is missing; 6 the add-in file does not match SHA256SUMS.txt;
-    7 the add-in file could not be checked against SHA256SUMS.txt (neither Get-FileHash nor certutil.exe worked).
+    3 Excel's bitness could not be worked out (pass -ExcelBitness 64); 4 the add-in file is missing;
+    5 .NET Framework 4.8 is missing; 6 the add-in file does not match SHA256SUMS.txt; 7 the add-in file could not
+    be checked against SHA256SUMS.txt (neither Get-FileHash nor certutil.exe worked); 8 Excel is 32-bit, which
+    Modelwright does not support.
 
 .PARAMETER ExcelBitness
-    32 or 64: skip the detection and install that add-in.
+    64: skip the detection. 32 is accepted only to report that 32-bit Excel is not supported (exit code 8).
 
 .PARAMETER ExcelExePath
     Read the bitness from this EXCEL.EXE only, instead of finding Excel through the registry. For testing.
@@ -35,7 +37,7 @@
     The Office registry version. 16.0 covers Office 2016 and every later version, including Microsoft 365.
 
 .PARAMETER SourceFolder
-    The folder holding Modelwright64.xll / Modelwright32.xll. Default: this script's folder.
+    The folder holding Modelwright64.xll. Default: this script's folder.
 
 .PARAMETER AddInsFolder
     Where the add-in is copied. Default: %APPDATA%\Microsoft\AddIns (Excel's own per-user add-ins folder).
@@ -84,10 +86,10 @@ $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyI
 if (-not $SourceFolder) { $SourceFolder = $scriptDir }
 if (-not $AddInsFolder) { $AddInsFolder = Join-Path $env:APPDATA 'Microsoft\AddIns' }
 
-# Our entries: Modelwright32.xll / Modelwright64.xll, and the builds from before the rename (ModelingToolkit*.xll,
-# e.g. ModelingToolkit64-packed.xll), case-insensitive. An OPENn value is ours when, after an optional /R and
-# quotes, it is one of those names on its own (the bare form Excel writes for files in its own AddIns folder) or
-# a path ending in one. An Add-in Manager value name is the same without /R and quotes.
+# Our entries: Modelwright64.xll, Modelwright32.xll (earlier builds shipped one), and the builds from before the
+# rename (ModelingToolkit*.xll, e.g. ModelingToolkit64-packed.xll), case-insensitive. An OPENn value is ours when,
+# after an optional /R and quotes, it is one of those names on its own (the bare form Excel writes for files in
+# its own AddIns folder) or a path ending in one. An Add-in Manager value name is the same without /R and quotes.
 $ourAddInPattern = '^\s*(/R\s+)?"?([^"]*[\\/])?(Modelwright(32|64)|ModelingToolkit[^\\/"]*)\.xll"?\s*$'
 
 # -WhatIf: $PSCmdlet.ShouldProcess is a method call, which Constrained Language mode blocks, so it is done here.
@@ -270,10 +272,14 @@ try {
                 'Could not find EXCEL.EXE (Excel is not registered in App Paths or Click-to-Run).'
             }
             Stop-WithError 3 ("$found Could not tell whether Excel is 32-bit or 64-bit. In Excel, open " +
-                'File > Account > About Excel; the first line ends in "32-bit" or "64-bit". Then run this again ' +
-                'with -ExcelBitness 64 (or 32), for example:' + "`n" +
+                'File > Account > About Excel; the first line ends in "32-bit" or "64-bit". If it is 64-bit, ' +
+                'run this again with -ExcelBitness 64, for example:' + "`n" +
                 '  powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -ExcelBitness 64')
         }
+    }
+    if ($bitness -eq '32') {
+        Stop-WithError 8 ('Modelwright is 64-bit only; your Excel is 32-bit, so it cannot load Modelwright. 32-bit ' +
+            'Excel, Excel for Mac and Excel for the web are not supported. Nothing was changed.')
     }
     $xllName = "Modelwright$bitness.xll"
     Write-Host "Excel is $bitness-bit: installing $xllName."
@@ -302,7 +308,7 @@ try {
             if (-not $actual) {
                 Stop-WithError 7 ("Could not check $xllName against SHA256SUMS.txt: neither Get-FileHash nor " +
                     'certutil.exe could compute its SHA-256 (run with -Verbose for details). Check the file by hand ' +
-                    '(INSTALL.txt, "FOR IT: VERIFY THE FILES"), or install it by hand (INSTALL.txt, Option B).')
+                    '(INSTALL.txt, "FOR IT: VERIFY THE FILES"), or install it by hand (INSTALL.txt, Option C).')
             }
             if ($actual -ne $expected) {
                 Stop-WithError 6 "$xllName does not match SHA256SUMS.txt (it may be damaged or altered). Download the release again."
