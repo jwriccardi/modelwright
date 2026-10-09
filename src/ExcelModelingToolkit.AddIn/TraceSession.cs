@@ -32,15 +32,24 @@ namespace ExcelModelingToolkit.AddIn;
 /// </para>
 /// <para>
 /// <b>F2</b> edits the selected reference where it is written (<see cref="ReferenceEdit"/>): it goes to that cell
-/// and sends Excel the keys that select the reference and switch to Point mode (<see cref="TraceKeyHook.Send"/>).
-/// The edit is Excel's own, made with keys and <c>Application.Goto</c> only, so Excel's undo of it should survive.
-/// When the key that ends it (Enter, Tab, Esc) has gone to Excel, the session goes back to the cell; then, or when
+/// and sends Excel the keys that select the reference and switch to Point mode (<see cref="TraceKeyHook.Send"/>),
+/// then, for a cell or range whose target is open, go there with Excel's Go To dialog, so the arrow keys move from the
+/// traced precedent rather than from the edited cell (into another workbook: first Ctrl+Tab to the target's window,
+/// which the session made Excel's previously active one by going to the target and back). The edit is Excel's own,
+/// made with keys and <c>Application.Goto</c> only, so Excel's undo of it should survive.
+/// When the key that ends it (Enter, Tab, Esc) has gone to Excel, the session goes back to the cell (from the target's
+/// window too, after an Esc there); then, or when
 /// the cell changes otherwise (a click elsewhere commits), if the formula changed it rebuilds the tree in the same
 /// window.
 /// </para>
 /// </remarks>
 internal sealed class TraceSession
 {
+    /// <summary>How long after the add-in loads <see cref="WarmUp"/> runs.</summary>
+    private const int WarmUpDelayMilliseconds = 1500;
+
+    private static System.Windows.Forms.Timer? _warmUpTimer;
+
     private readonly TraceWindow _window;
     private readonly Stopwatch _openFor = Stopwatch.StartNew();
     private readonly SerialCommandQueue _queue;
@@ -75,16 +84,113 @@ internal sealed class TraceSession
         _auditedWorkbook = auditedWorkbook;
         _ui = UiStateStore.Load();
         _queue = new SerialCommandQueue(ScheduleDrain, ex => DiagnosticsLog.Write("TraceWindowError", ex.ToString()));
-        _window = new TraceWindow();
+        _window = TraceWindow.Take();
         _window.RowClicked += OnRowClicked;
         _window.OkClicked += () => Enqueue(() => Close(TraceCloseMode.StayOnCurrentCell, "ok"));
         _window.CancelClicked += () => Enqueue(() => Close(TraceKeys.CancelCloseMode, "cancel"));
         _window.WrapChanged += wrap => _ui = _ui.WithWrapFormula(wrap);
-        _window.Closed += (sender, e) => OnWindowClosed();
+        _window.Destroyed += OnWindowClosed;
     }
 
     /// <summary>The open trace, or null.</summary>
     public static TraceSession? Current { get; private set; }
+
+    /// <summary>
+    /// Has <see cref="WarmUp"/> run <see cref="WarmUpDelayMilliseconds"/> from now, from Excel's message loop
+    /// (outside macro context), once the add-in has loaded. Never throws.
+    /// </summary>
+    public static void ScheduleWarmUp()
+    {
+        try
+        {
+            CancelWarmUp();
+            var timer = new System.Windows.Forms.Timer { Interval = WarmUpDelayMilliseconds };
+            timer.Tick += (sender, e) =>
+            {
+                CancelWarmUp();
+                WarmUp();
+            };
+            _warmUpTimer = timer;
+            timer.Start();
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("TraceWarmup", "not scheduled: " + ex.Message);
+        }
+    }
+
+    /// <summary>Stops a warm-up that has not run yet (the add-in is unloading). Never throws.</summary>
+    public static void CancelWarmUp()
+    {
+        try
+        {
+            _warmUpTimer?.Stop();
+            _warmUpTimer?.Dispose();
+        }
+        catch (Exception)
+        {
+            // A timer that will not stop only warms up what is already loaded.
+        }
+
+        _warmUpTimer = null;
+    }
+
+    // The first Trace In of a session paid for one-time work (about 830 ms against the 300 ms target): the formula
+    // grammar built on each parsing thread, JIT and WPF's start-up for the window. Done here once, ahead of it: a short
+    // formula parsed on this thread, a long one on the parser's large-stack thread (asked from a pool thread, so Excel
+    // does not wait for it), and the window created hidden (TraceWindow.WarmUp), kept for the first trace. Skipped if a
+    // trace is already open. Logs one line. Never throws.
+    private static void WarmUp()
+    {
+        var stopwatch = Stopwatch.StartNew();
+        double parseMs = 0;
+        var result = "ok";
+        try
+        {
+            if (Current is not null)
+            {
+                result = "skipped: a trace is open";
+            }
+            else
+            {
+                var context = new FormulaContext("Book1.xlsx", "Sheet1");
+                FormulaParser.Parse("=SUM(Sheet2!A1:B2)+Rate*2+IF(A1>0,[Book2.xlsx]Rates!$B$3,Sales[Amount])", context);
+                parseMs = stopwatch.Elapsed.TotalMilliseconds;
+
+                var references = new string[80];
+                for (var i = 0; i < references.Length; i++)
+                {
+                    references[i] = "A" + (i + 1).ToString(CultureInfo.InvariantCulture);
+                }
+
+                var longFormula = "=" + string.Join("+", references);
+                System.Threading.ThreadPool.QueueUserWorkItem(state =>
+                {
+                    try
+                    {
+                        FormulaParser.Parse(longFormula, context);
+                    }
+                    catch (Exception)
+                    {
+                        // An exception escaping a pool thread would end Excel; a parse that fails here fails again later.
+                    }
+                });
+
+                TraceWindow.WarmUp();
+            }
+        }
+        catch (Exception ex)
+        {
+            result = "error: " + ex.Message;
+        }
+
+        DiagnosticsLog.Write(
+            "TraceWarmup",
+            "ms=" + Ms(stopwatch.Elapsed.TotalMilliseconds),
+            "parseMs=" + Ms(parseMs),
+            "windowMs=" + Ms(parseMs > 0 ? stopwatch.Elapsed.TotalMilliseconds - parseMs : 0),
+            result);
+    }
 
     /// <summary>The window's handle, for the hook's focus check.</summary>
     public IntPtr WindowHandle => _window.Handle;
@@ -510,8 +616,9 @@ internal sealed class TraceSession
     private string EditReference(ref string owner, ref int keyCount)
     {
         _edit = null;
-        var span = ReferenceEdit.SpanOf(_tree.Selected);
-        if (span is null)
+        var node = ReferenceEdit.SpanNodeOf(_tree.Selected);
+        var span = node?.Item.Span;
+        if (node is null || span is null)
         {
             return PlainF2("not a reference in a cell's formula", null);
         }
@@ -524,11 +631,16 @@ internal sealed class TraceSession
             return PlainF2("its cell is gone", $"Edit the reference: {place} is no longer open.");
         }
 
+        // The traced formula, or the same one written differently since (a closed workbook's path, gone once the trace
+        // opened the workbook): the reference is then found again in it.
         var formula = ExcelPrecedentProvider.FormulaText(cell);
-        if (!string.Equals(formula, span.Formula, StringComparison.Ordinal))
+        var relocated = formula is null ? null : ReferenceEdit.Relocate(span, formula);
+        if (relocated is null)
         {
             return PlainF2("the formula changed", $"Edit the reference: {place} changed since it was traced (Ctrl+Shift+[ traces it again).");
         }
+
+        span = relocated;
 
         // The keys count characters in the formula as Excel's editor shows it; only en-US Excel shows the parsed text.
         if (!string.Equals(ExcelPrecedentProvider.LocalFormulaText(cell), formula, StringComparison.Ordinal))
@@ -542,7 +654,12 @@ internal sealed class TraceSession
             return "protected";
         }
 
-        var keys = ReferenceEdit.Keys(span);
+        var goTo = GoToStep(node.Item, span, out var targetRange, out var noGoTo);
+
+        // Go To into another workbook's window is unreliable in Point mode: the keys switch to it with Ctrl+Tab, which
+        // goes to Excel's previously active window, then Go To within it (see ReferenceEdit).
+        var switchWindow = goTo is not null && ReferenceEdit.SwitchesWindow(span, node.Item);
+        var keys = ReferenceEdit.Keys(span, goTo, switchWindow);
         if (keys is null)
         {
             return PlainF2("too many keys", "Edit the reference: the formula is too long to select it with keystrokes.");
@@ -550,13 +667,32 @@ internal sealed class TraceSession
 
         keyCount = keys.Count;
         var path = _tree.PathOf(_tree.Selected);
+
+        // The target's window, made the previously active one: to the target, then (below) back to the edited cell.
+        var targetWindow = IntPtr.Zero;
+        if (switchWindow)
+        {
+            var wentToTarget = GoTo(targetRange!);
+            targetWindow = wentToTarget == "ok" ? ActiveWindowHandle() : IntPtr.Zero;
+            if (targetWindow == IntPtr.Zero)
+            {
+                noGoTo = "could not go to the target first: " + wentToTarget;
+                goTo = null;
+                switchWindow = false;
+                keys = ReferenceEdit.Keys(span)!;
+                keyCount = keys.Count;
+            }
+        }
+
         var went = GoTo(cell);
         if (went != "ok")
         {
             return went;
         }
 
-        if (!TraceKeyHook.Send(keys, out var failure))
+        // Only into the edited cell's window: GoTo may just have switched workbooks, and the keys must not edit a cell
+        // of the one the selection was in.
+        if (!TraceKeyHook.Send(keys, out var failure, ActiveWindowHandle(), targetWindow))
         {
             Message("Edit the reference: " + failure + ".");
             return "not sent: " + failure;
@@ -564,7 +700,62 @@ internal sealed class TraceSession
 
         _edit = new PendingEdit(span, cell, formula!, path);
         Message($"Editing {span.Text} in {place}: point at its replacement; Enter commits, Esc cancels.");
-        return "ok";
+        return goTo is null ? "ok; no Go To: " + noGoTo : "ok; " + (switchWindow ? "switch window; " : string.Empty) + "go to " + goTo;
+    }
+
+    // The Go To step's text for the reference's resolved target (ReferenceEdit.GoToText), so Point mode moves from the
+    // target and not from the edited cell; or null, with the reason in why: not a plain cell or range reference (Go To
+    // would write back another), or one Go To would fail on (its workbook no longer open, a hidden sheet or workbook: Excel would show
+    // a message box) or write back differently (merged cells, which it selects whole), or a protected sheet that
+    // restricts selection. Without it F2 still selects the reference in Point mode. The target's range, when there is
+    // one, is in range.
+    private static string? GoToStep(PrecedentItem target, ReferenceSpan span, out object? range, out string why)
+    {
+        var text = ReferenceEdit.GoToText(span, target);
+        range = null;
+        why = string.Empty;
+        if (text is null)
+        {
+            why = "not a plain cell or range reference";
+            return null;
+        }
+
+        try
+        {
+            range = ExcelPrecedentProvider.CellAt(target.Workbook!, target.Sheet!, target.Address!);
+            if (range is null)
+            {
+                why = "its workbook or sheet is not open";
+            }
+            else
+            {
+                dynamic r = range;
+                object sheetObject = r.Worksheet;
+                dynamic sheet = sheetObject;
+                object visible = sheet.Visible;
+                object merged = r.MergeCells;
+                object protectedContents = sheet.ProtectContents;
+                object selection = sheet.EnableSelection;
+                if (Convert.ToInt32(visible, CultureInfo.InvariantCulture) != -1 || !ExcelPrecedentProvider.WorkbookIsVisible((object)sheet.Parent))
+                {
+                    why = "on a hidden sheet or workbook";
+                }
+                else if (merged is not false)
+                {
+                    why = "merged cells";
+                }
+                else if (protectedContents is true && Convert.ToInt32(selection, CultureInfo.InvariantCulture) != 0)
+                {
+                    why = "a protected sheet that restricts selection";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            why = "could not read the target: " + ex.Message;
+        }
+
+        return why.Length > 0 ? null : text;
     }
 
     // F2 for the active cell, as Excel would have had it without the window. Returns the log result.
@@ -1004,20 +1195,23 @@ internal sealed class TraceSession
         return handles;
     }
 
+    // Closing hides the window and keeps it for the next trace (TraceWindow.Recycle): creating one takes a few hundred
+    // milliseconds.
     private void CloseWindow()
     {
+        OnWindowClosed();
         try
         {
-            _window.CloseWindow();
+            _window.Recycle();
         }
         catch (Exception ex)
         {
             DiagnosticsLog.Write("TraceWindowError", "close failed", ex.Message);
-            OnWindowClosed();
         }
     }
 
-    // The window is gone, whatever closed it (us, or its owner window being destroyed): unhook and remember where it was.
+    // The trace's window is closed (hidden, by CloseWindow) or gone (its owner window was destroyed: that workbook was
+    // closed): unhook and remember where it was.
     private void OnWindowClosed()
     {
         if (_closed)

@@ -8,8 +8,14 @@
 # external workbook (Trace In opens it), Left back out of it, Enter (stay), Esc (back to the audited cell), Last
 # Audited Cell through four levels, ROW() in OFFSET evaluated for its own cell, a name whose target is in the closed
 # external workbook, native undo surviving a trace that stays in the workbook (type in B1, trace + navigate + Esc,
-# Ctrl+Z: B1 is empty again), and an F2 edit of a reference (B16 =A14+A2: Down to A2, F2, Down in Point mode, Enter:
-# B16 is =A14+A3, Excel is back on B16 with the window open, and Ctrl+Z restores =A14+A2).
+# Ctrl+Z: B1 is empty again), and F2 edits of a reference, where the add-in's keys go to the reference's target with
+# Excel's Go To dialog so Point mode moves from it: B16 =A14+A2 (Down to A2, F2, Down in Point mode, Enter: B16 is
+# =A14+A3, Excel is back on B16 with the window open, and Ctrl+Z restores =A14+A2); B2 =Inputs!B2*(1+Growth) (another
+# sheet: Down makes it Inputs!B3, Ctrl+Z restores it); B11 into the external workbook the trace opens (Go To across
+# windows is unreliable in Point mode, so the keys switch to that workbook's window with Ctrl+Tab, then Go To
+# 'Rates'!B3 within it: F2 + Enter without moving makes it Excel's Point-mode form [External]Rates!$B$3 and Ctrl+Z
+# restores it; traced again, Down makes it [External]Rates!$B$4, Ctrl+Z restores it; traced again, F2 + Esc leaves
+# B11 as it was and Excel back on B11 with the window open).
 # Timings (open, and each Up/Down step) are read back from the diagnostics log and reported against the targets
 # (300 ms, 100 ms); they are reported, not failed on. With the diagnostics log off (diagnosticsLog: false in
 # settings.json) those log checks are skipped and the output says so; settings.json is never touched.
@@ -17,7 +23,9 @@
 # Safety (it runs against your live Excel; don't touch the keyboard while it runs):
 # - Before EVERY key it checks that the foreground window is a workbook window (XLMAIN) of the Excel it drives (the
 #   process is taken from Application.Hwnd), that it is Excel's active window, and that the active workbook is one of
-#   the fixture workbooks in the fixture folder; otherwise it aborts without sending the key.
+#   the fixture workbooks in the fixture folder; otherwise it aborts without sending the key. While Excel is editing
+#   (COM is refused then) the check is the window title: a fixture workbook's, or exactly "Go To" (this Excel's Go To
+#   dialog, which the add-in's F2 keys open and close in Point mode: a key sent then is queued behind them).
 # - The first step that does not end where expected aborts the run: no further key is sent. Ctrl+Z is sent only once
 #   COM shows the 777 typed in the fixture's B1 and Excel's own Undo is available (so the add-in's formatting undo
 #   cannot take the key).
@@ -25,8 +33,8 @@
 #   *ModelingToolkit64-packed.xll in the add-in list, and puts all of them back in `finally` (each on its own), however
 #   the run ends: the add-in build under test is uninstalled again unless it was installed before, and the builds that
 #   were installed are installed again. Only the fixture workbooks (in the fixture folder) are closed, without saving.
-#   If Excel is still editing a cell then (a run that aborted in Point mode), one Esc is sent first, after the same
-#   foreground check.
+#   If Excel is still editing a cell then (a run that aborted in Point mode), Esc is sent first (at most three, each
+#   after the same foreground check).
 # The focus trick taps Shift (only when Excel is not already in front): an Alt tap would turn on ribbon KeyTips and
 # send the next key to the ribbon.
 param(
@@ -153,10 +161,14 @@ function Assert-SafeToSend([string]$what) {
   $p = [W]::ProcessOf($fg)
   if ($p -ne $excelPid) { throw "ABORT before [$what]: the foreground window belongs to process $p, not this Excel ($excelPid). No key sent." }
   $class = [W]::ClassOf($fg)
-  if ($class -ne 'XLMAIN') { throw "ABORT before [$what]: the foreground window is not an Excel workbook window (class $class). No key sent." }
+  $title = [W]::TitleOf($fg)
+  # The add-in's F2 keys open Excel's Go To dialog in Point mode and close it again (one SendInput batch): a key sent
+  # while it shows is queued behind those keys and reaches Excel after the dialog has closed.
+  $goTo = ($title -eq 'Go To') -and (Edit-Mode)
+  if ($class -ne 'XLMAIN' -and -not $goTo) { throw "ABORT before [$what]: the foreground window is not an Excel workbook window (class $class, [$title]). No key sent." }
   if (Edit-Mode) {
     # Excel rejects every COM call while a cell is being edited, so the check is the window title: "<book> - Excel".
-    $title = [W]::TitleOf($fg)
+    if ($goTo) { return }
     if (-not (($title -like "$mainName*") -or ($title -like "$extName*"))) { throw "ABORT before [$what]: Excel is editing, and the foreground window is [$title], not a fixture workbook. No key sent." }
     return
   }
@@ -177,6 +189,37 @@ function Log-Lines([string]$pattern) {
   $all = [IO.File]::ReadAllBytes($log)
   $from = if ($all.Length -ge $logStart) { $logStart } else { 0 }
   return @([Text.Encoding]::UTF8.GetString($all, $from, $all.Length - $from) -split "`r?`n" | Where-Object { $_ -match $pattern })
+}
+
+# After F2 on a reference row (Step -Editing): waits until the add-in's keys have all arrived (a TraceSynth line newer
+# than the $synthBefore there were, "complete") and Excel's Go To dialog has closed, so the next key goes to Point
+# mode; with the diagnostics log on, also that the F2 used the Go To step with $goTo (the text it typed, with nothing
+# after it: "A2", "'Inputs'!B2", "'Rates'!B3") and, for a target in another workbook (-SwitchWindow), that it switched
+# to that workbook's window with Ctrl+Tab first. The log off: only the dialog is waited for.
+function Wait-EditKeys([int]$synthBefore, [string]$goTo, [string]$label, [switch]$SwitchWindow) {
+  $logOn = @(Log-Lines "`tTraceOpen`t").Count -gt 0
+  $deadline = (Get-Date).AddSeconds(4)
+  do {
+    Start-Sleep -Milliseconds 200
+    $synth = @(Log-Lines "`tTraceSynth`t")
+    $dialog = [W]::TitleOf([W]::GetForegroundWindow()) -eq 'Go To'
+    $arrived = (-not $logOn) -or ($synth.Count -gt $synthBefore)
+  } while (($dialog -or -not $arrived) -and (Get-Date) -lt $deadline)
+  if ($dialog) { throw "ABORT [$label]: Excel's Go To dialog is still open (the reference was not accepted?)." }
+  # Excel is still closing the Go To dialog and switching windows when the last key has arrived: a key sent within
+  # ~150 ms of it lands in the edited cell's window instead of the pointed one. A person cannot press that fast.
+  Start-Sleep -Milliseconds 600
+  if (-not (Edit-Mode)) { throw "ABORT [$label]: Excel is not editing (Application.Ready is true)." }
+  if (-not $logOn) { "SKIP: no diagnostics log (it is off): only Application.Ready and the Go To dialog were checked"; return }
+  if (-not $arrived) { throw "ABORT [$label]: no TraceSynth line: the add-in sent no keys." }
+  if (-not ($synth[-1] -match "`tcomplete`t")) { throw "ABORT [$label]: the keys F2 sent did not all arrive: $($synth[-1])" }
+  "ok   the add-in's keys all arrived: $($synth[-1])"
+  $edit = @(Log-Lines "`tTraceEditReference`t")
+  $switchText = if ($SwitchWindow) { 'switch window; ' } else { '' }
+  if ($edit.Count -eq 0 -or -not $edit[-1].EndsWith("`tok; ${switchText}go to $goTo")) {
+    throw "ABORT [$label]: F2 did not go to [$goTo]$(if ($SwitchWindow) { ' after Ctrl+Tab' }) in Point mode: $(if ($edit.Count) { $edit[-1] } else { 'no TraceEditReference line' })"
+  }
+  "ok   F2 went to $goTo$(if ($SwitchWindow) { ' (after Ctrl+Tab to its window)' }) in Point mode"
 }
 
 # Sends keys, waits, then checks the active workbook/sheet/cell (an empty cell: any) and (if given) whether the window
@@ -278,7 +321,9 @@ try {
   # F2 on the B13 row edits that reference in A1's formula: back on A1, in Point mode; Esc cancels (Excel's) and
   # leaves Excel on A1 with the window open.
   $formulaBefore = Retry { $calc.Range('A1').Formula }
+  $synthBefore = @(Log-Lines "`tTraceSynth`t").Count
   Step '{F2}'   'F2: A1, editing B13 in its formula' $mainName 'Calc' 'A1' $true -waitMs 1500 -Editing
+  Wait-EditKeys $synthBefore 'B13' 'F2 on the B13 row'
   Step '{ESC}'  'Esc in Point mode goes to Excel' $mainName 'Calc' 'A1' $true -waitMs 1500
   $formulaAfter = Retry { $calc.Range('A1').Formula }
   if ($formulaAfter -ne $formulaBefore) { throw "ABORT: F2/Esc changed A1: [$formulaBefore] -> [$formulaAfter]" }
@@ -340,17 +385,10 @@ try {
   Step '^+{[}'  'Ctrl+Shift+[ on B16'            $mainName 'Calc' 'B16' $true -waitMs 3000
   Step '{DOWN}' 'Down: A14'                      $mainName 'Calc' 'A14' $true
   Step '{DOWN}' 'Down: A2'                       $mainName 'Calc' 'A2' $true
+  $synthBefore = @(Log-Lines "`tTraceSynth`t").Count
   Step '{F2}'   'F2: back on B16, editing A2'    $mainName 'Calc' 'B16' $true -waitMs 1500 -Editing
-  $deadline = (Get-Date).AddSeconds(3)
-  while (-not (Edit-Mode) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
-  if (-not (Edit-Mode)) { throw "ABORT: after F2 Excel is not editing B16 (Application.Ready is true)." }
+  Wait-EditKeys $synthBefore 'A2' 'F2 on the A2 row'
   "ok   Excel is editing B16 (Application.Ready is false)"
-  $synth = @(Log-Lines "`tTraceSynth`t")
-  if ($synth.Count -gt 0) {
-    if (-not ($synth[-1] -match "`tcomplete`t")) { throw "ABORT: the keys F2 sent did not all arrive: $($synth[-1])" }
-    "ok   the add-in's keys all arrived: $($synth[-1])"
-  }
-  else { "SKIP: no TraceSynth line in the diagnostics log (the log is off): only Application.Ready was checked" }
   Step '{DOWN}' 'Down in Point mode: A2 -> A3'   $mainName 'Calc' '' $true -Editing
   Step '~'      'Enter: commit, back on B16'     $mainName 'Calc' 'B16' $true -waitMs 3000
   if (Edit-Mode) { throw "ABORT: Excel is still editing after Enter." }
@@ -374,6 +412,116 @@ try {
     else { "ok   Ctrl+Z restored =A14+A2: Excel's undo of the F2 edit survived" }
   }
   Step '{ESC}'  'Esc: back to B16, closed'       $mainName 'Calc' 'B16' $false
+
+  # --- I. F2 on a reference to another sheet: B2 =Inputs!B2*(1+Growth), the Inputs!B2 row, F2 (Go To 'Inputs'!B2),
+  # Down (Inputs!B3), Enter; then Ctrl+Z ---
+  $b2Before = Retry { $calc.Range('B2').Formula }
+  if ($b2Before -ne '=Inputs!B2*(1+Growth)') { throw "ABORT: the fixture's Calc!B2 is [$b2Before], not =Inputs!B2*(1+Growth)." }
+  Select-Cell 'B2'
+  Step '^+{[}'  'Ctrl+Shift+[ on B2'             $mainName 'Calc' 'B2' $true -waitMs 3000
+  Step '{DOWN}' 'Down: Inputs!B2'                $mainName 'Inputs' 'B2' $true
+  $synthBefore = @(Log-Lines "`tTraceSynth`t").Count
+  Step '{F2}'   'F2: back on B2, editing Inputs!B2' $mainName '' '' $true -waitMs 1500 -Editing
+  Wait-EditKeys $synthBefore "'Inputs'!B2" 'F2 on the Inputs!B2 row'
+  Step '{DOWN}' 'Down in Point mode: Inputs!B3'  $mainName '' '' $true -Editing
+  Step '~'      'Enter: commit, back on B2'      $mainName 'Calc' 'B2' $true -waitMs 3000
+  if (Edit-Mode) { throw "ABORT: Excel is still editing after Enter." }
+  $b2 = Retry { $calc.Range('B2').Formula }
+  if (($b2 -notlike '*Inputs!B3*') -or ($b2 -like '*Inputs!B2*')) { throw "ABORT: after the F2 edit B2 is [$b2], not Inputs!B3 in place of Inputs!B2." }
+  "ok   B2 is now $b2"
+  $canUndo = Retry { $xl.CommandBars.GetEnabledMso('Undo') }
+  if (-not $canUndo) {
+    $failures.Add('undo after a cross-sheet F2 edit: Excel cannot undo it; Ctrl+Z not sent')
+    "FAIL Excel's Undo is unavailable after the cross-sheet F2 edit; Ctrl+Z not sent"
+  }
+  else {
+    Step '^z'   'Ctrl+Z: undo the cross-sheet edit' $mainName 'Calc' 'B2' $true
+    $b2 = Retry { $calc.Range('B2').Formula }
+    if ($b2 -ne $b2Before) { $failures.Add("undo after a cross-sheet F2 edit: B2 is [$b2], not $b2Before"); "FAIL B2 is [$b2] after Ctrl+Z" }
+    else { "ok   Ctrl+Z restored $b2Before" }
+  }
+  Step '{ESC}'  'Esc: back to B2, closed'        $mainName 'Calc' 'B2' $false
+
+  # --- J. F2 on a reference into the external workbook, which the trace opens: B11 =[External]Rates!B3*2 traced with
+  # the workbook closed (its formula then holds the path, gone once it is open). Go To into another workbook's window
+  # is unreliable in Point mode, so the add-in goes to Rates!B3 and back to B11 (the external window is then Excel's
+  # previously active one), and its keys switch there with Ctrl+Tab, then Go To 'Rates'!B3 within that window. F2 +
+  # Enter without moving writes Excel's Point-mode form for another workbook, absolute ([External]Rates!$B$3); Ctrl+Z
+  # restores it. Then, traced again, F2, Down ($B$4), Enter; then Ctrl+Z. Then, traced again, F2, Esc (cancel, from
+  # the external window): B11 unchanged, Excel back on B11 with the window open ---
+  foreach ($open in @($xl.Workbooks)) { if ($open.Name -eq $extName -and (Is-Fixture $open)) { $open.Close($false); "Closed $extName (fixture) so tracing B11 opens it" } }
+  Select-Cell 'B11'
+  Step '^+{[}'  'Ctrl+Shift+[ on B11 (opens ext)' $mainName 'Calc' 'B11' $true -waitMs 15000
+  $extOpen = $false; foreach ($open in @($xl.Workbooks)) { if ($open.Name -eq $extName -and (Is-Fixture $open)) { $extOpen = $true } }
+  if (-not $extOpen) { throw "ABORT: tracing B11 did not open the fixture's $extName" }
+  $b11Before = Retry { $calc.Range('B11').Formula }
+  if ($b11Before -ne "=[$extName]Rates!B3*2") { throw "ABORT: with $extName open the fixture's Calc!B11 is [$b11Before], not =[$extName]Rates!B3*2." }
+  Step '{DOWN}' 'Down: [External]Rates!B3'       $extName 'Rates' 'B3' $true -waitMs 3000
+  $synthBefore = @(Log-Lines "`tTraceSynth`t").Count
+  Step '{F2}'   'F2: back on B11, editing Rates!B3' '' '' '' $true -waitMs 1500 -Editing
+  Wait-EditKeys $synthBefore "'Rates'!B3" 'F2 on the Rates!B3 row' -SwitchWindow
+  Step '~'      'Enter without moving: back on B11' $mainName 'Calc' 'B11' $true -waitMs 3000
+  if (Edit-Mode) { throw "ABORT: Excel is still editing after Enter." }
+  $b11 = Retry { $calc.Range('B11').Formula }
+  # Point mode writes a reference into another workbook absolute (verified in Excel 2026-10-09).
+  $b11Pointed = "=[$extName]Rates!`$B`$3*2"
+  if ($b11 -ne $b11Pointed) { throw "ABORT: after F2 + Enter without moving B11 is [$b11], not $b11Pointed." }
+  "ok   F2 + Enter without moving made B11 $b11 (Point mode's absolute form)"
+  $canUndo = Retry { $xl.CommandBars.GetEnabledMso('Undo') }
+  if (-not $canUndo) {
+    $failures.Add('undo after an external F2 + Enter: Excel cannot undo it; Ctrl+Z not sent')
+    "FAIL Excel's Undo is unavailable after the external F2 + Enter; Ctrl+Z not sent"
+  }
+  else {
+    Step '^z'   'Ctrl+Z: undo the F2 + Enter'    $mainName 'Calc' 'B11' $true
+    $b11 = Retry { $calc.Range('B11').Formula }
+    if ($b11 -ne $b11Before) { $failures.Add("undo after an external F2 + Enter: B11 is [$b11], not $b11Before"); "FAIL B11 is [$b11] after Ctrl+Z" }
+    else { "ok   Ctrl+Z restored $b11Before" }
+  }
+  # Traced again from B11 for the next edit, so the tree and the formula are known to agree.
+  Step '{ESC}'  'Esc: back to B11, closed'       $mainName 'Calc' 'B11' $false
+  $b11Before = Retry { $calc.Range('B11').Formula }
+  Step '^+{[}'  'Ctrl+Shift+[ on B11 again'      $mainName 'Calc' 'B11' $true -waitMs 3000
+  Step '{DOWN}' 'Down: [External]Rates!B3'       $extName 'Rates' 'B3' $true -waitMs 3000
+  $synthBefore = @(Log-Lines "`tTraceSynth`t").Count
+  Step '{F2}'   'F2 again: editing Rates!B3'     '' '' '' $true -waitMs 1500 -Editing
+  Wait-EditKeys $synthBefore "'Rates'!B3" 'F2 again on the Rates!B3 row' -SwitchWindow
+  Step '{DOWN}' 'Down in Point mode: Rates!B4'   '' '' '' $true -Editing
+  Step '~'      'Enter: commit, back on B11'     $mainName 'Calc' 'B11' $true -waitMs 3000
+  if (Edit-Mode) { throw "ABORT: Excel is still editing after Enter." }
+  $b11 = Retry { $calc.Range('B11').Formula }
+  $b11Moved = "=[$extName]Rates!`$B`$4*2"
+  if ($b11 -ne $b11Moved) { throw "ABORT: after the F2 edit B11 is [$b11], not $b11Moved." }
+  "ok   B11 is now $b11"
+  $canUndo = Retry { $xl.CommandBars.GetEnabledMso('Undo') }
+  if (-not $canUndo) {
+    $failures.Add('undo after an external F2 edit: Excel cannot undo it; Ctrl+Z not sent')
+    "FAIL Excel's Undo is unavailable after the external F2 edit; Ctrl+Z not sent"
+  }
+  else {
+    Step '^z'   'Ctrl+Z: undo the external edit' $mainName 'Calc' 'B11' $true
+    $b11 = Retry { $calc.Range('B11').Formula }
+    if ($b11 -ne $b11Before) { $failures.Add("undo after an external F2 edit: B11 is [$b11], not $b11Before"); "FAIL B11 is [$b11] after Ctrl+Z" }
+    else { "ok   Ctrl+Z restored $b11Before" }
+  }
+  Step '{ESC}'  'Esc: back to B11, closed'       $mainName 'Calc' 'B11' $false
+
+  # Cancel: Esc in Point mode while the external window is the active one ends the edit; the session goes back to B11.
+  $b11Before = Retry { $calc.Range('B11').Formula }
+  if ($b11Before -ne "=[$extName]Rates!B3*2") { "SKIP F2 + Esc on B11: B11 is [$b11Before] (the undo above failed)" }
+  else {
+    Step '^+{[}'  'Ctrl+Shift+[ on B11 a third time' $mainName 'Calc' 'B11' $true -waitMs 3000
+    Step '{DOWN}' 'Down: [External]Rates!B3'       $extName 'Rates' 'B3' $true -waitMs 3000
+    $synthBefore = @(Log-Lines "`tTraceSynth`t").Count
+    Step '{F2}'   'F2 a third time: editing Rates!B3' '' '' '' $true -waitMs 1500 -Editing
+    Wait-EditKeys $synthBefore "'Rates'!B3" 'F2 a third time on the Rates!B3 row' -SwitchWindow
+    Step '{ESC}'  'Esc in Point mode: cancel, back on B11' $mainName 'Calc' 'B11' $true -waitMs 3000
+    if (Edit-Mode) { throw "ABORT: Excel is still editing after Esc." }
+    $b11 = Retry { $calc.Range('B11').Formula }
+    if ($b11 -ne $b11Before) { throw "ABORT: F2 + Esc changed B11: [$b11Before] -> [$b11]" }
+    "ok   F2 + Esc left B11 $b11, Excel back on B11 with the window open"
+    Step '{ESC}'  'Esc: back to B11, closed'       $mainName 'Calc' 'B11' $false
+  }
 }
 catch {
   $failures.Add("aborted: $($_.Exception.Message)")
@@ -382,9 +530,10 @@ catch {
 }
 finally {
   "--- putting Excel back ---"
-  # 0. A run that aborted while Excel was editing (Point mode): one Esc, only to a fixture window of this Excel.
+  # 0. A run that aborted while Excel was editing (Point mode): Esc, only to a fixture window of this Excel (or the Go
+  # To dialog the add-in opened in Point mode: one Esc closes it, the next ends the edit); at most three.
   try {
-    if (Edit-Mode) {
+    for ($i = 0; ($i -lt 3) -and (Edit-Mode); $i++) {
       Assert-SafeToSend 'Esc to end the cell edit'
       [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
       Start-Sleep -Milliseconds 500
@@ -447,7 +596,9 @@ else {
   }
   $openMax = Max-Ms "`tTraceOpen`t.*`tok"
   $stepMax = Max-Ms "`tTraceNavigate`tkey=(Up|Down)`tsource=key`t.*`tmove=Moved`t"
-  "PERF: Trace In open max {0} ms (target <= 300; the first open in a session includes one-time loading)" -f $openMax
+  "PERF: Trace In open max {0} ms (target <= 300; the add-in warms up 1.5 s after it loads, so a first open sooner pays the one-time loading)" -f $openMax
+  $warmup = @($lines | Where-Object { $_ -match "`tTraceWarmup`t" })
+  "PERF: warm-up: " + $(if ($warmup.Count) { $warmup[-1] } else { 'no TraceWarmup line since the start (it runs once, 1.5 s after the add-in loads)' })
   "PERF: Up/Down step max {0} ms from key press (target <= 100)" -f $stepMax
   if (-not ($lines | Where-Object { $_ -match "`tTraceHook`tuninstalled" })) { $failures.Add('no TraceHook uninstalled line: the key hook may still be installed') }
 }

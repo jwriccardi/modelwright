@@ -131,6 +131,9 @@ internal sealed class TraceWindow : Window
     // GridViewRowPresenter's margin before each cell's content.
     private const double CellMargin = 6;
 
+    // The hidden window kept for the next trace (Recycle, WarmUp), or null.
+    private static TraceWindow? _spare;
+
     private readonly TextBlock _formulaText;
     private readonly ScrollViewer _formulaScroll;
     private readonly TextBlock _noteText;
@@ -141,6 +144,7 @@ internal sealed class TraceWindow : Window
     private IntPtr _hwnd;
     private IntPtr _owner;
     private bool _closingByCode;
+    private bool _destroyed;
     private bool _syncingWrap;
     private IntPtr _focusBeforeMenu;
     private string _formula = string.Empty;
@@ -214,6 +218,12 @@ internal sealed class TraceWindow : Window
 
     /// <summary>The wrap setting was changed with the mouse.</summary>
     public event Action<bool>? WrapChanged;
+
+    /// <summary>
+    /// The window was destroyed, not hidden by <see cref="Recycle"/>: Windows destroys an owned window with its owner
+    /// (the workbook window it was owned by was closed).
+    /// </summary>
+    public event Action? Destroyed;
 
     /// <summary>The window's handle (zero until shown).</summary>
     public IntPtr Handle => _hwnd;
@@ -306,11 +316,124 @@ internal sealed class TraceWindow : Window
     /// <summary>The text in the footer.</summary>
     public void SetStatus(string text) => _statusText.Text = text;
 
-    /// <summary>Closes the window (the session's own close: no Cancel is raised).</summary>
-    public void CloseWindow()
+    /// <summary>
+    /// The window for a new trace: the one kept from the last trace (<see cref="Recycle"/>) or by <see cref="WarmUp"/>,
+    /// or a new one.
+    /// </summary>
+    public static TraceWindow Take()
+    {
+        var spare = _spare;
+        _spare = null;
+        return spare is not null && !spare._destroyed && (spare._hwnd == IntPtr.Zero || NativeMethods.IsWindow(spare._hwnd))
+            ? spare
+            : new TraceWindow();
+    }
+
+    /// <summary>
+    /// Creates the window ahead of the first trace, hidden, and lays out its content once with a sample row, so the
+    /// first trace does not pay for WPF's start-up and the JIT. Nothing if one is kept already.
+    /// </summary>
+    public static void WarmUp()
+    {
+        if (_spare is not null)
+        {
+            return;
+        }
+
+        var window = new TraceWindow();
+        window._hwnd = new WindowInteropHelper(window).EnsureHandle();
+        window.SetWrap(false, byUser: false);
+        window.SetFormula("=A1+Sheet2!B2", new[] { new FormulaSegment("=", 0, -1), new FormulaSegment("A1", 1, 0) }, null);
+        window.SetRows(new[] { new TraceRow(1, "▸", "▫", "Cell", "Sheet1!A1", false, string.Empty, string.Empty, "1") }, 0);
+        if (window.Content is FrameworkElement content)
+        {
+            content.Measure(new Size(600, 400));
+            content.Arrange(new Rect(0, 0, 600, 400));
+        }
+
+        window.ClearContent();
+        _spare = window;
+    }
+
+    /// <summary>Closes the kept window for good (the add-in is unloading). Never throws.</summary>
+    public static void DestroySpare()
+    {
+        var spare = _spare;
+        _spare = null;
+        try
+        {
+            spare?.CloseForGood();
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("TraceWindowError", "could not close the kept window", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Ends the window's trace (the session's own close: no Cancel is raised): hides it, owned by no window (so closing
+    /// a workbook cannot destroy it), drops the trace's handlers and content, and keeps it for the next trace
+    /// (<see cref="Take"/>). Closed for good instead if another is kept already, or if it cannot be hidden.
+    /// </summary>
+    public void Recycle()
+    {
+        RowClicked = null;
+        OkClicked = null;
+        CancelClicked = null;
+        WrapChanged = null;
+        Destroyed = null;
+        if (_destroyed)
+        {
+            return;
+        }
+
+        try
+        {
+            Hide();
+            new WindowInteropHelper(this).Owner = IntPtr.Zero;
+            _owner = IntPtr.Zero;
+            ClearContent();
+        }
+        catch (Exception)
+        {
+            CloseForGood();
+            throw;
+        }
+
+        if (_spare is null)
+        {
+            _spare = this;
+        }
+        else
+        {
+            CloseForGood();
+        }
+    }
+
+    /// <inheritdoc />
+    protected override void OnClosed(EventArgs e)
+    {
+        _destroyed = true;
+        if (ReferenceEquals(_spare, this))
+        {
+            _spare = null;
+        }
+
+        base.OnClosed(e);
+        Destroyed?.Invoke();
+    }
+
+    private void CloseForGood()
     {
         _closingByCode = true;
         Close();
+    }
+
+    private void ClearContent()
+    {
+        SetFormula(string.Empty, new FormulaSegment[0], null);
+        _tree.ItemsSource = null;
+        SetStatus(string.Empty);
     }
 
     private void OnRowMouseDown(MouseButtonEventArgs e)

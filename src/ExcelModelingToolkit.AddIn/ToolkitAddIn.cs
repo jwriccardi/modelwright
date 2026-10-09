@@ -37,6 +37,9 @@ public sealed class ToolkitAddIn : IExcelAddIn
             }
 
             StatusBar.Show(message);
+
+            // Trace In's one-time start-up costs, paid shortly after Excel has loaded us rather than at the first trace.
+            TraceSession.ScheduleWarmUp();
         }
         catch (Exception ex)
         {
@@ -48,7 +51,9 @@ public sealed class ToolkitAddIn : IExcelAddIn
     /// <inheritdoc />
     public void AutoClose()
     {
+        TraceSession.CancelWarmUp();
         TraceSession.Current?.Abort("add-in closing");
+        TraceWindow.DestroySpare();
         TraceKeyHook.Uninstall();
         ExcelEvents.Disconnect();
         UndoKeyHook.Uninstall();
