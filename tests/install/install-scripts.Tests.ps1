@@ -9,7 +9,8 @@
     Nothing outside the scratch locations is changed: the scripts get -RegistryRoot (a throwaway key under
     HKCU:\Software), -AddInsFolder and -SourceFolder (under %TEMP%), -ExcelBitness (no Excel needed) and
     -ExcelProcessName (a name that is not running, so a running Excel does not matter). The real Excel
-    Options key is compared before and after to prove it was not touched. Both are removed at the end.
+    Options and Add-in Manager keys are compared before and after to prove they were not touched. The scratch
+    key and folder are removed at the end.
 
     The CI runner has no Office, and its PSModulePath makes Get-FileHash fail under hand-set ConstrainedLanguage.
     Both are reproduced on any machine: -ExcelExePath points detection at a missing file (or at powershell.exe as
@@ -40,6 +41,7 @@ $managerKey = Join-Path $officeRoot '16.0\Excel\Add-in Manager'
 $source = Join-Path $scratch 'release'
 $addIns = Join-Path $scratch 'AddIns'
 $realOptionsKey = 'HKCU:\Software\Microsoft\Office\16.0\Excel\Options'
+$realManagerKey = 'HKCU:\Software\Microsoft\Office\16.0\Excel\Add-in Manager'
 $notRunning = "NoSuchProcess$runId"
 
 $script:failures = 0
@@ -117,7 +119,17 @@ function Reset-Options([hashtable]$Values) {
     }
 }
 
+# Recreates the Add-in Manager key with these value names (empty string values, as Excel writes them).
+function Reset-Manager([string[]]$Names) {
+    if (Test-Path -LiteralPath $managerKey) { Remove-Item -LiteralPath $managerKey -Recurse }
+    $null = New-Item -Path $managerKey -Force
+    foreach ($name in $Names) {
+        $null = New-ItemProperty -LiteralPath $managerKey -Name $name -Value '' -PropertyType String
+    }
+}
+
 $realBefore = Get-Snapshot $realOptionsKey
+$realManagerBefore = Get-Snapshot $realManagerKey
 try {
     $null = New-Item -ItemType Directory -Path $source -Force
     Set-Content -LiteralPath (Join-Path $source 'Modelwright64.xll') -Value 'fake 64-bit add-in'
@@ -194,6 +206,39 @@ try {
     $expected = (@('OPEN="C:\Other\First.xlam"', 'OPEN1="C:\Other\Second.xlam"', "OPEN2=$value32") | Sort-Object) -join "`n"
     Assert-Equal (Get-Snapshot $optionsKey) $expected 'one Modelwright entry, now the 32-bit add-in'
     Assert-Equal (Get-Content -LiteralPath $target32) 'fake 32-bit add-in' 'copied the 32-bit add-in'
+
+    # On exit Excel rewrites entries for files in its own AddIns folder as a bare name, and may keep the
+    # full-path entry too.
+    Write-Host '--- install.ps1 replaces a bare entry (as Excel rewrites it) in its slot and drops a full-path duplicate'
+    Reset-Options @{
+        OPEN  = '"C:\Other\First.xlam"'
+        OPEN1 = '/R "Modelwright64.xll"'
+        OPEN2 = '"C:\Other\Second.xlam"'
+        OPEN3 = $value64
+        OPEN4 = '/R "C:\Other\MyModelwright64.xll"'
+        OPEN5 = '"C:\Other\Modelwright64.xll.bak"'
+    }
+    Reset-Manager @('Modelwright64.xll', 'MODELWRIGHT32.XLL', 'ModelingToolkit64-packed.xll', 'C:\Other\Unrelated.xll')
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 0 'exit code 0'
+    $expected = (@('OPEN="C:\Other\First.xlam"', "OPEN1=$value64", 'OPEN2="C:\Other\Second.xlam"',
+        'OPEN3=/R "C:\Other\MyModelwright64.xll"', 'OPEN4="C:\Other\Modelwright64.xll.bak"') | Sort-Object) -join "`n"
+    Assert-Equal (Get-Snapshot $optionsKey) $expected 'bare entry replaced in its slot, duplicate removed, look-alikes kept, renumbered'
+    Assert-Equal (Get-Snapshot $managerKey) 'C:\Other\Unrelated.xll=' 'bare Add-in Manager entries (any case, old name too) removed, others kept'
+
+    Write-Host '--- install.ps1 with only a bare entry of the right add-in still writes the full path'
+    Reset-Options @{ OPEN = '/R "Modelwright64.xll"'; OPEN1 = '"C:\Other\First.xlam"' }
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 0 'exit code 0'
+    $expected = (@("OPEN=$value64", 'OPEN1="C:\Other\First.xlam"') | Sort-Object) -join "`n"
+    Assert-Equal (Get-Snapshot $optionsKey) $expected 'bare entry replaced by the full path in the same slot'
+
+    Write-Host '--- install.ps1 replaces a bare old ModelingToolkit entry'
+    Reset-Options @{ OPEN = '"C:\Other\First.xlam"'; OPEN1 = '/R "ModelingToolkit64-packed.xll"'; OPEN2 = '"C:\Other\Second.xlam"' }
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 0 'exit code 0'
+    $expected = (@('OPEN="C:\Other\First.xlam"', "OPEN1=$value64", 'OPEN2="C:\Other\Second.xlam"') | Sort-Object) -join "`n"
+    Assert-Equal (Get-Snapshot $optionsKey) $expected 'bare ModelingToolkit entry replaced in its slot'
 
     # In a hand-constrained Windows PowerShell 5.1 session, Get-FileHash (script code there) is either missing
     # (when PowerShell 7's Microsoft.PowerShell.Utility is first on PSModulePath, as on a developer machine) or
@@ -320,8 +365,37 @@ try {
     Assert-True ($out -match 'nothing to remove') 'says there was nothing to remove'
     Assert-Equal (Get-Snapshot $optionsKey) $expected 'registry unchanged'
 
-    Write-Host '--- the real Excel Options key'
-    Assert-Equal (Get-Snapshot $realOptionsKey) $realBefore 'unchanged by the tests'
+    # The 2026-10-09 bug: Excel had rewritten the entry as /R "Modelwright64.xll" (and kept the full path too);
+    # only the full path was removed, the file was deleted, and Excel stalled on "Cannot find add-in".
+    Write-Host '--- uninstall.ps1 removes bare and full-path entries together and renumbers'
+    Reset-Options @{
+        OPEN  = '"C:\Other\First.xlam"'
+        OPEN1 = '/R "Modelwright64.xll"'
+        OPEN2 = '"C:\Other\Second.xlam"'
+        OPEN3 = $value64
+        OPEN4 = '/R "modelwright32.XLL"'
+        OPEN6 = '"C:\Other\Third.xlam"'
+        OPEN7 = '/R "C:\Other\MyModelwright64.xll"'
+    }
+    Reset-Manager @('Modelwright64.xll', $target32, 'C:\Other\Unrelated.xll')
+    $out = Invoke-Script $uninstall @{}
+    Assert-Equal $LASTEXITCODE 0 'exit code 0'
+    $expected = (@('OPEN="C:\Other\First.xlam"', 'OPEN1="C:\Other\Second.xlam"', 'OPEN2="C:\Other\Third.xlam"',
+        'OPEN3=/R "C:\Other\MyModelwright64.xll"') | Sort-Object) -join "`n"
+    Assert-Equal (Get-Snapshot $optionsKey) $expected 'all three Modelwright entries removed, the rest OPEN..OPEN3 in order'
+    Assert-Equal (Get-Snapshot $managerKey) 'C:\Other\Unrelated.xll=' 'bare and full-path Add-in Manager entries removed, others kept'
+
+    Write-Host '--- uninstall.ps1 removes a bare old ModelingToolkit entry'
+    Reset-Options @{ OPEN = '/R "ModelingToolkit64-packed.xll"'; OPEN1 = '"C:\Other\First.xlam"' }
+    Reset-Manager @('ModelingToolkit64-packed.xll', 'C:\Other\Unrelated.xll')
+    $out = Invoke-Script $uninstall @{}
+    Assert-Equal $LASTEXITCODE 0 'exit code 0'
+    Assert-Equal (Get-Snapshot $optionsKey) 'OPEN="C:\Other\First.xlam"' 'old entry removed, the other moved to OPEN'
+    Assert-Equal (Get-Snapshot $managerKey) 'C:\Other\Unrelated.xll=' 'bare old Add-in Manager entry removed'
+
+    Write-Host '--- the real Excel Options and Add-in Manager keys'
+    Assert-Equal (Get-Snapshot $realOptionsKey) $realBefore 'Options unchanged by the tests'
+    Assert-Equal (Get-Snapshot $realManagerKey) $realManagerBefore 'Add-in Manager unchanged by the tests'
 } catch {
     Write-Host "FAIL  unexpected error: $($_.Exception.Message) at line $($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
     $script:failures++

@@ -95,9 +95,13 @@ shortcuts last gets the key, so run only one of them at a time:
 
 REMOVE IT
 ---------
-Close Excel, then right-click uninstall.ps1 > Run with PowerShell, or paste:
+Close Excel completely first (check Task Manager for a background EXCEL.EXE): Excel rewrites its
+add-in list when it closes, which would undo the removal. Then right-click uninstall.ps1 > Run with
+PowerShell, or paste:
   powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\Modelwright\uninstall.ps1" -RemoveFile
 (-RemoveFile also deletes the .xll from %APPDATA%\Microsoft\AddIns.)
+If Excel ever says "Cannot find add-in 'Modelwright64.xll'. Delete from list?" (or Modelwright32.xll),
+answer Yes: it is a leftover entry for a file that was deleted.
 By hand: File > Options > Add-ins > Manage: "Excel Add-ins" > Go... > untick Modelwright > OK,
 then close Excel and delete the .xll from %APPDATA%\Microsoft\AddIns.
 

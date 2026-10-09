@@ -4,9 +4,13 @@
 
 .DESCRIPTION
     1. Stops if Excel is running (Excel rewrites its add-in list when it closes, which would undo this).
-    2. Removes the Modelwright entry (Modelwright32.xll / Modelwright64.xll, or an old ModelingToolkit build)
+    2. Removes every Modelwright entry (Modelwright32.xll / Modelwright64.xll, or an old ModelingToolkit build)
        from the OPEN/OPENn values in HKCU\Software\Microsoft\Office\16.0\Excel\Options, renumbering the other
        add-ins' entries as OPEN, OPEN1, ... with no gaps, and from Excel's list of known add-ins (Add-in Manager).
+       When Excel closes it rewrites entries for files in its own AddIns folder in a bare form
+       (/R "Modelwright64.xll", no folder) and sometimes keeps the full-path entry as well, so bare names and
+       full paths both count, and all of them are removed. (A bare entry left behind after -RemoveFile makes
+       Excel report "Cannot find add-in" at its next start.)
     3. With -RemoveFile, also deletes Modelwright32.xll / Modelwright64.xll from %APPDATA%\Microsoft\AddIns.
     Your Modelwright settings (%APPDATA%\Modelwright) are never touched; delete that folder yourself if you want.
 
@@ -56,8 +60,11 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $AddInsFolder) { $AddInsFolder = Join-Path $env:APPDATA 'Microsoft\AddIns' }
 
-# Our entries: Modelwright32.xll / Modelwright64.xll, and the builds from before the rename (ModelingToolkit*.xll).
-$ourAddInPattern = '\\(Modelwright(32|64)|ModelingToolkit[^\\"]*)\.xll"?\s*$'
+# Our entries: Modelwright32.xll / Modelwright64.xll, and the builds from before the rename (ModelingToolkit*.xll,
+# e.g. ModelingToolkit64-packed.xll), case-insensitive. An OPENn value is ours when, after an optional /R and
+# quotes, it is one of those names on its own (the bare form Excel writes for files in its own AddIns folder) or
+# a path ending in one. An Add-in Manager value name is the same without /R and quotes.
+$ourAddInPattern = '^\s*(/R\s+)?"?([^"]*[\\/])?(Modelwright(32|64)|ModelingToolkit[^\\/"]*)\.xll"?\s*$'
 
 # -WhatIf: $PSCmdlet.ShouldProcess is a method call, which Constrained Language mode blocks, so it is done here.
 function Test-ShouldChange([string]$Target, [string]$Action) {
