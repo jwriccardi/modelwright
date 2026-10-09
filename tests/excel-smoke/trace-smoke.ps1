@@ -658,6 +658,7 @@ try {
   Step '{ESC}'   'Esc: back to A11, closed'          $mainName 'Eval' 'A11' $false
   # The mode is remembered: traced again it opens in evaluate mode; Ctrl+E goes back to the classic rows.
   $mark = Log-Mark
+  Select-Cell 'A2' $eval
   Step '^+{[}'   'Ctrl+Shift+[ on Eval!A2 (evaluate)' $mainName 'Eval' 'A2' $true -waitMs 3000
   Expect-Log $mark "`tTraceOpen`t.*`tevaluate=true`ttarget=[^`t]*\|Eval\|A2`tok" 'TraceOpen remembered evaluate mode'
   if (-not (Window-Open)) { throw "ABORT: the Trace In window is not open; Ctrl+E not sent." }
