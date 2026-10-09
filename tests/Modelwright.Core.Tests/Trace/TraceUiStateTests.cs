@@ -8,13 +8,14 @@ public class TraceUiStateTests
     [Fact]
     public void State_round_trips()
     {
-        var state = new TraceUiState(new WindowRect(-1200, 300, 620, 380), wrapFormula: true);
+        var state = new TraceUiState(new WindowRect(-1200, 300, 620, 380), wrapFormula: true, evaluateFunctions: true);
 
         var json = state.ToJson();
         var read = TraceUiState.FromJson(json);
 
         Assert.Equal(new WindowRect(-1200, 300, 620, 380), read.Bounds);
         Assert.True(read.WrapFormula);
+        Assert.True(read.EvaluateFunctions);
         Assert.Equal(json, read.ToJson());
         Assert.Contains("\"schemaVersion\": 1", json);
     }
@@ -26,7 +27,7 @@ public class TraceUiStateTests
 
         Assert.Equal(
             "{\r\n  \"schemaVersion\": 1,\r\n  \"traceWindow\": {\r\n    \"left\": 10,\r\n    \"top\": 20,\r\n" +
-            "    \"width\": 30,\r\n    \"height\": 40,\r\n    \"wrapFormula\": false\r\n  }\r\n}\r\n",
+            "    \"width\": 30,\r\n    \"height\": 40,\r\n    \"wrapFormula\": false,\r\n    \"evaluateFunctions\": false\r\n  }\r\n}\r\n",
             json);
     }
 
@@ -59,6 +60,33 @@ public class TraceUiStateTests
 
         Assert.Null(state.Bounds);
         Assert.False(state.WrapFormula);
+        Assert.False(state.EvaluateFunctions);
+    }
+
+    [Fact]
+    public void A_file_from_before_evaluate_mode_reads_with_it_off()
+    {
+        var state = TraceUiState.FromJson(
+            "{ \"schemaVersion\": 1, \"traceWindow\": { \"left\": 1, \"top\": 2, \"width\": 3, \"height\": 4, \"wrapFormula\": true } }");
+
+        Assert.Equal(new WindowRect(1, 2, 3, 4), state.Bounds);
+        Assert.True(state.WrapFormula);
+        Assert.False(state.EvaluateFunctions);
+        Assert.Contains("\"evaluateFunctions\": false", state.ToJson());
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    [InlineData("1", false)]
+    [InlineData("\"true\"", false)]
+    [InlineData("null", false)]
+    public void Evaluate_mode_is_on_only_for_true(string value, bool expected)
+    {
+        var state = TraceUiState.FromJson("{ \"traceWindow\": { \"evaluateFunctions\": " + value + " } }");
+
+        Assert.Equal(expected, state.EvaluateFunctions);
+        Assert.Null(state.Bounds);
     }
 
     [Fact]
@@ -79,6 +107,10 @@ public class TraceUiStateTests
 
         Assert.True(state.WithWrapFormula(true).WrapFormula);
         Assert.Equal(state.Bounds, state.WithWrapFormula(true).Bounds);
+        Assert.True(state.WithEvaluateFunctions(true).EvaluateFunctions);
+        Assert.Equal(state.Bounds, state.WithEvaluateFunctions(true).Bounds);
+        Assert.False(state.WithEvaluateFunctions(true).WrapFormula);
+        Assert.True(state.WithEvaluateFunctions(true).WithBounds(null).WithWrapFormula(true).EvaluateFunctions);
         Assert.Null(state.WithBounds(null).Bounds);
         Assert.Equal(new WindowRect(5, 6, 7, 8), state.WithBounds(new WindowRect(5, 6, 7, 8)).Bounds);
     }

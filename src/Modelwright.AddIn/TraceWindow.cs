@@ -65,11 +65,13 @@ internal sealed class TraceWindow : Window
       <Button.ContextMenu>
         <ContextMenu>
           <MenuItem x:Name='WrapMenu' Header='Wrap formula text' IsCheckable='True'/>
-          <MenuItem x:Name='EvaluateMenu' Header='Evaluate functions &amp; groups' InputGestureText='Ctrl+E' IsEnabled='False'
-                    ToolTip='Coming in a later version' ToolTipService.ShowOnDisabled='True'/>
+          <MenuItem x:Name='EvaluateMenu' Header='Evaluate functions &amp; groups' InputGestureText='Ctrl+E'/>
         </ContextMenu>
       </Button.ContextMenu>
     </Button>
+    <TextBlock x:Name='ModeText' DockPanel.Dock='Left' Margin='8,0,0,0' VerticalAlignment='Center' Text='Evaluate'
+               FontStyle='Italic' Visibility='Collapsed' Foreground='{x:Static SystemColors.GrayTextBrush}'
+               ToolTip='Evaluate functions &amp; groups is on (Ctrl+E)'/>
     <Button x:Name='CancelButton' DockPanel.Dock='Right' Content='Cancel' ToolTip='Close and return to the audited cell (Esc)'/>
     <Button x:Name='OkButton' DockPanel.Dock='Right' Content='OK' ToolTip='Close and stay on the current cell (Enter)'/>
     <TextBlock x:Name='StatusText' Margin='8,0' VerticalAlignment='Center' TextTrimming='CharacterEllipsis'
@@ -143,6 +145,8 @@ internal sealed class TraceWindow : Window
     private readonly TextBlock _statusText;
     private readonly ToggleButton _wrapToggle;
     private readonly MenuItem _wrapMenu;
+    private readonly MenuItem _evaluateMenu;
+    private readonly TextBlock _modeText;
     private readonly ListView _tree;
     private IntPtr _hwnd;
     private IntPtr _owner;
@@ -172,6 +176,8 @@ internal sealed class TraceWindow : Window
         _statusText = (TextBlock)content.FindName("StatusText");
         _wrapToggle = (ToggleButton)content.FindName("WrapToggle");
         _wrapMenu = (MenuItem)content.FindName("WrapMenu");
+        _evaluateMenu = (MenuItem)content.FindName("EvaluateMenu");
+        _modeText = (TextBlock)content.FindName("ModeText");
         _tree = (ListView)content.FindName("Tree");
         var gear = (Button)content.FindName("GearButton");
         var ok = (Button)content.FindName("OkButton");
@@ -181,6 +187,7 @@ internal sealed class TraceWindow : Window
         _wrapToggle.Unchecked += (s, e) => Safe(() => SetWrap(false, byUser: true));
         _wrapMenu.Checked += (s, e) => Safe(() => SetWrap(true, byUser: true));
         _wrapMenu.Unchecked += (s, e) => Safe(() => SetWrap(false, byUser: true));
+        _evaluateMenu.Click += (s, e) => Safe(() => EvaluateClicked?.Invoke());
         // A WPF menu takes the keyboard focus while it is open (the only control here that does). Remember where the
         // focus was (Excel's grid: this window never has it) and give it back when the menu closes, so F2 and typing
         // go to Excel again. Right-click opening is off, so the menu only opens here.
@@ -221,6 +228,9 @@ internal sealed class TraceWindow : Window
 
     /// <summary>The wrap setting was changed with the mouse.</summary>
     public event Action<bool>? WrapChanged;
+
+    /// <summary>"Evaluate functions &amp; groups" was clicked in the gear menu (the session turns it on or off).</summary>
+    public event Action? EvaluateClicked;
 
     /// <summary>
     /// The window was destroyed, not hidden by <see cref="Recycle"/>: Windows destroys an owned window with its owner
@@ -321,6 +331,13 @@ internal sealed class TraceWindow : Window
     /// <summary>The text in the footer.</summary>
     public void SetStatus(string text) => _statusText.Text = text;
 
+    /// <summary>Shows whether evaluate mode is on: the gear menu item's check mark, and "Evaluate" in the footer.</summary>
+    public void SetEvaluate(bool on)
+    {
+        _evaluateMenu.IsChecked = on;
+        _modeText.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     /// <summary>
     /// The window for a new trace: the one kept from the last trace (<see cref="Recycle"/>) or by <see cref="WarmUp"/>,
     /// or a new one.
@@ -386,6 +403,7 @@ internal sealed class TraceWindow : Window
         OkClicked = null;
         CancelClicked = null;
         WrapChanged = null;
+        EvaluateClicked = null;
         Destroyed = null;
         if (_destroyed)
         {
@@ -439,6 +457,7 @@ internal sealed class TraceWindow : Window
         SetFormula(string.Empty, new FormulaSegment[0], null);
         _tree.ItemsSource = null;
         SetStatus(string.Empty);
+        SetEvaluate(false);
     }
 
     private void OnRowMouseDown(MouseButtonEventArgs e)

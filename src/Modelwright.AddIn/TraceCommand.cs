@@ -17,7 +17,8 @@ namespace Modelwright.AddIn;
 internal static class TraceCommand
 {
     /// <summary>
-    /// Opens Trace In on the active cell, or, with the window open, traces the active cell instead. A cell without
+    /// Opens Trace In on the active cell, or, with the window open, traces the active cell instead, in the classic or
+    /// the evaluate view as last chosen (<see cref="TraceSession.EvaluateFunctions"/>). A cell without
     /// a formula only gets a status-bar message (as Macabacus does). Each trace is recorded in
     /// <see cref="Session.Audits"/> for Last Audited Cell. <paramref name="source"/> is the key or <c>ribbon</c>.
     /// Never throws.
@@ -47,6 +48,7 @@ internal static class TraceCommand
             "windowMs=" + Ms(log.WindowMs),
             "refs=" + log.References.ToString(CultureInfo.InvariantCulture),
             "retrace=" + (log.Retrace ? "true" : "false"),
+            "evaluate=" + (log.Evaluate ? "true" : "false"),
             "target=" + log.Target,
             result);
     }
@@ -114,7 +116,8 @@ internal static class TraceCommand
             return "no formula";
         }
 
-        var provider = new ExcelPrecedentProvider();
+        var provider = new ExcelPrecedentProvider(TraceSession.EvaluateFunctions);
+        log.Evaluate = provider.EvaluateFunctions;
         var root = provider.CreateRoot(cell);
         var tree = new PrecedentTree(provider, root);
         log.TreeMs = stopwatch.Elapsed.TotalMilliseconds;
@@ -128,6 +131,11 @@ internal static class TraceCommand
 
         var count = log.References;
         var message = $"Trace In: {sheetName}!{address}: {count} precedent{(count == 1 ? string.Empty : "s")}{note}";
+        if (provider.EvaluateFunctions)
+        {
+            message += " (evaluating functions & groups: Ctrl+E for references only)";
+        }
+
         if (provider.OpenedWorkbooks.Count > 0)
         {
             message += "; opened " + string.Join(", ", provider.OpenedWorkbooks) + " (read-only)";
@@ -267,6 +275,8 @@ internal static class TraceCommand
         public int References { get; set; }
 
         public bool Retrace { get; set; }
+
+        public bool Evaluate { get; set; }
 
         public string Target { get; set; } = "-";
     }

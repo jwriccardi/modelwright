@@ -42,6 +42,13 @@ namespace Modelwright.AddIn;
 /// the cell changes otherwise (a click elsewhere commits), if the formula changed it rebuilds the tree in the same
 /// window.
 /// </para>
+/// <para>
+/// <b>Ctrl+E</b> (or the gear menu) turns "Evaluate functions &amp; groups" on or off: the setting is saved in
+/// ui-state.json at once and the tree is rebuilt in the same window, from a provider in the new mode, with the
+/// selection brought back along the same path where the new tree allows. Function and group rows are not places:
+/// moving onto one keeps Excel where it is and shows the row's value in the footer (a reference-returning function's
+/// row goes to its target).
+/// </para>
 /// </remarks>
 internal sealed class TraceSession
 {
@@ -92,11 +99,18 @@ internal sealed class TraceSession
         _window.OkClicked += () => Enqueue(() => Close(TraceCloseMode.StayOnCurrentCell, "ok"));
         _window.CancelClicked += () => Enqueue(() => Close(TraceKeys.CancelCloseMode, "cancel"));
         _window.WrapChanged += wrap => _ui = _ui.WithWrapFormula(wrap);
+        _window.EvaluateClicked += () => Enqueue(() => ToggleEvaluate(Stopwatch.GetTimestamp(), "menu"));
         _window.Destroyed += OnWindowClosed;
     }
 
     /// <summary>The open trace, or null.</summary>
     public static TraceSession? Current { get; private set; }
+
+    /// <summary>
+    /// True if a new trace shows "Evaluate functions &amp; groups" (Ctrl+E): the open trace's setting, or the one saved in
+    /// ui-state.json (off by default). Never throws.
+    /// </summary>
+    public static bool EvaluateFunctions => Current?._ui.EvaluateFunctions ?? UiStateStore.Load().EvaluateFunctions;
 
     /// <summary>
     /// Has <see cref="WarmUp"/> run <see cref="WarmUpDelayMilliseconds"/> from now, from Excel's message loop
@@ -319,6 +333,12 @@ internal sealed class TraceSession
             return;
         }
 
+        if (command == TraceKeyCommand.ToggleEvaluate)
+        {
+            ToggleEvaluate(pressed, source);
+            return;
+        }
+
         CancelReturnAfterOpen();
         var stopwatch = Stopwatch.StartNew();
         var move = TreeMove.None;
@@ -339,9 +359,6 @@ internal sealed class TraceSession
                     break;
                 case TraceKeyCommand.Right:
                     move = _tree.MoveRight();
-                    break;
-                case TraceKeyCommand.ToggleEvaluate:
-                    Message("Evaluate functions & groups (Ctrl+E) is coming in a later version.");
                     break;
             }
 
@@ -408,7 +425,7 @@ internal sealed class TraceSession
                 // Following the path in the new tree can open a closed workbook, whose window Excel then activates:
                 // back to where the edit ended.
                 var back = goBack ? edit.Cell : ActiveCell();
-                Reload(edit.Path);
+                Reload(edit.Path, _provider.EvaluateFunctions);
                 result += "; tree rebuilt";
                 if (back is not null)
                 {
@@ -564,6 +581,57 @@ internal sealed class TraceSession
         }
     }
 
+    // Ctrl+E or the gear menu (outside macro context): evaluate mode on or off, saved at once, and the tree rebuilt in
+    // the new mode with the selection along the same path. Excel stays where it is (a workbook the new tree opens is
+    // left again). Logs one line with the new mode and the rows under the audited cell. Never throws.
+    private void ToggleEvaluate(long pressed, string source)
+    {
+        if (_closing || !ReferenceEquals(Current, this))
+        {
+            return;
+        }
+
+        var on = !_provider.EvaluateFunctions;
+        var stopwatch = Stopwatch.StartNew();
+        string result;
+        if (IsEditing())
+        {
+            Message("Finish editing the cell (Enter or Esc) to use Trace In.");
+            result = "ignored: editing a cell";
+        }
+        else
+        {
+            CancelReturnAfterOpen();
+            try
+            {
+                var back = ActiveCell();
+                Reload(_tree.PathOf(_tree.Selected), on);
+                _ui = _ui.WithEvaluateFunctions(on);
+                UiStateStore.Save(_window.LastBounds is WindowRect bounds ? _ui.WithBounds(bounds) : _ui);
+                if (back is not null)
+                {
+                    ReturnAfterOpen(() => GoTo(back));
+                }
+
+                result = "ok";
+            }
+            catch (Exception ex)
+            {
+                result = "error: " + ex.Message;
+                Message("Trace In: " + ex.Message);
+            }
+        }
+
+        DiagnosticsLog.Write(
+            "TraceEvaluate",
+            "on=" + (_provider.EvaluateFunctions ? "true" : "false"),
+            "rows=" + _tree.Root.Children.Count.ToString(CultureInfo.InvariantCulture),
+            "source=" + source,
+            "ms=" + Ms(Elapsed(pressed)),
+            "handleMs=" + Ms(stopwatch.Elapsed.TotalMilliseconds),
+            result);
+    }
+
     private void Load()
     {
         var parsed = _provider.ParsedFormulaOf(_tree.Root.Item);
@@ -576,16 +644,17 @@ internal sealed class TraceSession
         }
 
         _window.SetFormula(formula, segments, note);
+        _window.SetEvaluate(_provider.EvaluateFunctions);
         RefreshRows();
         _window.SetStatus(Where(_tree.Root));
     }
 
-    // The audited cell's precedents changed (an F2 edit): a new tree in the same window, with the selection brought
-    // back along the same path, or as near as the new tree allows.
-    // If the new tree cannot be shown, the old one stays (and is shown again) and the exception propagates.
-    private void Reload(IReadOnlyList<int> path)
+    // The audited cell's precedents changed (an F2 edit), or evaluate mode was turned on or off: a new tree in the same
+    // window, from a provider in that mode, with the selection brought back along the same path, or as near as the new
+    // tree allows. If the new tree cannot be shown, the old one stays (and is shown again) and the exception propagates.
+    private void Reload(IReadOnlyList<int> path, bool evaluateFunctions)
     {
-        var provider = new ExcelPrecedentProvider();
+        var provider = new ExcelPrecedentProvider(evaluateFunctions);
         var tree = new PrecedentTree(provider, provider.CreateRoot(_audited));
         try
         {
@@ -1038,11 +1107,8 @@ internal sealed class TraceSession
         range = ReferenceEquals(node, _tree.Root) ? _audited : _provider.NavigationRange(node.Item, out reason);
         if (range is null)
         {
-            if (reason is not null)
-            {
-                Message(reason);
-            }
-
+            // A function or group row (or a marker) is not a place: Excel stays put, the footer shows the row's value.
+            Message(reason ?? Where(node));
             return reason is null ? "not a place" : "not navigable";
         }
 

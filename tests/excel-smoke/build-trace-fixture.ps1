@@ -27,6 +27,10 @@
 #   A14 14, B14 =OFFSET($A$1,ROW()-1,0)        ROW() must be B14's row (14: A14), not 1 (A1)
 #   B15 =ExtRate*1                             a name whose target is in the closed external workbook
 #   A2 2, A3 3, B16 =A14+A2                    F2 on the A2 row edits that reference; Down in Point mode makes it A3
+# Sheet Eval (Evaluate functions & groups, Ctrl+E): the formula of Macabacus's Trace In help page (research/07) in A2,
+#   =(B2+C2/D2)+IF(E2>0,F2+G2,SUM(H2:J2))*(K2+L2-ABS(M2))+PRODUCT(N2:T2,U2)+V2, with inputs in B2:V2 that give the
+#   values shown there: (B2+C2/D2) 5.5, IF(...) 14.9 (E2>0 TRUE, F2+G2 14.9, SUM 20), (K2+L2-ABS(M2)) -4,
+#   PRODUCT(...) 15,120, and A2 $15,066.
 param(
     [object]$Excel,
     [string]$OutDir = (Join-Path $env:TEMP 'emt-trace-fixture')
@@ -119,11 +123,12 @@ try {
     $wb = $xl.Workbooks.Add()
     if ($null -eq $iteration) { $iteration = $xl.Iteration }
     $xl.Iteration = $true   # the circular reference below would otherwise raise Excel's warning
-    while ($wb.Worksheets.Count -lt 4) { $wb.Worksheets.Add([Type]::Missing, $wb.Worksheets.Item($wb.Worksheets.Count)) | Out-Null }
+    while ($wb.Worksheets.Count -lt 5) { $wb.Worksheets.Add([Type]::Missing, $wb.Worksheets.Item($wb.Worksheets.Count)) | Out-Null }
     $calc = $wb.Worksheets.Item(1); $calc.Name = 'Calc'
     $inputs = $wb.Worksheets.Item(2); $inputs.Name = 'Inputs'
     $data = $wb.Worksheets.Item(3); $data.Name = 'Data'
     $hidden = $wb.Worksheets.Item(4); $hidden.Name = 'Hidden'
+    $eval = $wb.Worksheets.Item(5); $eval.Name = 'Eval'
 
     # Inputs: values, a hidden row, and the names.
     $inputs.Range('A2').Value2 = 'Revenue';  $inputs.Range('B2').Value2 = 100
@@ -158,6 +163,13 @@ try {
     $hidden.Range('A1').Value2 = 42
     $hidden.Visible = $xlSheetHidden
 
+    # Eval: research/07's example. B2=4 C2=3 D2=2 | E2=1 F2=10 G2=4.9 H2:J2=5,7,8 | K2=1 L2=2 M2=-7 | N2:T2=1..7 U2=3 | V2=0.1
+    $inputs2 = [ordered]@{ B2 = 4; C2 = 3; D2 = 2; E2 = 1; F2 = 10; G2 = 4.9; H2 = 5; I2 = 7; J2 = 8; K2 = 1; L2 = 2; M2 = -7
+        N2 = 1; O2 = 2; P2 = 3; Q2 = 4; R2 = 5; S2 = 6; T2 = 7; U2 = 3; V2 = 0.1 }
+    foreach ($cell in $inputs2.Keys) { $eval.Range($cell).Value2 = [double]$inputs2[$cell] }
+    $eval.Range('A2').Formula = '=(B2+C2/D2)+IF(E2>0,F2+G2,SUM(H2:J2))*(K2+L2-ABS(M2))+PRODUCT(N2:T2,U2)+V2'
+    $eval.Range('A2').NumberFormat = '$#,##0'
+
     # Calc: the traced formulas. B11 and B15 are written while the external workbook is open, so Excel resolves the link.
     $calc.Range('B2').Formula = '=Inputs!B2*(1+Growth)'
     $calc.Range('B3').Formula = '=B2*Rate'
@@ -186,6 +198,7 @@ try {
     "B11 formula with the external workbook closed: $($calc.Range('B11').Formula)"
     "ExtRate with the external workbook closed:     $($wb.Names.Item('ExtRate').RefersTo)"
     "A1 formula: $($calc.Range('A1').Formula)"
+    "Eval!A2:    $($eval.Range('A2').Formula) = $($eval.Range('A2').Text)"
     $wb.Close($false)
     $wb = $null
     "Fixture written: $mainPath"

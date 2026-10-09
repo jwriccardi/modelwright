@@ -210,6 +210,13 @@ public sealed class PrecedentItem
         new PrecedentItem(Kind, Label, Workbook, Sheet, Address, CellCount, ValueText, CanExpand, Argument, HiddenNote,
             span ?? throw new ArgumentNullException(nameof(span)));
 
+    /// <summary>
+    /// A copy of the item with another Argument column (in evaluate mode, <c>[value_if_true]</c>; null for none);
+    /// every other property is the same. A new object, as <see cref="WithSpan"/> makes.
+    /// </summary>
+    public PrecedentItem WithArgument(string? argument) =>
+        new PrecedentItem(Kind, Label, Workbook, Sheet, Address, CellCount, ValueText, CanExpand, argument, HiddenNote, Span);
+
     /// <summary>The label.</summary>
     public override string ToString() => Label;
 

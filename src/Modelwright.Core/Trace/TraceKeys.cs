@@ -26,7 +26,11 @@ public enum TraceKeyCommand
     /// <summary>Esc (Cancel, the title bar's close button): close as <see cref="TraceKeys.CancelCloseMode"/> says.</summary>
     Cancel,
 
-    /// <summary>Ctrl+E: "Evaluate functions &amp; groups" (not in this version: says so).</summary>
+    /// <summary>
+    /// Ctrl+E: turn "Evaluate functions &amp; groups" on or off (<see cref="EvaluatePrecedents"/>; remembered in
+    /// <see cref="TraceUiState.EvaluateFunctions"/>) and rebuild the tree. Like every command, taken only while the
+    /// window is open and Excel is <see cref="TraceKeyContext.Ready"/>; otherwise Ctrl+E is Excel's (Flash Fill).
+    /// </summary>
     ToggleEvaluate,
 
     /// <summary>

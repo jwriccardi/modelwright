@@ -16,7 +16,12 @@
 # windows is unreliable in Point mode, so the keys switch to that workbook's window with Ctrl+Tab, then Go To
 # 'Rates'!B3 within it: F2 + Enter without moving makes it Excel's Point-mode form [External]Rates!$B$3 and Ctrl+Z
 # restores it; traced again, Down makes it [External]Rates!$B$4, Ctrl+Z restores it; traced again, F2 + Esc leaves
-# B11 as it was and Excel back on B11 with the window open).
+# B11 as it was and Excel back on B11 with the window open). Last, Evaluate functions & groups (Ctrl+E) on the formula
+# of Macabacus's help page (research/07) in Eval!A2: Ctrl+E rebuilds the tree in the same window (log: TraceEvaluate
+# on=true rows=5), Down onto a group row and onto the IF(...) row keeps Excel on A2 (not places: log "not a place"),
+# Right expands IF into its three arguments (log: TraceExpand kind=Function name=IF args=3), Down and Right into its
+# logical_test E2>0, Down onto E2 goes there, Esc returns to A2; traced again the mode is remembered (TraceOpen
+# evaluate=true), Ctrl+E turns it off (on=false rows=13) and Down goes to the first reference, Eval!B2.
 # Timings (open, and each Up/Down step) are read back from the diagnostics log and reported against the targets
 # (300 ms, 100 ms); they are reported, not failed on. With the diagnostics log off (diagnosticsLog: false in
 # settings.json) those log checks are skipped and the output says so; settings.json is never touched.
@@ -35,6 +40,10 @@
 #   Modelwright32.xll (or pre-rename ModelingToolkit64-packed.xll) in the add-in list, and puts all of them back in `finally` (each on its
 #   own), however the run ends: the add-in build under test is uninstalled again unless it was installed before, and
 #   the builds that were installed are installed again. Only the fixture workbooks (in the fixture folder) are closed, without saving.
+# - Evaluate mode must be off at the start (ui-state.json; the other sections expect the classic rows): if it is on,
+#   the run aborts before any key. If the run ends with it on (an abort in the evaluate section), it is turned off
+#   again in ui-state.json, the only change made to that file. Ctrl+E is sent only while the Trace In window is open
+#   (without the window it is Excel's Flash Fill).
 #   If Excel is still editing a cell then (a run that aborted in Point mode), Esc is sent first (at most three, each
 #   after the same foreground check).
 # The focus trick taps Shift (only when Excel is not already in front): an Alt tap would turn on ribbon KeyTips and
@@ -117,6 +126,8 @@ $mainName = 'EMT_TraceMain.xlsx'
 $extName = 'EMT_TraceExternal.xlsx'
 $mainPath = Join-Path $fixtureFolder $mainName
 $log = Join-Path $env:LOCALAPPDATA 'Modelwright\log.txt'
+$uiState = Join-Path $env:APPDATA 'Modelwright\ui-state.json'
+$evaluateWasOff = $false
 $logStart = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
 $low32 = [int64]4294967295
 
@@ -207,6 +218,29 @@ function Log-Lines([string]$pattern) {
   return @([Text.Encoding]::UTF8.GetString($all, $from, $all.Length - $from) -split "`r?`n" | Where-Object { $_ -match $pattern })
 }
 
+# True if Trace In's evaluate mode is on in ui-state.json (Ctrl+E); false if the file is missing or unreadable.
+function Evaluate-On {
+  try { return (Test-Path -LiteralPath $uiState) -and ([IO.File]::ReadAllText($uiState) -match '"evaluateFunctions"\s*:\s*true') }
+  catch { return $false }
+}
+
+# The number of diagnostics log lines so far in the run (taken before a key, for Expect-Log).
+function Log-Mark { return @(Log-Lines '.').Count }
+
+# Waits up to 4 s for a diagnostics log line matching $pattern after the first $mark lines (Log-Mark before the key).
+# A missing line aborts the run: the next keys depend on what it shows. With the log off, only says so.
+function Expect-Log([int]$mark, [string]$pattern, [string]$label) {
+  if (@(Log-Lines "`tTraceOpen`t").Count -eq 0) { "SKIP [$label]: no diagnostics log (it is off)"; return }
+  $deadline = (Get-Date).AddSeconds(4)
+  do {
+    $found = @(Log-Lines '.' | Select-Object -Skip $mark | Where-Object { $_ -match $pattern })
+    if ($found.Count -gt 0) { "ok   ${label}: $($found[-1])"; return }
+    Start-Sleep -Milliseconds 200
+  } while ((Get-Date) -lt $deadline)
+  $last = @(Log-Lines "`tTrace(Navigate|Evaluate|Expand|Open)`t")
+  throw "ABORT [$label]: no log line matching [$pattern]; the last trace line: $(if ($last.Count) { $last[-1] } else { 'none' })"
+}
+
 # After F2 on a reference row (Step -Editing): waits until the add-in's keys have all arrived (a TraceSynth line newer
 # than the $synthBefore there were, "complete") and Excel's Go To dialog has closed, so the next key goes to Point
 # mode; with the diagnostics log on, also that the F2 used the Go To step with $goTo (the text it typed, with nothing
@@ -282,6 +316,8 @@ try {
   $xl.DisplayAlerts = $alertsBefore
   if (-not (Is-Fixture $wb)) { throw "ABORT: opened $($wb.FullName), not the fixture." }
   if ($null -eq $iterationBefore) { $iterationBefore = $xl.Iteration }
+  if (Evaluate-On) { throw "ABORT: Trace In's Evaluate functions & groups is on ($uiState); the sections expect the classic rows. Press Ctrl+E in the Trace In window to turn it off, then run again. No key sent." }
+  $evaluateWasOff = $true
   $xl.Iteration = $true                             # the fixture's circular reference, without Excel's warning
 
   # --- Swap add-in builds (same as the Add-ins dialog); put back in `finally` ---
@@ -296,10 +332,10 @@ try {
   "Loaded: $($added.FullName) installed=$($added.Installed)"
   $calc = $wb.Worksheets.Item('Calc')
 
-  function Select-Cell([string]$address) {
+  function Select-Cell([string]$address, $sheet = $calc) {
     Retry { $wb.Activate() } | Out-Null
-    Retry { $calc.Activate() } | Out-Null
-    Retry { $calc.Range($address).Select() } | Out-Null
+    Retry { $sheet.Activate() } | Out-Null
+    Retry { $sheet.Range($address).Select() } | Out-Null
     Focus-Excel
   }
 
@@ -538,6 +574,56 @@ try {
     "ok   F2 + Esc left B11 $b11, Excel back on B11 with the window open"
     Step '{ESC}'  'Esc: back to B11, closed'       $mainName 'Calc' 'B11' $false
   }
+
+  # --- K. Evaluate functions & groups (Ctrl+E) on research/07's example in Eval!A2. The evaluate rows under A2 are
+  # (B2+C2/D2), IF(...), (K2+L2-ABS(M2)), PRODUCT(...), V2; IF's are E2>0 [logical_test], F2+G2 [value_if_true],
+  # SUM(...) [value_if_false]. Group and function rows are not places: Down onto one keeps Excel on A2, which is
+  # checked again once the log shows the move was handled (so a late Goto would be seen) ---
+  $eval = $wb.Worksheets.Item('Eval')
+  $evalFormula = Retry { $eval.Range('A2').Formula }
+  if ($evalFormula -ne '=(B2+C2/D2)+IF(E2>0,F2+G2,SUM(H2:J2))*(K2+L2-ABS(M2))+PRODUCT(N2:T2,U2)+V2') { throw "ABORT: the fixture's Eval!A2 is [$evalFormula], not research/07's formula." }
+  function Assert-StillOnA2([string]$label) {
+    $here = Retry { $xl.ActiveSheet.Name + '!' + $xl.ActiveCell.Address($false, $false) }
+    if ($here -ne 'Eval!A2') { throw "ABORT [$label]: Excel moved to $here; a group or function row is not a place." }
+    "ok   still on Eval!A2 after: $label"
+  }
+  $mark = Log-Mark
+  Select-Cell 'A2' $eval
+  Step '^+{[}'   'Ctrl+Shift+[ on Eval!A2 (classic)' $mainName 'Eval' 'A2' $true -waitMs 3000
+  Expect-Log $mark "`tTraceOpen`t.*`tevaluate=false`ttarget=[^`t]*\|Eval\|A2`tok" 'TraceOpen in the classic view'
+  # Ctrl+E only while the window is open: otherwise Excel would take it (Flash Fill).
+  if (-not (Window-Open)) { throw "ABORT: the Trace In window is not open; Ctrl+E not sent." }
+  $mark = Log-Mark
+  Step '^e'      'Ctrl+E: evaluate on, Excel stays'  $mainName 'Eval' 'A2' $true -waitMs 1500
+  Expect-Log $mark "`tTraceEvaluate`ton=true`trows=5`t.*`tok$" 'Ctrl+E rebuilt the tree with 5 rows under A2'
+  foreach ($row in @('(B2+C2/D2)', 'IF(...)')) {
+    $mark = Log-Mark
+    Step '{DOWN}' "Down: $row (not a place)"         $mainName 'Eval' 'A2' $true
+    Expect-Log $mark ("`tTraceNavigate`tkey=Down`t.*`tmove=Moved`ttarget=" + [regex]::Escape($row) + "`tnot a place$") "Down onto $row"
+    Assert-StillOnA2 "Down onto $row"
+  }
+  $mark = Log-Mark
+  Step '{RIGHT}' 'Right: expand IF(...)'             $mainName 'Eval' 'A2' $true
+  Expect-Log $mark "`tTraceExpand`tkind=Function`tname=IF`targs=3$" 'IF(...) expanded into its 3 arguments'
+  $mark = Log-Mark
+  Step '{DOWN}'  'Down: E2>0 [logical_test]'         $mainName 'Eval' 'A2' $true
+  Expect-Log $mark "`tTraceNavigate`tkey=Down`t.*`tmove=Moved`ttarget=E2>0`tnot a place$" 'Down onto E2>0'
+  Assert-StillOnA2 'Down onto E2>0'
+  Step '{RIGHT}' 'Right: expand E2>0'                $mainName 'Eval' 'A2' $true
+  Step '{DOWN}'  'Down: E2 (a reference: goes there)' $mainName 'Eval' 'E2' $true
+  Step '{ESC}'   'Esc: back to A2, closed'           $mainName 'Eval' 'A2' $false
+  # The mode is remembered: traced again it opens in evaluate mode; Ctrl+E goes back to the classic rows.
+  $mark = Log-Mark
+  Step '^+{[}'   'Ctrl+Shift+[ on Eval!A2 (evaluate)' $mainName 'Eval' 'A2' $true -waitMs 3000
+  Expect-Log $mark "`tTraceOpen`t.*`tevaluate=true`ttarget=[^`t]*\|Eval\|A2`tok" 'TraceOpen remembered evaluate mode'
+  if (-not (Window-Open)) { throw "ABORT: the Trace In window is not open; Ctrl+E not sent." }
+  $mark = Log-Mark
+  Step '^e'      'Ctrl+E: evaluate off'              $mainName 'Eval' 'A2' $true -waitMs 1500
+  Expect-Log $mark "`tTraceEvaluate`ton=false`trows=13`t.*`tok$" 'Ctrl+E back to the classic view with 13 references'
+  Step '{DOWN}'  'Down: B2 (classic: goes there)'    $mainName 'Eval' 'B2' $true
+  Step '{ESC}'   'Esc: back to A2, closed'           $mainName 'Eval' 'A2' $false
+  if (Evaluate-On) { $failures.Add("evaluate mode is still on in $uiState after Ctrl+E turned it off"); "FAIL evaluate mode is still on in $uiState" }
+  else { "ok   evaluate mode is off again in $uiState" }
 }
 catch {
   $failures.Add("aborted: $($_.Exception.Message)")
@@ -589,6 +675,17 @@ finally {
 
   # 4. DisplayAlerts.
   try { $xl.DisplayAlerts = $alertsBefore } catch { $failures.Add("could not put DisplayAlerts back: $($_.Exception.Message)"); "WARNING: could not put Excel's DisplayAlerts back to $alertsBefore`: $($_.Exception.Message)" }
+
+  # 5. Evaluate mode, if the run left it on (it was off at the start): after the fixture closed, which closed an open
+  # trace and so saved its state.
+  try {
+    if ($evaluateWasOff -and (Evaluate-On)) {
+      $text = [IO.File]::ReadAllText($uiState)
+      [IO.File]::WriteAllText($uiState, ($text -replace '"evaluateFunctions"(\s*):(\s*)true', '"evaluateFunctions"$1:$2false'), (New-Object Text.UTF8Encoding $false))
+      "Evaluate mode turned off again in $uiState"
+    }
+  }
+  catch { $failures.Add("could not turn evaluate mode off again: $($_.Exception.Message)"); "WARNING: could not turn evaluate mode off in $uiState`: $($_.Exception.Message)" }
 }
 
 # --- Diagnostics log: the trace lines, and the timings against the Phase 4 targets (only if the log is on) ---

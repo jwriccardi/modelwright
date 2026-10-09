@@ -20,7 +20,10 @@ namespace Modelwright.AddIn;
 /// the same way; a name with no cells shows its value), table references through <c>ListObjects</c> and
 /// <see cref="TableLayout"/>, and the calls that compute a reference (INDEX, OFFSET, INDIRECT, CHOOSE) through
 /// <c>Worksheet.Evaluate</c> in the formula's sheet. A formula the parser rejects falls back to Excel's
-/// <c>Range.DirectPrecedents</c> (same sheet only, and labelled so).
+/// <c>Range.DirectPrecedents</c> (same sheet only, and labelled so). In evaluate mode
+/// (<see cref="EvaluateFunctions"/>) a cell's rows follow its formula's structure instead (<see cref="EvaluatePrecedents"/>):
+/// each group's and function's value is its text evaluated with <c>Worksheet.Evaluate</c> in the cell's sheet, and a
+/// function that can return a reference (INDEX, OFFSET, INDIRECT, CHOOSE) goes to the range it evaluates to.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -89,10 +92,26 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
 
     private readonly Dictionary<string, TableLayout> _layouts = new Dictionary<string, TableLayout>(StringComparer.OrdinalIgnoreCase);
 
+    // Evaluate mode: the formula node each function or group row stands for, and where its formula is.
+    private readonly Dictionary<PrecedentItem, StructureRow> _structure = new Dictionary<PrecedentItem, StructureRow>();
+
+    // Evaluate mode: the range a reference-returning function evaluated to, from evaluating it until its row is made.
+    private readonly Dictionary<FormulaNode, PrecedentItem> _computed = new Dictionary<FormulaNode, PrecedentItem>();
+
     private readonly CultureInfo _culture = CultureInfo.CurrentCulture;
 
     // How many names are being followed inside each other (see MaxNameDepth).
     private int _nameDepth;
+
+    /// <summary>Creates a provider for one trace.</summary>
+    /// <param name="evaluateFunctions">True for "Evaluate functions &amp; groups" (Ctrl+E), false for the classic rows.</param>
+    public ExcelPrecedentProvider(bool evaluateFunctions = false)
+    {
+        EvaluateFunctions = evaluateFunctions;
+    }
+
+    /// <summary>True if a cell's rows follow its formula's structure (evaluate mode) rather than one per reference.</summary>
+    public bool EvaluateFunctions { get; }
 
     /// <summary>The workbooks this trace opened (file names), for the status bar.</summary>
     public List<string> OpenedWorkbooks { get; } = new List<string>();
@@ -140,8 +159,9 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
 
     /// <summary>
     /// The range Excel goes to for <paramref name="item"/> (a name's, table reference's or computed reference's
-    /// target, a merged cell's merge area), or null with the reason in <paramref name="reason"/> (null when the item is
-    /// simply not a place, like a "more cells" row). Never throws.
+    /// target, a merged cell's merge area, the range a reference-returning function evaluated to), or null with the
+    /// reason in <paramref name="reason"/> (null when the item is simply not a place, like a "more cells" row, a group or
+    /// a function). Never throws.
     /// </summary>
     public object? NavigationRange(PrecedentItem item, out string? reason)
     {
@@ -150,9 +170,15 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         {
             case PrecedentKind.MoreCells:
             case PrecedentKind.Truncated:
-            case PrecedentKind.Function:
             case PrecedentKind.Group:
                 return null;
+            case PrecedentKind.Function:
+                if (!_targets.ContainsKey(item))
+                {
+                    return null;
+                }
+
+                break;
             case PrecedentKind.Error:
                 reason = item.Label + ": " + (item.ValueText ?? "cannot be followed");
                 return null;
@@ -180,6 +206,18 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
     {
         try
         {
+            if (_structure.TryGetValue(item, out var row))
+            {
+                // Evaluate mode: a function's arguments or a group's operands. A reference-returning function's target
+                // is where its row goes, not what it expands to.
+                var rows = EvaluateRows(EvaluatePrecedents.Of(row.Node, node => EvaluateText(node, row.Origin),
+                    (node, argument) => ReferenceRow(node, argument, row.Parsed, row.Origin, row.OwnerAddress)), row);
+                DiagnosticsLog.Write("TraceExpand", "kind=" + item.Kind,
+                    row.Node.Kind == FormulaNodeKind.Function ? "name=" + row.Node.FunctionName : "text=" + item.Label,
+                    (row.Node.Kind == FormulaNodeKind.Function ? "args=" : "rows=") + rows.Count.ToString(CultureInfo.InvariantCulture));
+                return rows;
+            }
+
             if (!_targets.TryGetValue(item, out var target))
             {
                 return None;
@@ -308,7 +346,115 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             return DirectPrecedents(cell, area, parsed.Error ?? "unknown error");
         }
 
-        return Resolve(parsed, Origin.Of(cell, area), LocalAddress(cell));
+        var origin = Origin.Of(cell, area);
+        var owner = LocalAddress(cell);
+        if (EvaluateFunctions)
+        {
+            return EvaluateRows(EvaluatePrecedents.Of(parsed, node => EvaluateText(node, origin),
+                (node, argument) => ReferenceRow(node, argument, parsed, origin, owner)), new StructureRow(parsed.Structure!, parsed, origin, owner));
+        }
+
+        return Resolve(parsed, origin, owner);
+    }
+
+    // Evaluate mode: the items of rows built under a cell or a function or group row (parent, for the formula and its
+    // origin). Each function or group row remembers its node, to list its own children when expanded; a
+    // reference-returning function that evaluated to a range goes there.
+    private IReadOnlyList<PrecedentItem> EvaluateRows(IReadOnlyList<EvaluatePrecedent> rows, StructureRow parent)
+    {
+        var items = new List<PrecedentItem>(rows.Count);
+        foreach (var row in rows)
+        {
+            var item = row.Item;
+            if (item.Kind == PrecedentKind.Function || item.Kind == PrecedentKind.Group)
+            {
+                _structure[item] = new StructureRow(row.Node, parent.Parsed, parent.Origin, parent.OwnerAddress);
+                if (_computed.TryGetValue(row.Node, out var target))
+                {
+                    _computed.Remove(row.Node);
+                    _targets[item] = Indirect(target);
+                }
+            }
+
+            items.Add(item);
+        }
+
+        return items;
+    }
+
+    // Evaluate mode: a reference row, resolved as in classic mode (with where it is written, for F2) and labelled with
+    // its parameter name.
+    private PrecedentItem ReferenceRow(FormulaNode node, string? argument, ParsedFormula parsed, Origin origin, string ownerAddress)
+    {
+        var reference = node.Reference!;
+        var item = ResolveReference(reference, origin, nameTarget: false);
+        if (item.Kind != PrecedentKind.Error)
+        {
+            item = WithSpan(item, new ReferenceSpan(origin.Context.WorkbookName, origin.Context.SheetName, ownerAddress,
+                parsed.Formula, reference.Start, reference.Length));
+        }
+
+        return argument is null ? item : Moved(item, item.WithArgument(argument));
+    }
+
+    // Evaluate mode: the Value column of a group or function, its text evaluated in the formula's sheet with ROW() and
+    // COLUMN() made the formula cell's. A range result shows its first cell's value (and its cell count); for a
+    // reference-returning function it is also the row's target (_computed). Never throws, unless Excel is busy.
+    private string EvaluateText(FormulaNode node, Origin origin)
+    {
+        try
+        {
+            var text = CallingCell.SubstituteRowAndColumn(node.Text, origin.Row, origin.Column);
+            if (text.Length > MaxEvaluateLength)
+            {
+                return EvaluatePrecedents.TooLong;
+            }
+
+            dynamic ws = origin.Sheet;
+            object result = ws.Evaluate(text);
+            string value;
+            if (!IsRange(result))
+            {
+                value = TraceValueText.FromValue(result, _culture);
+            }
+            else if (node.ReturnsReference)
+            {
+                var target = RangeItem(DisplayAddress(result, origin.FormulaWorkbook), result);
+                _computed[node] = target;
+                value = target.ValueText ?? string.Empty;
+            }
+            else
+            {
+                value = RangeValue(result);
+            }
+
+            return CallingCell.HasRelativeR1C1Indirect(text) ? value + OutsideItsCell : value;
+        }
+        catch (Exception ex) when (IsBusy(ex))
+        {
+            throw Busy(ex);
+        }
+        catch (Exception)
+        {
+            return EvaluatePrecedents.CannotEvaluate;
+        }
+    }
+
+    // A range's first cell's value, with its cell count if it has more than one.
+    private string RangeValue(object range)
+    {
+        dynamic r = range;
+        object areasObject = r.Areas;
+        dynamic areas = areasObject;
+        int count = areas.Count;
+        long cells = 0;
+        for (var i = 1; i <= count; i++)
+        {
+            object area = areas.Item(i);
+            cells += RectOf(area).CellCount;
+        }
+
+        return TraceValueText.ForRange(CellValue(range), cells, _culture);
     }
 
     // The rows of a parsed formula (a cell's, or a name's), each resolved from origin. For a cell's formula
@@ -339,9 +485,11 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
     }
 
     // The item with its span: a copy, which takes over what the item stands for.
-    private PrecedentItem WithSpan(PrecedentItem item, ReferenceSpan span)
+    private PrecedentItem WithSpan(PrecedentItem item, ReferenceSpan span) => Moved(item, item.WithSpan(span));
+
+    // A copy of an item (with a span or an argument) takes over what the item stands for.
+    private PrecedentItem Moved(PrecedentItem item, PrecedentItem copy)
     {
-        var copy = item.WithSpan(span);
         if (_targets.TryGetValue(item, out var target))
         {
             _targets.Remove(item);
@@ -1640,6 +1788,29 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         /// <summary>The same formula cell, with references resolved in another workbook and sheet (a name's).</summary>
         public Origin In(object book, object sheet, FormulaContext context) =>
             new Origin(Cell, Row, Column, FormulaWorkbook, FormulaSheet, book, sheet, context);
+    }
+
+    /// <summary>
+    /// Evaluate mode: the part of a cell's formula a function or group row stands for, the parsed formula (for F2's
+    /// spans), where it is evaluated, and the cell's address.
+    /// </summary>
+    private sealed class StructureRow
+    {
+        public StructureRow(FormulaNode node, ParsedFormula parsed, Origin origin, string ownerAddress)
+        {
+            Node = node;
+            Parsed = parsed;
+            Origin = origin;
+            OwnerAddress = ownerAddress;
+        }
+
+        public FormulaNode Node { get; }
+
+        public ParsedFormula Parsed { get; }
+
+        public Origin Origin { get; }
+
+        public string OwnerAddress { get; }
     }
 
     /// <summary>
