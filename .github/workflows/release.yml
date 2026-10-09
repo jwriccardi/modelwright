@@ -53,19 +53,22 @@ jobs:
         run: |
           if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$') { throw "Tag '$env:TAG' is not v<major>.<minor>.<patch>[-suffix]." }
           $version = $Matches[1]
-          $projectVersion = (dotnet msbuild src/Modelwright.AddIn/Modelwright.AddIn.csproj -getProperty:Version -p:Configuration=Release).Trim()
+          # A pre-release tag (v0.1.0-rc.1) builds VersionPrefix 0.1.0 with VersionSuffix rc.1; the prefix must match.
+          $suffix = if ($Matches[2]) { $Matches[2].Substring(1) } else { '' }
+          $projectVersion = (dotnet msbuild src/Modelwright.AddIn/Modelwright.AddIn.csproj -getProperty:Version -p:Configuration=Release "-p:VersionSuffix=$suffix").Trim()
           if ($LASTEXITCODE -ne 0) { throw 'Could not read the project version.' }
           if ($version -ne $projectVersion) {
             throw "Tag $env:TAG does not match the version in Directory.Build.props ($projectVersion). Update one of them."
           }
           "version=$version" >> $env:GITHUB_OUTPUT
+          "suffix=$suffix" >> $env:GITHUB_OUTPUT
           "Releasing Modelwright $version"
 
       - name: Restore
         run: dotnet restore Modelwright.sln
 
       - name: Build
-        run: dotnet build Modelwright.sln -c Release --no-restore -p:ContinuousIntegrationBuild=true
+        run: dotnet build Modelwright.sln -c Release --no-restore -p:ContinuousIntegrationBuild=true "-p:VersionSuffix=${{ steps.version.outputs.suffix }}"
 
       - name: Test
         run: dotnet test Modelwright.sln -c Release --no-build
