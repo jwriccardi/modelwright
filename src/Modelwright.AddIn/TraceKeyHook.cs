@@ -1074,7 +1074,10 @@ internal static class TraceKeyHook
 
                 // Presses only: a key-up matched by its key alone cannot take a user's keystroke (no command acts on
                 // a release).
-                switch (synthetic.Observe(key, keyUp, repeat, foreign: !keyUp && _tagSeen && !tagged))
+                // The tag decides only for the first batch, the one a user's queued keystrokes can precede. Later batches go
+                // to the Go To dialog or a window Ctrl+Tab brought up, where nobody is typing; inside the dialog's modal
+                // loop Windows does not reliably report the tag (2026-10-09: the dialog's Enter arrived untagged).
+                switch (synthetic.Observe(key, keyUp, repeat, foreign: !keyUp && _tagSeen && !tagged && _batchesSent <= 1))
                 {
                     case SyntheticKeyMatch.Expected:
                         Arrived(synthetic, tagged);
