@@ -1,0 +1,87 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>Modelwright.AddIn</RootNamespace>
+    <AssemblyName>Modelwright.AddIn</AssemblyName>
+
+    <!--
+      Excel-DNA: a 64-bit and a 32-bit add-in, each packed into a single .xll under bin\<Config>\net48\publish\,
+      named Modelwright64.xll and Modelwright32.xll (the shipped names). The pack suffix is %none% (the default is
+      "-packed"); the publish folder keeps the packed files apart from the unpacked ones in bin\<Config>\net48\.
+    -->
+    <ExcelAddInName>Modelwright</ExcelAddInName>
+    <ExcelAddInFileName>Modelwright</ExcelAddInFileName>
+    <ExcelAddInExplicitExports>true</ExcelAddInExplicitExports>
+    <ExcelDnaCreate32BitAddIn>true</ExcelDnaCreate32BitAddIn>
+    <ExcelDnaCreate64BitAddIn>true</ExcelDnaCreate64BitAddIn>
+    <ExcelDna32BitAddInSuffix>32</ExcelDna32BitAddInSuffix>
+    <ExcelDna64BitAddInSuffix>64</ExcelDna64BitAddInSuffix>
+    <ExcelDnaPackXllSuffix>%none%</ExcelDnaPackXllSuffix>
+    <RunExcelDnaPack>true</RunExcelDnaPack>
+    <!-- net48 does not pack project references automatically; list every shipped dependency here. -->
+    <ExcelAddInInclude>Modelwright.Core.dll;XLParser.dll;Irony.dll</ExcelAddInInclude>
+
+    <!-- The version stamp (short git SHA) is added by the StampVersion target below. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ExcelDna.AddIn" Version="1.9.0" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Late-bound COM (dynamic) for the Excel object model; part of .NET Framework, nothing to pack. -->
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Windows.Forms" />
+    <!-- WPF for the Trace In window (code and runtime-loaded XAML; no markup compilation). Part of .NET Framework. -->
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Modelwright.Core\Modelwright.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    Stamps InformationalVersion as "<Version>+<short git SHA>" ("+local" when git is unavailable or this is
+    not a git checkout) and records the commit and UTC build date as AssemblyMetadata (read by ProductInfo).
+    git's stderr is discarded (Exec runs cmd.exe; this project is Windows-only), and the output is used only
+    if it is a bare hex SHA, so a warning or error message can never end up in the version.
+  -->
+  <Target Name="StampVersion" BeforeTargets="GetAssemblyAttributes">
+    <Exec Command="git rev-parse --short HEAD 2&gt;nul"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true"
+          EchoOff="true"
+          IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_MwGitOutput" />
+      <Output TaskParameter="ExitCode" PropertyName="_MwGitExitCode" />
+    </Exec>
+    <PropertyGroup>
+      <_MwGitOutput>$(_MwGitOutput.Trim())</_MwGitOutput>
+      <MwGitCommit Condition="'$(_MwGitExitCode)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_MwGitOutput)', '^[0-9a-f]{7,40}$'))">$(_MwGitOutput)</MwGitCommit>
+      <MwGitCommit Condition="'$(MwGitCommit)' == ''">local</MwGitCommit>
+      <MwBuildDate>$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd'))</MwBuildDate>
+      <InformationalVersion>$(Version)+$(MwGitCommit)</InformationalVersion>
+    </PropertyGroup>
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GitCommit</_Parameter1>
+        <_Parameter2>$(MwGitCommit)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>BuildDate</_Parameter1>
+        <_Parameter2>$(MwBuildDate)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
+
+</Project>

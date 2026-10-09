@@ -39,7 +39,7 @@ public static class W2 {
 $mainName = 'OD_Main.xlsx'; $srcName = 'OD_Source.xlsx'
 $mainPath = Join-Path $ScratchDir $mainName
 if (-not (Test-Path $mainPath) -or -not (Test-Path (Join-Path $ScratchDir $srcName))) { throw "ABORT: fixture workbooks not found in $ScratchDir." }
-$log = Join-Path $env:LOCALAPPDATA 'ModelingToolkit\log.txt'
+$log = Join-Path $env:LOCALAPPDATA 'Modelwright\log.txt'
 $logStart = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
 
 function Retry([scriptblock]$b) {
@@ -50,7 +50,7 @@ function Retry([scriptblock]$b) {
 $xl = [Runtime.InteropServices.Marshal]::GetActiveObject('Excel.Application')
 $excelPid = [W2]::ProcessOf([IntPtr]([int64]$xl.Hwnd))
 "Excel version $($xl.Version) build $($xl.Build), process $excelPid"
-$loaded = @($xl.AddIns | Where-Object { $_.FullName -like '*ModelingToolkit64-packed.xll' -and $_.Installed }).Count -gt 0
+$loaded = @($xl.AddIns | Where-Object { $_.FullName -like '*Modelwright64.xll' -and $_.Installed }).Count -gt 0
 if (-not $loaded) { throw "ABORT: the add-in is not installed in this Excel; run trace-smoke.ps1 first (it installs the build)." }
 
 function Is-Fixture($book) { return ($null -ne $book) -and (@($mainName, $srcName) -contains [string]$book.Name) -and ([string]$book.FullName -like '*Modelwright-scratch*') }

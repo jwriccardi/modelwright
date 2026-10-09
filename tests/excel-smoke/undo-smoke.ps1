@@ -4,8 +4,9 @@
 # Safety: works only in a new scratch workbook (closed without saving at the end); checks that Excel is the
 # foreground window before EVERY keystroke and aborts otherwise. Don't touch the keyboard while it runs.
 # The focus trick taps Shift: an Alt tap would turn on ribbon KeyTips and send the next key to the ribbon.
-# Note: it (re)installs the given xll in Excel's add-in list, replacing any other ModelingToolkit64-packed.xll.
-param([string]$Xll = (Join-Path $PSScriptRoot '..\..\src\ExcelModelingToolkit.AddIn\bin\Release\net48\publish\ModelingToolkit64-packed.xll'))
+# Note: it (re)installs the given xll in Excel's add-in list, replacing any other Modelwright64.xll
+# (or pre-rename ModelingToolkit64-packed.xll).
+param([string]$Xll = (Join-Path $PSScriptRoot '..\..\src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright64.xll'))
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
@@ -20,7 +21,11 @@ public static class W {
 "@
 
 $fixXll = (Resolve-Path $Xll).Path
-$log    = Join-Path $env:LOCALAPPDATA 'ModelingToolkit\log.txt'
+
+# Our add-in in Excel's list: this build's name, or the name builds had before the rename to Modelwright (D12), so an
+# old build left installed is swapped out as well (both would claim the same shortcuts).
+function Is-OurXll([string]$fullName) { return ($fullName -like '*Modelwright64.xll') -or ($fullName -like '*ModelingToolkit64-packed.xll') }
+$log    = Join-Path $env:LOCALAPPDATA 'Modelwright\log.txt'
 
 function Retry([scriptblock]$b) {
   for ($i = 0; $i -lt 40; $i++) { try { return & $b } catch { Start-Sleep -Milliseconds 150 } }
@@ -33,7 +38,7 @@ $excelPid = (Get-Process EXCEL | Select-Object -First 1).Id
 
 # --- Swap add-in builds (same as Add-ins dialog) ---
 foreach ($a in @($xl.AddIns)) {
-  if ($a.FullName -like '*ModelingToolkit64-packed.xll' -and $a.FullName -ne $fixXll -and $a.Installed) {
+  if ((Is-OurXll $a.FullName) -and $a.FullName -ne $fixXll -and $a.Installed) {
     "Unloading $($a.FullName)"; $a.Installed = $false
   }
 }

@@ -29,16 +29,16 @@
 # - The first step that does not end where expected aborts the run: no further key is sent. Ctrl+Z is sent only once
 #   COM shows the 777 typed in the fixture's B1 and Excel's own Undo is available (so the add-in's formatting undo
 #   cannot take the key).
-# - It records Excel's DisplayAlerts and Iteration settings and the installed state of every
-#   *ModelingToolkit64-packed.xll in the add-in list, and puts all of them back in `finally` (each on its own), however
-#   the run ends: the add-in build under test is uninstalled again unless it was installed before, and the builds that
-#   were installed are installed again. Only the fixture workbooks (in the fixture folder) are closed, without saving.
+# - It records Excel's DisplayAlerts and Iteration settings and the installed state of every Modelwright64.xll (or
+#   pre-rename ModelingToolkit64-packed.xll) in the add-in list, and puts all of them back in `finally` (each on its
+#   own), however the run ends: the add-in build under test is uninstalled again unless it was installed before, and
+#   the builds that were installed are installed again. Only the fixture workbooks (in the fixture folder) are closed, without saving.
 #   If Excel is still editing a cell then (a run that aborted in Point mode), Esc is sent first (at most three, each
 #   after the same foreground check).
 # The focus trick taps Shift (only when Excel is not already in front): an Alt tap would turn on ribbon KeyTips and
 # send the next key to the ribbon.
 param(
-    [string]$Xll = (Join-Path $PSScriptRoot '..\..\src\ExcelModelingToolkit.AddIn\bin\Release\net48\publish\ModelingToolkit64-packed.xll'),
+    [string]$Xll = (Join-Path $PSScriptRoot '..\..\src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright64.xll'),
     [string]$FixtureDir = (Join-Path $env:TEMP 'emt-trace-fixture')
 )
 $ErrorActionPreference = 'Stop'
@@ -104,11 +104,15 @@ public static class EmtPath {
 }
 
 $fixXll = (Resolve-Path $Xll).Path
+
+# Our add-in in Excel's list: this build's name, or the name builds had before the rename to Modelwright (D12), so an
+# old build left installed is swapped out as well (both would claim the same shortcuts).
+function Is-OurXll([string]$fullName) { return ($fullName -like '*Modelwright64.xll') -or ($fullName -like '*ModelingToolkit64-packed.xll') }
 $fixtureFolder = [EmtPath]::Long($FixtureDir)
 $mainName = 'EMT_TraceMain.xlsx'
 $extName = 'EMT_TraceExternal.xlsx'
 $mainPath = Join-Path $fixtureFolder $mainName
-$log = Join-Path $env:LOCALAPPDATA 'ModelingToolkit\log.txt'
+$log = Join-Path $env:LOCALAPPDATA 'Modelwright\log.txt'
 $logStart = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
 $low32 = [int64]4294967295
 
@@ -135,7 +139,7 @@ $iterationBefore = $null
 try { $iterationBefore = $xl.Iteration } catch { }   # needs an open workbook; read once the fixture is open if not
 $addinsBefore = @()
 foreach ($a in @($xl.AddIns)) {
-  if ($a.FullName -like '*ModelingToolkit64-packed.xll') {
+  if (Is-OurXll $a.FullName) {
     $addinsBefore += New-Object PSObject -Property @{ FullName = [string]$a.FullName; Installed = [bool]$a.Installed }
   }
 }
@@ -270,7 +274,7 @@ try {
 
   # --- Swap add-in builds (same as the Add-ins dialog); put back in `finally` ---
   foreach ($a in @($xl.AddIns)) {
-    if ($a.FullName -like '*ModelingToolkit64-packed.xll' -and $a.FullName -ne $fixXll -and $a.Installed) {
+    if ((Is-OurXll $a.FullName) -and $a.FullName -ne $fixXll -and $a.Installed) {
       "Unloading $($a.FullName) for the run"; $a.Installed = $false
     }
   }

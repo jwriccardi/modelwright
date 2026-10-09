@@ -1,6 +1,6 @@
 # Third-party notices
 
-The Modeling Toolkit add-in (`ModelingToolkit64-packed.xll`) includes the third-party software listed below. Its own code is licensed under the [MIT License](LICENSE).
+The Modelwright add-in (`Modelwright64.xll` and `Modelwright32.xll`) includes the third-party software listed below. Its own code is licensed under the [PolyForm Shield License 1.0.0](LICENSE).
 
 ## Excel-DNA
 

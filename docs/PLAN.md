@@ -1,5 +1,7 @@
-# Work plan — Excel Modeling Toolkit
+# Work plan — Modelwright
 
+> Renamed to Modelwright on 2026-10-08 (D12).
+>
 > **Status: Phases 0–3 complete. PRs #1–#4 were merged on 2026-10-06 after the owner tested in Excel, and the automated smoke test `tests/excel-smoke/undo-smoke.ps1` passes. Phase 4 (Trace In) is in progress: 4a (core logic, PR #5) merged on 2026-10-07; 4b (the Trace In window and its Excel provider, classic mode) is in progress. Evaluate mode (Ctrl+E) follows as 4c.**
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
@@ -69,14 +71,14 @@ No code is copied, so no attribution is needed unless we later port a specific a
 ### 4.1 Solution layout
 ```
 src/
-  Toolkit.Core/      netstandard2.0, no Excel references: cycle engine, color and format
+  Modelwright.Core/  netstandard2.0, no Excel references: cycle engine, color and format
                      matching, settings schema + migrations, undo snapshot model,
                      formula reference extraction (XLParser or ClosedXML.Parser),
                      precedent-tree model
-  Toolkit.AddIn/     net48 + Excel-DNA: AutoOpen/AutoClose (key registration),
+  Modelwright.AddIn/ net48 + Excel-DNA: AutoOpen/AutoClose (key registration),
                      commands, COM adapters, ribbon XML, UndoManager,
                      trace window, settings dialog
-  Toolkit.Tests/     xUnit tests for Core (CI runs them on windows-latest)
+  Modelwright.Core.Tests/  xUnit tests for Core (CI runs them on windows-latest)
 installer/           per-user installer (no admin rights)
 test/fixtures/       fixture workbooks for manual end-to-end runs
 ```
@@ -267,7 +269,7 @@ Delivered as three PRs:
 
 Defaults are the **Macabacus factory settings** (v9.9.5 settings export, 2026-10-06; see research/06). Binary (Ctrl+Shift+Y) and Ratio (Alt+Shift+;) cycles were added from the same source.
 - **Exit criteria:**
-  - xUnit covers the cycle engine: wrap-around, the hybrid rule, mixed selections, color normalization and "No fill". Line coverage of `Toolkit.Core` is ≥ 90%.
+  - xUnit covers the cycle engine: wrap-around, the hybrid rule, mixed selections, color normalization and "No fill". Line coverage of `Modelwright.Core` is ≥ 90%.
   - All 7 v1 cycles fire on their Macabacus keys and meet the K3 latency target.
   - **Undo scenarios pass:**
     - (a) cycle ×3 then Ctrl+Z ×3 restores the original exactly;
@@ -329,7 +331,7 @@ These are not v1 scope.
 | .NET runtime conflicts with other add-ins | Low (net48) / High | Target .NET Framework 4.8, not .NET 6+. |
 
 ## 7. Verification
-- **Unit tests:** xUnit on `Toolkit.Core`, run in CI.
+- **Unit tests:** xUnit on `Modelwright.Core`, run in CI.
 - **Integration tests:** a manual script against the fixture workbooks, plus an optional Excel-DNA test harness running inside Excel (ExcelDna.Testing).
 - **Performance:** timing logs in debug builds (p50/p95 per command).
 - **Records:** each test run is saved in `docs/test-runs/`.

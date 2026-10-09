@@ -1,6 +1,6 @@
-# Excel Modeling Toolkit *(working name)*
+# Modelwright
 
-A source-available Excel add-in for financial modelers:
+Modelwright is a source-available Excel add-in for financial modelers:
 
 1. **Number format cycling**: step the selected cells through your own list of formats with one shortcut.
 2. **Font color cycling**
@@ -15,7 +15,7 @@ The architecture is decided: an **Excel-DNA (C#) add-in for Windows desktop Exce
 - **Number-format cycles:** Ctrl+Shift+1 / 2 / 4 / 5 / 8, Ctrl+Shift+Y and Alt+Shift+;.
 - **Color cycles:** Ctrl+' (font), Ctrl+Shift+K (fill) and Ctrl+; (blue/black toggle).
 - **Undo:** Ctrl+Z / Ctrl+Y work alongside Excel's own undo.
-- **Settings dialog** (Modeling Toolkit › Settings…).
+- **Settings dialog** (Modelwright › Settings…).
 
 Trace In (Ctrl+Shift+[) is next ([PLAN](docs/PLAN.md)).
 
@@ -26,12 +26,12 @@ Trace In (Ctrl+Shift+[) is next ([PLAN](docs/PLAN.md)).
 Requires the .NET SDK 10 on Windows. No Visual Studio needed.
 
 ```powershell
-dotnet build ExcelModelingToolkit.sln -c Release
-dotnet test ExcelModelingToolkit.sln -c Release
+dotnet build Modelwright.sln -c Release
+dotnet test Modelwright.sln -c Release
 powershell -ExecutionPolicy Bypass -File build/check-licenses.ps1
 ```
 
-**Load in Excel:** go to File › Options › Add-ins, set Manage: Excel Add-ins, click Go… › Browse…, and pick `src/ExcelModelingToolkit.AddIn/bin/Release/net48/publish/ModelingToolkit64-packed.xll`. A **Modeling Toolkit** ribbon tab appears. Turn Macabacus off first, because it uses the same keys.
+**Load in Excel:** go to File › Options › Add-ins, set Manage: Excel Add-ins, click Go… › Browse…, and pick `src/Modelwright.AddIn/bin/Release/net48/publish/Modelwright64.xll` (`Modelwright32.xll` for 32-bit Excel). A **Modelwright** ribbon tab appears. Turn Macabacus off first, because it uses the same keys.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions need a DCO sign-off.
 

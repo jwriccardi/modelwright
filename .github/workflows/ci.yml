@@ -44,13 +44,13 @@ jobs:
             10.0.x
 
       - name: Restore
-        run: dotnet restore ExcelModelingToolkit.sln
+        run: dotnet restore Modelwright.sln
 
       - name: Build
-        run: dotnet build ExcelModelingToolkit.sln -c Release --no-restore
+        run: dotnet build Modelwright.sln -c Release --no-restore
 
       - name: Test
-        run: dotnet test ExcelModelingToolkit.sln -c Release --no-build --collect:"XPlat Code Coverage"
+        run: dotnet test Modelwright.sln -c Release --no-build --collect:"XPlat Code Coverage"
 
       - name: License check
         shell: pwsh
@@ -66,6 +66,8 @@ jobs:
       - name: Upload packed add-in
         uses: actions/upload-artifact@v7
         with:
-          name: ModelingToolkit-xll
-          path: src/ExcelModelingToolkit.AddIn/bin/Release/net48/publish/ModelingToolkit64-packed.xll
+          name: Modelwright-xll
+          path: |
+            src/Modelwright.AddIn/bin/Release/net48/publish/Modelwright64.xll
+            src/Modelwright.AddIn/bin/Release/net48/publish/Modelwright32.xll
           if-no-files-found: error

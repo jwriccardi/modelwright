@@ -16,7 +16,7 @@
     <Authors>Pegasus Technology Group LLC</Authors>
     <Copyright>Copyright (c) 2026 Pegasus Technology Group LLC</Copyright>
     <PackageLicenseExpression>PolyForm-Shield-1.0.0</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/jwriccardi/excel-modeling-toolkit</RepositoryUrl>
+    <RepositoryUrl>https://github.com/jwriccardi/modelwright</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 

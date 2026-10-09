@@ -44,7 +44,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 | D4 | Build fresh vs fork XLerate | Build fresh; XLerate is a design reference only (it's TypeScript) | Proposed |
 | D5 | Cycles in v1 | Number, Date, Currency, Percent, Multiple, Font, Fill (7). Blue-black and decimals are stretch goals | Proposed |
 | D6 | Keymap | Macabacus defaults exactly, and users can remap them (PLAN §4.2) | Proposed |
-| D7 | Product name | `excel-modeling-toolkit` is a working name | Open |
+| D7 | Product name | `excel-modeling-toolkit` is a working name | **Closed 2026-10-08: see D12** |
 | D8 | Mac / web follow-up | Office.js, which K1c showed can bind the exact punctuation keys. **Owner idea (2026-09-29): a web edition that just does the color cycles.** | Future (PLAN, v2 roadmap) |
 | D9 | Approve decision spikes K1–K4 (throwaway code) | — | **Approved 2026-09-28** |
 | D11 | Cross-workbook trace | — | **Decided 2026-09-28: essential.** This is why Excel-DNA was kept over Office.js. |
