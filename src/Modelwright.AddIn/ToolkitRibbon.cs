@@ -28,10 +28,37 @@ public class ToolkitRibbon : ExcelRibbon
         new[] { ActionIds.BlueBlackToggle, "Blue/Black", "Toggle the font between blue and black" },
     };
 
+    private const string ShortcutsControlId = "mwShortcuts";
+
+    /// <summary>The loaded ribbon, for refreshing the Shortcuts toggle; null until Excel has loaded it.</summary>
+    private static IRibbonUI? _ribbon;
+
+    /// <summary>
+    /// Has the Shortcuts toggle show the setting in use again (<see cref="ToolkitSettings.UseKeyboardShortcuts"/>).
+    /// Main thread. Never throws.
+    /// </summary>
+    internal static void RefreshShortcuts()
+    {
+        try
+        {
+            _ribbon?.InvalidateControl(ShortcutsControlId);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("RibbonRefreshFailed", ex.Message);
+        }
+    }
+
     /// <inheritdoc />
     public override string GetCustomUI(string RibbonID)
     {
         var name = SecurityElement.Escape(ProductInfo.Name);
+        var shortcutsTip = SecurityElement.Escape(
+            $"On: {ProductInfo.Name} answers its keyboard shortcuts (Ctrl+Shift+1, Ctrl+', Ctrl+Shift+[ and the others) and " +
+            "Ctrl+Z / Ctrl+Y for its formatting. Off: it binds no keys and leaves Ctrl+Z / Ctrl+Y to Excel. " +
+            $"Macabacus uses the same shortcuts: switch {ProductInfo.Name}'s off to keep Macabacus's; Macabacus has them " +
+            "again after you restart Excel (until then they do Excel's usual thing). Switching on takes effect at once. " +
+            "The ribbon buttons work either way. Saved in your settings.");
         var format = new StringBuilder();
         foreach (var button in FormatButtons)
         {
@@ -40,7 +67,7 @@ public class ToolkitRibbon : ExcelRibbon
         }
 
         return $@"
-<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui'>
+<customUI xmlns='http://schemas.microsoft.com/office/2009/07/customui' onLoad='OnRibbonLoad'>
   <ribbon>
     <tabs>
       <tab id='mwTab' label='{name}'>
@@ -53,6 +80,7 @@ public class ToolkitRibbon : ExcelRibbon
         <group id='mwToolkitGroup' label='Tools'>
           <button id='mwSettings' label='Settings…' screentip='Edit cycles, shortcuts and options' supertip='Edit, reorder and preview the cycles, change shortcuts, and import, export or reset your settings.' onAction='OnSettings' />
           <button id='mwAbout' label='About' screentip='About {name}' onAction='OnAbout' />
+          <toggleButton id='{ShortcutsControlId}' label='Shortcuts' screentip='Use {name}&apos;s keyboard shortcuts' supertip='{shortcutsTip}' getPressed='GetShortcutsPressed' onAction='OnShortcuts' />
           <button id='mwReregisterKeys' label='Re-register shortcuts' screentip='Take back every shortcut from other add-ins' onAction='OnReregisterKeys' />
           <button id='mwOpenSettings' label='Open settings file' screentip='Edit settings.json' onAction='OnOpenSettings' />
           <button id='mwReloadSettings' label='Reload settings' screentip='Apply your changes to settings.json' onAction='OnReloadSettings' />
@@ -64,6 +92,16 @@ public class ToolkitRibbon : ExcelRibbon
   </ribbon>
 </customUI>";
     }
+
+    /// <summary>Ribbon callback: the ribbon has loaded.</summary>
+    public void OnRibbonLoad(IRibbonUI ribbon) => _ribbon = ribbon;
+
+    /// <summary>Ribbon callback: the Shortcuts toggle is pressed while the keyboard shortcuts are on.</summary>
+    public bool GetShortcutsPressed(IRibbonControl control) => Session.Settings.UseKeyboardShortcuts;
+
+    /// <summary>Ribbon callback for the Shortcuts toggle: switches the keyboard shortcuts on or off and saves it.</summary>
+    public void OnShortcuts(IRibbonControl control, bool pressed) =>
+        ExcelAsyncUtil.QueueAsMacro(() => Commands.SetKeyboardShortcuts(pressed, "ribbon"));
 
     /// <summary>Ribbon callback for the Format buttons; the button's tag is the cycle's action id.</summary>
     public void OnCycle(IRibbonControl control)

@@ -96,11 +96,45 @@ public class ToolkitSettingsTests
         Assert.Equal(SettingsLoadOutcome.Loaded, result.Outcome);
         Assert.Equal(ToolkitSettings.DefaultUndoCellCap, result.Settings.UndoCellCap);
         Assert.True(result.Settings.DiagnosticsLog);
+        Assert.True(result.Settings.UseKeyboardShortcuts);
         var cycle = result.Settings.Cycles[0];
         Assert.Equal("FontColorCycle", cycle.Id);
         Assert.False(cycle.Provisional);
         Assert.Equal(OleColor.FromRgb(0, 0, 255), ((ColorItem)cycle.Items[0]).Color);
         Assert.Equal("Ctrl+'", result.Settings.Keymap["FontColorCycle"]);
+    }
+
+    [Fact]
+    public void Keyboard_shortcuts_switch_round_trips_and_is_written_only_when_off()
+    {
+        var off = ToolkitSettings.Defaults().WithUseKeyboardShortcuts(false);
+
+        var json = off.ToJson();
+        var result = ToolkitSettings.FromJson(json);
+
+        Assert.Empty(result.Problems);
+        Assert.False(result.Settings.UseKeyboardShortcuts);
+        Assert.Equal(json, result.Settings.ToJson());
+        Assert.Contains("  \"undoCellCap\": 10000,\r\n  \"useKeyboardShortcuts\": false,\r\n  \"keymap\": {", json);
+        AssertEquivalent(off, result.Settings);
+
+        var on = result.Settings.WithUseKeyboardShortcuts(true);
+        Assert.True(on.UseKeyboardShortcuts);
+        Assert.DoesNotContain("useKeyboardShortcuts", on.ToJson());
+        Assert.Equal(ToolkitSettings.Defaults().ToJson(), on.ToJson());
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public void Keyboard_shortcuts_switch_is_read(string value, bool expected)
+    {
+        var json = MinimalJson.Replace("\"schemaVersion\": 1,", "\"schemaVersion\": 1, \"useKeyboardShortcuts\": " + value + ",");
+
+        var result = ToolkitSettings.FromJson(json);
+
+        Assert.Empty(result.Problems);
+        Assert.Equal(expected, result.Settings.UseKeyboardShortcuts);
     }
 
     [Fact]
@@ -313,6 +347,9 @@ public class ToolkitSettingsTests
     [InlineData("\"undoCellCap\": 99999999999,", "undoCellCap must be a whole number, not 99999999999.")]
     [InlineData("\"diagnosticsLog\": \"yes\",", "diagnosticsLog must be true or false, not \"yes\".")]
     [InlineData("\"diagnosticsLog\": 1,", "diagnosticsLog must be true or false, not 1.")]
+    [InlineData("\"useKeyboardShortcuts\": \"no\",", "useKeyboardShortcuts must be true or false, not \"no\".")]
+    [InlineData("\"useKeyboardShortcuts\": 0,", "useKeyboardShortcuts must be true or false, not 0.")]
+    [InlineData("\"useKeyboardShortcuts\": null,", "useKeyboardShortcuts must be true or false, not null.")]
     public void Bad_top_level_properties_are_reported(string insert, string expected)
     {
         var json = MinimalJson.Replace("\"schemaVersion\": 1,", "\"schemaVersion\": 1, " + insert);
@@ -641,6 +678,7 @@ public class ToolkitSettingsTests
         Assert.Equal(expected.SchemaVersion, actual.SchemaVersion);
         Assert.Equal(expected.UndoCellCap, actual.UndoCellCap);
         Assert.Equal(expected.DiagnosticsLog, actual.DiagnosticsLog);
+        Assert.Equal(expected.UseKeyboardShortcuts, actual.UseKeyboardShortcuts);
         Assert.Equal(expected.Keymap.OrderBy(k => k.Key), actual.Keymap.OrderBy(k => k.Key));
         Assert.Equal(expected.Cycles.Count, actual.Cycles.Count);
         for (var i = 0; i < expected.Cycles.Count; i++)

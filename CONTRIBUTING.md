@@ -28,7 +28,7 @@ The build produces one packed add-in, for 64-bit Excel (32-bit Excel is not supp
 src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright64.xll
 ```
 
-1. **Disable Macabacus first, or change its keys.** Whichever add-in registers a shortcut last owns it.
+1. **Disable Macabacus first, or change its keys.** Whichever add-in registers a shortcut last owns it. (With Macabacus loaded, Modelwright re-binds its keys about 3 s after it loads and, the first time, shows a notice: see the README's "Using Modelwright alongside Macabacus".)
 2. In Excel: **File > Options > Add-ins > Manage: Excel Add-ins > Go... > Browse...**, select the `.xll`, and click **OK**.
 3. You should see a **Modelwright** ribbon tab and the status-bar message "Modelwright *version* loaded".
 4. Press **Ctrl+Alt+Shift+F12**, or click **Modelwright > About**, to show the version, commit, build date and add-in path.
@@ -48,6 +48,8 @@ Without a switch it closes and restarts Excel in one go. To build without closin
 ### Excel smoke tests
 
 With Excel open, `tests/excel-smoke/undo-smoke.ps1` and `tests/excel-smoke/trace-smoke.ps1` drive Excel with real keystrokes in scratch workbooks (`powershell -ExecutionPolicy Bypass -File tests/excel-smoke/undo-smoke.ps1`). Don't touch the keyboard while they run. Each script's header says what it covers.
+
+No notices during automated runs: the add-in never shows its one-time Macabacus notice (a modal dialog that would take the keyboard focus) when the environment variable `MODELWRIGHT_NO_NOTICES=1` is set in Excel's environment, nor once `%APPDATA%\Modelwright\ui-state.json` has `"macabacusNoticeShown": true`. A script cannot set the environment of an Excel that is already running, so the smoke scripts set that flag before they load the add-in and put the previous value back when they finish (`tests/excel-smoke/notice-flag.ps1`). Set the variable yourself (for example `set MODELWRIGHT_NO_NOTICES=1` then `start excel` from the same command prompt) for other automation.
 
 A downloaded `.xll` is blocked by Mark-of-the-Web. If Excel refuses to load one you did not build yourself, right-click the file > **Properties** > tick **Unblock**.
 

@@ -14,6 +14,7 @@ namespace Modelwright.Core.Settings;
 ///   "schemaVersion": 1,
 ///   "diagnosticsLog": true,              (optional, default true)
 ///   "undoCellCap": 10000,                (optional, default 10000)
+///   "useKeyboardShortcuts": false,       (optional, default true; written only when false)
 ///   "keymap": { "NumberCycle": "Ctrl+Shift+1", ... },   ("" leaves an action unbound; see below)
 ///   "cycles": [
 ///     { "id": "NumberCycle", "displayName": "Number", "kind": "numberFormat", "provisional": true,
@@ -36,7 +37,7 @@ internal static class SettingsJson
     private const string FontColorKind = "fontColor";
     private const string FillColorKind = "fillColor";
 
-    private static readonly string[] RootProperties = { "schemaVersion", "diagnosticsLog", "undoCellCap", "keymap", "cycles" };
+    private static readonly string[] RootProperties = { "schemaVersion", "diagnosticsLog", "undoCellCap", "useKeyboardShortcuts", "keymap", "cycles" };
     private static readonly string[] CycleProperties = { "id", "displayName", "kind", "provisional", "items" };
     private static readonly string[] NumberFormatItemProperties = { "name", "code" };
     private static readonly string[] ColorItemProperties = { "name", "color" };
@@ -91,6 +92,12 @@ internal static class SettingsJson
         root.Add("schemaVersion", ToolkitSettings.CurrentSchemaVersion);
         root.Add("diagnosticsLog", settings.DiagnosticsLog);
         root.Add("undoCellCap", settings.UndoCellCap);
+        if (!settings.UseKeyboardShortcuts)
+        {
+            // Written only when off, so a file with the shortcuts on still reads in a build from before the switch.
+            root.Add("useKeyboardShortcuts", false);
+        }
+
         root.Add("keymap", keymap);
         root.Add("cycles", cycles);
         return JsonWriter.Write(root);
@@ -137,9 +144,12 @@ internal static class SettingsJson
         CheckProperties(root, RootProperties, "settings", problems);
         var diagnosticsLog = ReadOptionalBool(root, "diagnosticsLog", true, problems);
         var undoCellCap = ReadOptionalInt(root, "undoCellCap", ToolkitSettings.DefaultUndoCellCap, problems);
+        var useKeyboardShortcuts = ReadOptionalBool(root, "useKeyboardShortcuts", true, problems);
         var keymap = ReadKeymap(root, problems);
         var cycles = ReadCycles(root, problems);
-        return problems.Count == start ? new ToolkitSettings(cycles, keymap, undoCellCap, diagnosticsLog) : null;
+        return problems.Count == start
+            ? new ToolkitSettings(cycles, keymap, undoCellCap, diagnosticsLog, useKeyboardShortcuts)
+            : null;
     }
 
     private static List<KeyValuePair<string, string>> ReadKeymap(JsonObject root, List<string> problems)

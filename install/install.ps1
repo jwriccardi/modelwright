@@ -18,6 +18,9 @@
        AddIns folder in a bare form (/R "Modelwright64.xll", no folder) and sometimes keeps the full-path entry
        as well, so a bare name counts as ours, in OPENn values and in the Add-in Manager key alike.
     Your Modelwright settings (%APPDATA%\Modelwright) are never touched.
+    6. After a successful install, says so if Macabacus is installed too (a Macabacus* COM add-in key under
+       Software\Microsoft\Office\Excel\Addins, per user or for all users, with LoadBehavior 3): both add-ins use the
+       same keyboard shortcuts. This only prints a note; it changes nothing and does not affect the exit code.
 
     Works in Windows PowerShell 5.1 and in Constrained Language mode (only built-in cmdlets are used).
 
@@ -48,6 +51,10 @@
 .PARAMETER ExcelProcessName
     The process that must not be running. Default: EXCEL. For testing.
 
+.PARAMETER ComAddInKeys
+    The registry keys searched for the Macabacus COM add-in. Default: Software\Microsoft\Office\Excel\Addins under
+    HKCU, HKLM and HKLM\SOFTWARE\WOW6432Node. For testing.
+
 .PARAMETER NoPause
     Do not wait for Enter before closing (the default waits, so a "Run with PowerShell" window stays open).
 
@@ -74,6 +81,10 @@ param(
     [string]$RegistryRoot = 'HKCU:\Software\Microsoft\Office',
 
     [string]$ExcelProcessName = 'EXCEL',
+
+    [string[]]$ComAddInKeys = @('HKCU:\Software\Microsoft\Office\Excel\Addins',
+                                'HKLM:\SOFTWARE\Microsoft\Office\Excel\Addins',
+                                'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\Excel\Addins'),
 
     [switch]$NoPause
 )
@@ -209,6 +220,28 @@ function Get-ExcelBitness {
         }
     }
     return $null
+}
+
+# True if Macabacus's COM add-in is set to load with Excel: a subkey named Macabacus* of one of $ComAddInKeys with
+# LoadBehavior 3 (load at startup). Its keyboard shortcuts come from that COM add-in. Never throws: a key that cannot
+# be read counts as no Macabacus.
+function Test-MacabacusInstalled {
+    foreach ($root in $ComAddInKeys) {
+        try {
+            if (-not (Test-Path -LiteralPath $root)) { continue }
+            foreach ($key in @(Get-ChildItem -LiteralPath $root -ErrorAction Stop)) {
+                if ($key.PSChildName -notlike 'Macabacus*') { continue }
+                $item = Get-ItemProperty -LiteralPath $key.PSPath -Name 'LoadBehavior' -ErrorAction SilentlyContinue
+                if ($null -ne $item -and "$($item.LoadBehavior)" -eq '3') {
+                    Write-Verbose "Macabacus COM add-in found: $($key.Name) (LoadBehavior 3)"
+                    return $true
+                }
+            }
+        } catch {
+            Write-Verbose "Could not read ${root}: $($_.Exception.Message)"
+        }
+    }
+    return $false
 }
 
 # The OPEN, OPEN1, OPEN2... values of the Options key, sorted by number.
@@ -373,6 +406,12 @@ try {
         Write-Host 'WhatIf: nothing was changed.'
     } else {
         Write-Host 'Done. Start Excel: the Modelwright tab appears on the ribbon.' -ForegroundColor Green
+        if (Test-MacabacusInstalled) {
+            Write-Host ''
+            Write-Host ('Macabacus is installed too. Both add-ins use the same keyboard shortcuts. Modelwright''s are ' +
+                'on and will answer them; to keep Macabacus''s, open Excel and click Modelwright > Shortcuts to switch ' +
+                'Modelwright''s off.') -ForegroundColor Yellow
+        }
     }
     Exit-Script 0
 } catch {

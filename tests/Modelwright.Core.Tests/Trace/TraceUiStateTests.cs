@@ -32,6 +32,38 @@ public class TraceUiStateTests
     }
 
     [Fact]
+    public void Macabacus_notice_flag_round_trips_and_is_written_only_when_true()
+    {
+        var state = new TraceUiState(new WindowRect(1, 2, 3, 4), wrapFormula: true).WithMacabacusNoticeShown(true);
+
+        var json = state.ToJson();
+        var read = TraceUiState.FromJson(json);
+
+        Assert.True(read.MacabacusNoticeShown);
+        Assert.Equal(new WindowRect(1, 2, 3, 4), read.Bounds);
+        Assert.True(read.WrapFormula);
+        Assert.Equal(json, read.ToJson());
+        Assert.EndsWith("  },\r\n  \"macabacusNoticeShown\": true\r\n}\r\n", json);
+        Assert.DoesNotContain("macabacus", read.WithMacabacusNoticeShown(false).ToJson());
+
+        // The other With methods keep it.
+        Assert.True(read.WithBounds(null).WithWrapFormula(false).WithEvaluateFunctions(true).MacabacusNoticeShown);
+    }
+
+    [Theory]
+    [InlineData("{ \"macabacusNoticeShown\": true }", true)]
+    [InlineData("{ \"schemaVersion\": 1, \"traceWindow\": 5, \"macabacusNoticeShown\": true }", true)]
+    [InlineData("{ \"macabacusNoticeShown\": false }", false)]
+    [InlineData("{ \"macabacusNoticeShown\": \"true\" }", false)]
+    [InlineData("{ \"macabacusNoticeShown\": 1 }", false)]
+    [InlineData("{ \"traceWindow\": { \"macabacusNoticeShown\": true } }", false)]
+    [InlineData("{}", false)]
+    public void Macabacus_notice_flag_is_read_from_the_top_level(string json, bool expected)
+    {
+        Assert.Equal(expected, TraceUiState.FromJson(json).MacabacusNoticeShown);
+    }
+
+    [Fact]
     public void Unknown_bounds_are_left_out()
     {
         var json = new TraceUiState().ToJson();

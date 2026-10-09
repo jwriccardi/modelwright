@@ -69,6 +69,14 @@ internal static class UndoKeyHook
     private static int _swallowedKey;
 
     /// <summary>
+    /// True (the default) to decide Ctrl+Z and Ctrl+Y presses; false while the keyboard shortcuts are switched off
+    /// (<see cref="Modelwright.Core.Settings.ToolkitSettings.UseKeyboardShortcuts"/>): the hook stays installed but
+    /// passes every key on untouched, so Excel's undo (or another add-in's hook, such as Macabacus's) gets them.
+    /// Main thread only.
+    /// </summary>
+    public static bool TakesKeys { get; set; } = true;
+
+    /// <summary>
     /// Installs the hook on the calling thread, which must be Excel's main thread (call from AutoOpen). Returns
     /// true on success. Never throws.
     /// </summary>
@@ -172,7 +180,7 @@ internal static class UndoKeyHook
                 {
                     // A fresh press ends any swallowed key whose key-up we never saw (focus moved, say).
                     _swallowedKey = 0;
-                    if ((key == VkZ || key == VkY) &&
+                    if (TakesKeys && (key == VkZ || key == VkY) &&
                         IsDown(VkControl) && !IsDown(VkMenu) && !IsDown(VkShift) &&
                         Handle(key == VkZ ? UndoKey.Undo : UndoKey.Redo))
                     {

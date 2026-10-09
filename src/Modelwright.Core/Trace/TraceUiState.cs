@@ -9,13 +9,15 @@ namespace Modelwright.Core.Trace;
 /// the tree shows "Evaluate functions &amp; groups" (Ctrl+E) rather than the classic view. Kept in
 /// its own best-effort file (<c>ui-state.json</c>), not in the settings file: it changes every time the window
 /// moves, and a lost or damaged copy only costs the default position. Reading never fails: anything that cannot be
-/// used is ignored.
+/// used is ignored. The file also remembers that the one-time Macabacus notice was shown
+/// (<see cref="MacabacusNoticeShown"/>, written only when true).
 /// </summary>
 /// <example>
 /// <code>
 /// {
 ///   "schemaVersion": 1,
-///   "traceWindow": { "left": 1200, "top": 300, "width": 620, "height": 380, "wrapFormula": false, "evaluateFunctions": false }
+///   "traceWindow": { "left": 1200, "top": 300, "width": 620, "height": 380, "wrapFormula": false, "evaluateFunctions": false },
+///   "macabacusNoticeShown": true
 /// }
 /// </code>
 /// </example>
@@ -31,11 +33,17 @@ public sealed class TraceUiState
     /// <param name="bounds">The window's last bounds, or null to use the default place.</param>
     /// <param name="wrapFormula">True if the formula header wraps long formulas.</param>
     /// <param name="evaluateFunctions">True if the tree follows the formula's structure (evaluate mode).</param>
-    public TraceUiState(WindowRect? bounds = null, bool wrapFormula = false, bool evaluateFunctions = false)
+    /// <param name="macabacusNoticeShown">True once the one-time Macabacus notice has been shown.</param>
+    public TraceUiState(
+        WindowRect? bounds = null,
+        bool wrapFormula = false,
+        bool evaluateFunctions = false,
+        bool macabacusNoticeShown = false)
     {
         Bounds = bounds;
         WrapFormula = wrapFormula;
         EvaluateFunctions = evaluateFunctions;
+        MacabacusNoticeShown = macabacusNoticeShown;
     }
 
     /// <summary>The window's last bounds in screen pixels, or null if not known.</summary>
@@ -50,20 +58,33 @@ public sealed class TraceUiState
     /// </summary>
     public bool EvaluateFunctions { get; }
 
+    /// <summary>
+    /// True once the one-time notice that Macabacus is also loaded has been shown (<see cref="Modelwright.Core.Settings.Coexistence"/>).
+    /// </summary>
+    public bool MacabacusNoticeShown { get; }
+
     /// <summary>This state with other bounds.</summary>
-    public TraceUiState WithBounds(WindowRect? bounds) => new TraceUiState(bounds, WrapFormula, EvaluateFunctions);
+    public TraceUiState WithBounds(WindowRect? bounds) =>
+        new TraceUiState(bounds, WrapFormula, EvaluateFunctions, MacabacusNoticeShown);
 
     /// <summary>This state with another wrap setting.</summary>
-    public TraceUiState WithWrapFormula(bool wrapFormula) => new TraceUiState(Bounds, wrapFormula, EvaluateFunctions);
+    public TraceUiState WithWrapFormula(bool wrapFormula) =>
+        new TraceUiState(Bounds, wrapFormula, EvaluateFunctions, MacabacusNoticeShown);
 
     /// <summary>This state with evaluate mode on or off.</summary>
-    public TraceUiState WithEvaluateFunctions(bool evaluateFunctions) => new TraceUiState(Bounds, WrapFormula, evaluateFunctions);
+    public TraceUiState WithEvaluateFunctions(bool evaluateFunctions) =>
+        new TraceUiState(Bounds, WrapFormula, evaluateFunctions, MacabacusNoticeShown);
+
+    /// <summary>This state with the Macabacus notice marked as shown or not.</summary>
+    public TraceUiState WithMacabacusNoticeShown(bool macabacusNoticeShown) =>
+        new TraceUiState(Bounds, WrapFormula, EvaluateFunctions, macabacusNoticeShown);
 
     /// <summary>
     /// Reads a state written by <see cref="ToJson"/>. Never throws: null, text that is not JSON, or values of the
     /// wrong type or out of range give the defaults for what they affect (bounds need all four numbers, a positive
     /// size, and every coordinate within a million pixels). Unknown properties are ignored, so a newer file still
-    /// reads, and a file from before evaluate mode reads with it off.
+    /// reads, and a file from before evaluate mode reads with it off. <c>macabacusNoticeShown</c> is read from the
+    /// top level, with or without a usable <c>traceWindow</c>; anything but <c>true</c> reads as false.
     /// </summary>
     public static TraceUiState FromJson(string? json)
     {
@@ -74,10 +95,15 @@ public sealed class TraceUiState
 
         try
         {
-            if (JsonParser.Parse(json) is not JsonObject root ||
-                !root.TryGet("traceWindow", out var value) || value is not JsonObject window)
+            if (JsonParser.Parse(json) is not JsonObject root)
             {
                 return new TraceUiState();
+            }
+
+            var noticeShown = root.TryGet("macabacusNoticeShown", out var noticeValue) && noticeValue is true;
+            if (!root.TryGet("traceWindow", out var value) || value is not JsonObject window)
+            {
+                return new TraceUiState(macabacusNoticeShown: noticeShown);
             }
 
             WindowRect? bounds = null;
@@ -90,7 +116,7 @@ public sealed class TraceUiState
 
             var wrap = window.TryGet("wrapFormula", out var wrapValue) && wrapValue is true;
             var evaluate = window.TryGet("evaluateFunctions", out var evaluateValue) && evaluateValue is true;
-            return new TraceUiState(bounds, wrap, evaluate);
+            return new TraceUiState(bounds, wrap, evaluate, noticeShown);
         }
         catch (FormatException)
         {
@@ -98,7 +124,7 @@ public sealed class TraceUiState
         }
     }
 
-    /// <summary>Writes the state as indented JSON (bounds left out when unknown).</summary>
+    /// <summary>Writes the state as indented JSON (bounds left out when unknown, the notice flag when false).</summary>
     public string ToJson()
     {
         var window = new JsonObject();
@@ -115,6 +141,11 @@ public sealed class TraceUiState
         var root = new JsonObject();
         root.Add("schemaVersion", SchemaVersion);
         root.Add("traceWindow", window);
+        if (MacabacusNoticeShown)
+        {
+            root.Add("macabacusNoticeShown", true);
+        }
+
         return JsonWriter.Write(root);
     }
 
