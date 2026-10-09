@@ -45,6 +45,7 @@
 | Right | Expand the node, tracing one level deeper |
 | Left | Go back up a level |
 | F2 | Edit the audited formula in Excel. Macabacus goes to **Point mode** when it can, so arrow keys change the reference. F2 again gives Edit mode. **The dialog stays open.** |
+| F2 (observed by the owner, 2026-10-08) | Briefly returns to the audited cell, enters Point mode, then shows the selected precedent as the pointed cell. Arrow keys or a tab switch replace that reference with the pointed cell; the audited formula is visible in the formula bar meanwhile. Enter commits and returns to the audited cell, with the dialog still open. Ctrl+Z does not undo that edit in Macabacus. |
 | Ctrl+E | Toggle "Evaluate functions & groups" |
 | Ctrl+Up/Down/Left/Right | Move the dialog |
 | Ctrl+Home / Ctrl+End | Snap the dialog to the top-left / bottom-right of the screen (also recovers a dialog left off-screen) |

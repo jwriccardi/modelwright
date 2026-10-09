@@ -1,12 +1,15 @@
 # Excel smoke test: formatting cycle + undo ordering, driven by REAL keystrokes into the running Excel.
 # Run with Windows PowerShell 5.1 (needs Marshal.GetActiveObject), with Excel open:
-#   powershell -ExecutionPolicy Bypass -File tests/excel-smoke/undo-smoke.ps1 [-Xll <path to packed xll>]
+#   powershell -ExecutionPolicy Bypass -File tests/excel-smoke/undo-smoke.ps1 [-Xll <path to packed xll>] [-Bitness 64|32]
+# -Bitness picks the default -Xll (Modelwright64.xll or Modelwright32.xll): the one matching Excel's bitness.
 # Safety: works only in a new scratch workbook (closed without saving at the end); checks that Excel is the
 # foreground window before EVERY keystroke and aborts otherwise. Don't touch the keyboard while it runs.
 # The focus trick taps Shift: an Alt tap would turn on ribbon KeyTips and send the next key to the ribbon.
-# Note: it (re)installs the given xll in Excel's add-in list, replacing any other ModelingToolkit64-packed.xll.
-param([string]$Xll = (Join-Path $PSScriptRoot '..\..\src\ExcelModelingToolkit.AddIn\bin\Release\net48\publish\ModelingToolkit64-packed.xll'))
+# Note: it (re)installs the given xll in Excel's add-in list, replacing any other Modelwright64.xll or
+# Modelwright32.xll (or pre-rename ModelingToolkit64-packed.xll).
+param([string]$Xll = '', [ValidateSet('64', '32')][string]$Bitness = '64')
 $ErrorActionPreference = 'Stop'
+if (-not $Xll) { $Xll = Join-Path $PSScriptRoot "..\..\src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright$Bitness.xll" }
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System; using System.Runtime.InteropServices;
@@ -20,7 +23,11 @@ public static class W {
 "@
 
 $fixXll = (Resolve-Path $Xll).Path
-$log    = Join-Path $env:LOCALAPPDATA 'ModelingToolkit\log.txt'
+
+# Our add-in in Excel's list: this build's name, or the name builds had before the rename to Modelwright (D12), so an
+# old build left installed is swapped out as well (both would claim the same shortcuts).
+function Is-OurXll([string]$fullName) { return ($fullName -like '*Modelwright64.xll') -or ($fullName -like '*Modelwright32.xll') -or ($fullName -like '*ModelingToolkit64-packed.xll') }
+$log    = Join-Path $env:LOCALAPPDATA 'Modelwright\log.txt'
 
 function Retry([scriptblock]$b) {
   for ($i = 0; $i -lt 40; $i++) { try { return & $b } catch { Start-Sleep -Milliseconds 150 } }
@@ -28,12 +35,13 @@ function Retry([scriptblock]$b) {
 }
 
 $xl = [Runtime.InteropServices.Marshal]::GetActiveObject('Excel.Application')
-$excelPid = (Get-Process EXCEL | Select-Object -First 1).Id
+# This Excel's process (from Application.Hwnd), not just any EXCEL process: another instance may be running.
+[uint32]$excelPid = 0; [W]::GetWindowThreadProcessId([IntPtr]([int64]$xl.Hwnd), [ref]$excelPid) | Out-Null
 "Excel version $($xl.Version) build $($xl.Build)"
 
 # --- Swap add-in builds (same as Add-ins dialog) ---
 foreach ($a in @($xl.AddIns)) {
-  if ($a.FullName -like '*ModelingToolkit64-packed.xll' -and $a.FullName -ne $fixXll -and $a.Installed) {
+  if ((Is-OurXll $a.FullName) -and $a.FullName -ne $fixXll -and $a.Installed) {
     "Unloading $($a.FullName)"; $a.Installed = $false
   }
 }

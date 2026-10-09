@@ -23,7 +23,7 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
    - How are named ranges shown?
    - Can the range node be expanded into its 10 cells?
    - Does moving with Up/Down switch sheets?
-7. **OK vs Cancel vs Esc.** Where does the cursor end up after each?
+7. ✅ *Answered by the owner, 2026-10-08.* **OK vs Cancel vs Esc.** Enter/OK stays on the cell you navigated to (F5, Enter then returns to the audited cell, which is Excel's own Go To memory). Esc/Cancel returns to the audited cell. **F2** returns to the audited cell, enters edit mode with the traced reference selected, and switches to Point mode, so the arrow keys (and tab switches) replace that reference; Enter commits and returns to the audited cell with the window still open. Macabacus loses Ctrl+Z after that edit.
 8. ◐ *Key confirmed as Ctrl+Shift+\. History depth still open.* **"Last Audited Cell."** Is Ctrl+Shift+\ the key? How deep is its history?
 9. **Hard cases.** What does the dialog show for:
    - INDIRECT / OFFSET;
@@ -39,15 +39,16 @@ Public documentation doesn't settle these points. Screenshots or a short screen 
 |---|---|---|---|
 | D0 | Exact Macabacus keys required? | — | **Decided 2026-09-28: yes, critical** |
 | D1 | Platform and architecture | — | **Decided 2026-09-28: Excel-DNA (C#, net48), Windows desktop first. ADR-0002 accepted.** |
-| D2 | License | MIT, with DCO sign-off for contributions (research/03) | **Adopted for the scaffold 2026-09-29.** The owner can still change it before the repo goes public. |
+| D2 | License | MIT, with DCO sign-off for contributions (research/03) | MIT adopted for the scaffold 2026-09-29. **Changed 2026-10-08 to PolyForm Shield 1.0.0** on the owner's requirements: private corporate use allowed, private modification with no obligation to contribute back, no selling the product or a derivative. That rules out every OSI license (all allow selling), so the project is "source-available". ADR 0003. |
 | D3 | Copyright holder | — | **Decided 2026-09-28: Pegasus Technology Group LLC** |
 | D4 | Build fresh vs fork XLerate | Build fresh; XLerate is a design reference only (it's TypeScript) | Proposed |
 | D5 | Cycles in v1 | Number, Date, Currency, Percent, Multiple, Font, Fill (7). Blue-black and decimals are stretch goals | Proposed |
 | D6 | Keymap | Macabacus defaults exactly, and users can remap them (PLAN §4.2) | Proposed |
-| D7 | Product name | `excel-modeling-toolkit` is a working name | Open |
+| D7 | Product name | `excel-modeling-toolkit` is a working name | **Closed 2026-10-08: see D12** |
 | D8 | Mac / web follow-up | Office.js, which K1c showed can bind the exact punctuation keys. **Owner idea (2026-09-29): a web edition that just does the color cycles.** | Future (PLAN, v2 roadmap) |
 | D9 | Approve decision spikes K1–K4 (throwaway code) | — | **Approved 2026-09-28** |
 | D11 | Cross-workbook trace | — | **Decided 2026-09-28: essential.** This is why Excel-DNA was kept over Office.js. |
+| D12 | Product name | — | **Decided 2026-10-08: "Modelwright"** (repo `modelwright`, product and namespaces `Modelwright.*`). The working name clashed with ROV's commercial "Modeling Toolkit" add-in. Checked: no product, company or trademark found; Cellwright, SheetKit and ModelKit were taken; BlueCell has a registered mark in the software class. "Excel" is kept out of the name itself (Microsoft has enforced that against TurboExcel and ExcelEverywhere). |
 | D10 | Undo target | — | **Decided 2026-09-28: Macabacus parity in v1. The Excel-DNA + Office.js hybrid for full native undo is a v2 candidate.** |
 
 ## C. Development-machine note

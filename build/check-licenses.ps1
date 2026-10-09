@@ -32,7 +32,7 @@ $ErrorActionPreference = 'Stop'
 
 # $PSScriptRoot can be empty in Windows PowerShell 5.1 (e.g. with -File and a relative path).
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
-if (-not $Solution) { $Solution = Join-Path $scriptDir '..\ExcelModelingToolkit.sln' }
+if (-not $Solution) { $Solution = Join-Path $scriptDir '..\Modelwright.sln' }
 if (-not $Allowlist) { $Allowlist = Join-Path $scriptDir 'allowed-packages.json' }
 
 # Licenses that must never ship: copyleft that would bind the add-in, source-available, non-commercial.

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure logic. No Excel, COM or Windows references: everything here must be unit-testable. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>Modelwright.Core</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Excel formula parser for Trace In (MPL-2.0; its dependency Irony is MIT). Both DLLs ship in the packed .xll:
+      see ExcelAddInInclude in the AddIn project and THIRD_PARTY_NOTICES.md.
+    -->
+    <PackageReference Include="XLParser" Version="1.7.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The JSON reader/writer is internal; its edge cases are tested directly. -->
+    <InternalsVisibleTo Include="Modelwright.Core.Tests" />
+  </ItemGroup>
+
+</Project>

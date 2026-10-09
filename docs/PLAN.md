@@ -1,6 +1,8 @@
-# Work plan — Excel Modeling Toolkit
+# Work plan — Modelwright
 
-> **Status: Phases 0–3 complete. PRs #1–#4 were merged on 2026-10-06 after the owner tested in Excel, and the automated smoke test `tests/excel-smoke/undo-smoke.ps1` passes. Phase 4 (Trace In) is in progress: 4a core logic, then 4b the trace window.**
+> Renamed to Modelwright on 2026-10-08 (D12).
+>
+> **Status: Phases 0–4 complete on the `phase4b/trace-window` branch (PR #10, awaiting the owner's merge): Trace In classic mode (4b), F2 reference editing, Evaluate functions & groups (4c), the Modelwright rename (D12), the PolyForm Shield license (ADR 0003) and the Phase 5 install/release work (install scripts, release workflow, README guide). Every Excel smoke suite passes (`tests/excel-smoke/`). Left for Phase 5: code signing and the MSI (owner decisions, issues #7/#8), 32-bit testing (#9), screenshots.**
 >
 > - Architecture: [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windows-first.md). It replaces ADR-0001 (Office.js).
 > - Research: [`research/01`](research/01-feature-survey.md) features · [`02`](research/02-architecture-options.md) architectures · [`03`](research/03-licensing.md) license · [`04`](research/04-xlerate-evaluation.md) prior art · [`05`](research/05-keys-and-undo.md) keys and undo.
@@ -8,7 +10,7 @@
 
 ## 1. Requirements summary
 
-An open-source Excel add-in for financial modelers. It does four things:
+A source-available Excel add-in for financial modelers (PolyForm Shield 1.0.0, ADR 0003). It does four things:
 
 1. **Number format cycling**
 2. **Font color cycling**
@@ -20,7 +22,7 @@ An open-source Excel add-in for financial modelers. It does four things:
 **Other constraints:**
 - Undo must work at least as well as it does in Macabacus.
 - Settings are per user and can be exported.
-- The project will be open-sourced later.
+- The source will be published later (source-available: PolyForm Shield 1.0.0, see ADR 0003).
 
 **Platform:** **Windows desktop in v1.** Exact keys can't be bound in Office.js, which is the only way to run on the web (research/05). Mac and web are deferred.
 
@@ -69,14 +71,14 @@ No code is copied, so no attribution is needed unless we later port a specific a
 ### 4.1 Solution layout
 ```
 src/
-  Toolkit.Core/      netstandard2.0, no Excel references: cycle engine, color and format
+  Modelwright.Core/  netstandard2.0, no Excel references: cycle engine, color and format
                      matching, settings schema + migrations, undo snapshot model,
                      formula reference extraction (XLParser or ClosedXML.Parser),
                      precedent-tree model
-  Toolkit.AddIn/     net48 + Excel-DNA: AutoOpen/AutoClose (key registration),
+  Modelwright.AddIn/ net48 + Excel-DNA: AutoOpen/AutoClose (key registration),
                      commands, COM adapters, ribbon XML, UndoManager,
                      trace window, settings dialog
-  Toolkit.Tests/     xUnit tests for Core (CI runs them on windows-latest)
+  Modelwright.Core.Tests/  xUnit tests for Core (CI runs them on windows-latest)
 installer/           per-user installer (no admin rights)
 test/fixtures/       fixture workbooks for manual end-to-end runs
 ```
@@ -188,6 +190,8 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
   - Parenthesized groups are `(x)` nodes, and functions are `ƒx NAME(...)` nodes.
   - A function's children are its arguments, labelled with Excel's parameter names from a **function signature table** (the top ~100 functions first).
   - Each node's value comes from `Worksheet.Evaluate(subexpression)` in the audited cell's sheet context.
+    - A node that is the whole formula shows the cell's own value instead.
+    - Not evaluated, with the reason as the value: a node that uses a LET/LAMBDA name declared outside it (or is an uncalled LAMBDA), calls a function that is not Excel's (VBA, add-in, named LAMBDA) or that reaches outside the workbook (WEBSERVICE, STOCKHISTORY, RTD, CUBE*...), refers to a closed workbook, uses the implicit-intersection `@` or a relative name, or is longer than 255 characters. `[@Col]` and unqualified table references are rewritten to the cells they mean for the audited cell; NOW/TODAY/RAND* values are marked "(volatile)".
   - A function that returns a reference (INDEX, OFFSET, INDIRECT, CHOOSE) is resolved to its target range, so you can navigate to it.
 - **How precedents are found.** Parse `Range.Formula` (invariant A1) with XLParser, which also produces the structure for v1.1. Then resolve each reference:
   - **A1 references** → `Range`.
@@ -204,9 +208,9 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
 | Up / Down | `Application.Goto` the node's range |
 | Right | Expand one level (children load only then) |
 | Left | Go up a level or collapse |
-| Enter / OK | Stay on the current cell |
-| Esc / Cancel | Return to the audited cell (confirm, open-questions A7) |
-| F2 | Edit in Point mode with the dialog open (depends on variant C) |
+| Enter / OK | Stay on the current cell (confirmed by the owner, 2026-10-08) |
+| Esc / Cancel | Return to the audited cell (confirmed by the owner, 2026-10-08) |
+| F2 | **Edit the traced reference** (confirmed, 2026-10-08): go back to the cell whose formula holds the selected reference, enter edit mode with that reference's text selected, and switch to Point mode, so the arrow keys and sheet tabs replace it. Enter commits, returns to that cell and rebuilds the tree; the window stays open. Done with keystrokes outside macro context, so Excel's own undo of the edit should survive (Macabacus loses it). Rows that are not references in a formula pass F2 to Excel unchanged. |
 | Ctrl+E | Evaluate mode (v1.1) |
 | Ctrl+Arrows / Ctrl+Home / Ctrl+End / Shift+Arrows | Move, snap and resize the dialog |
 
@@ -267,7 +271,7 @@ Delivered as three PRs:
 
 Defaults are the **Macabacus factory settings** (v9.9.5 settings export, 2026-10-06; see research/06). Binary (Ctrl+Shift+Y) and Ratio (Alt+Shift+;) cycles were added from the same source.
 - **Exit criteria:**
-  - xUnit covers the cycle engine: wrap-around, the hybrid rule, mixed selections, color normalization and "No fill". Line coverage of `Toolkit.Core` is ≥ 90%.
+  - xUnit covers the cycle engine: wrap-around, the hybrid rule, mixed selections, color normalization and "No fill". Line coverage of `Modelwright.Core` is ≥ 90%.
   - All 7 v1 cycles fire on their Macabacus keys and meet the K3 latency target.
   - **Undo scenarios pass:**
     - (a) cycle ×3 then Ctrl+Z ×3 restores the original exactly;
@@ -286,6 +290,8 @@ Defaults are the **Macabacus factory settings** (v9.9.5 settings export, 2026-10
   - When the parser reports a failure (an immediately called `LAMBDA(...)(...)`, or a stack guard tripping on a huge formula), fall back to `Range.DirectPrecedents`.
   - `Book2!Rate` is ambiguous. It can mean a sheet `Book2`, or a workbook-level name in an unsaved `Book2`. If that sheet doesn't exist, try an open workbook with that name.
   - Only INDEX, OFFSET, INDIRECT and CHOOSE are flagged as returning references (per spec). XLOOKUP, IF, IFS, SWITCH and LET can also return references, as in `=SUM(A1:XLOOKUP(...))`. Candidate for v1.1.
+- **Verified in Excel (2026-10-08/09, owner away, scratch fixtures):** cycles + undo; Trace In across sheets, names, tables, hidden sheets, paging, Enter/Esc, Last Audited Cell ×4, `OFFSET(ROW())`; closed external workbooks opened read-only from a local path and from a OneDrive/SharePoint `https://` link; F2 → Point mode → Go To the precedent → arrows replace it, Enter commits, tree rebuilds, Ctrl+Z restores (same sheet, other sheet, other workbook); Excel's own undo survives traces. After the 1.5 s warm-up a trace opens in 10–20 ms; the first cold open is ~350 ms.
+- **F2 mechanism (settled 2026-10-09 after ~20 Excel runs):** same workbook: select the reference text, F2 to Point mode, Go To the target (sheet-qualified if needed). Another workbook: the session first `Goto`s the target and then the owner (so the target's window is the previously active one), then the keys do Point mode, **Ctrl+Tab** (verified by window handle, repeated if another window came up) and a *same-window* Go To of the sheet-qualified address. Go To straight into another workbook from Point mode was unreliable (it intermittently inserts the text without switching windows, from the add-in and from external SendInput alike), while same-window Go To never failed. **Known difference:** after F2 into another workbook, Enter *without moving* leaves Excel's absolute form (`$B$3`); any arrow move writes the pointed cell in that form. Same-workbook references keep their text when re-committed without moving.
 
 ### Phase 5 — Release
 - **Contents:**
@@ -327,7 +333,7 @@ These are not v1 scope.
 | .NET runtime conflicts with other add-ins | Low (net48) / High | Target .NET Framework 4.8, not .NET 6+. |
 
 ## 7. Verification
-- **Unit tests:** xUnit on `Toolkit.Core`, run in CI.
+- **Unit tests:** xUnit on `Modelwright.Core`, run in CI.
 - **Integration tests:** a manual script against the fixture workbooks, plus an optional Excel-DNA test harness running inside Excel (ExcelDna.Testing).
 - **Performance:** timing logs in debug builds (p50/p95 per command).
 - **Records:** each test run is saved in `docs/test-runs/`.
@@ -342,6 +348,8 @@ See [`decisions/0002-excel-dna-windows-first.md`](decisions/0002-excel-dna-windo
 - 2026-09-29: Phase 2 (scaffold) approved and started on branch `phase2/scaffold`. The web colors-only edition is logged as a future development.
 - 2026-10-06: Phase 3 merged (#2, #3, #4) after owner Excel testing. The undo restore's macro-context re-check was removed (it was unreliable). Automated Excel smoke test added. Phase 4 started.
 - 2026-10-06: Phase 4a (Trace In core): formula parser on XLParser 1.7.5 (MPL-2.0) + Irony (MIT), reference extraction, formula structure, precedent tree model and audit history.
+- 2026-10-07: PR #5 (4a) merged after two review rounds (stack safety on long formulas, parser timeouts, linear memory, name and table ids). Phase 4b started; Evaluate mode split out as 4c.
+- 2026-10-08/09: Phase 4b verified in Excel (owner away; automated keystroke suites): Trace In, cross-sheet/-workbook/OneDrive navigation, F2 reference editing (Point mode + Go To; Ctrl+Tab + same-window Go To for other workbooks), Excel undo preserved. Renamed to Modelwright (D12); license PolyForm Shield 1.0.0 (ADR 0003); install scripts, release workflow and README install guide (research/08); Phase 4c Evaluate mode (Ctrl+E) implemented and verified. PR #10 open for the owner. Issues #6–#9.
 - 2026-09-28: **Phase 1 complete.** ADR-0002 accepted. D11: cross-workbook trace essential. K1c: Office.js key names work; recorded as the v2 path.
 - 2026-09-28: Undo decision (owner): Macabacus parity in v1, with the Office.js hybrid for native undo as a v2 candidate. §4.4 rewritten from spike K2/K2b/K2c.
 - 2026-09-28: Trace In spec from the Macabacus help PDF (research/07): the Argument column, Evaluate mode as v1.1, the focus/hook keyboard model, and the K4 variant C.

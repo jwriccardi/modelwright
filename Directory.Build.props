@@ -15,8 +15,8 @@
     <Company>Pegasus Technology Group LLC</Company>
     <Authors>Pegasus Technology Group LLC</Authors>
     <Copyright>Copyright (c) 2026 Pegasus Technology Group LLC</Copyright>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/jwriccardi/excel-modeling-toolkit</RepositoryUrl>
+    <PackageLicenseExpression>PolyForm-Shield-1.0.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/jwriccardi/modelwright</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
