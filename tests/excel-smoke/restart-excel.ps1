@@ -62,11 +62,14 @@ $started = Start-Process excel.exe -PassThru
 $xl = $null
 for ($i = 0; $i -lt 60; $i++) {
   Start-Sleep -Milliseconds 500
-  if ($started.HasExited) { throw "ABORT: excel.exe (process $($started.Id)) exited at once: it handed over to a running Excel ($($running -join ', ')), which this script does not attach to." }
+  # Click-to-Run's excel.exe is a launcher that may exit at once after starting the real process: that is fine when
+  # no Excel was running before (any new Excel is ours); with one already running it may have handed over to it.
+  if ($started.HasExited -and $running.Count -gt 0) { throw "ABORT: excel.exe (process $($started.Id)) exited at once: it handed over to a running Excel ($($running -join ', ')), which this script does not attach to." }
   try {
     $candidate = [Runtime.InteropServices.Marshal]::GetActiveObject('Excel.Application')
-    if ((ProcessOfExcel $candidate) -eq $started.Id -and $candidate.Ready) { $xl = $candidate; break }
+    $candidatePid = ProcessOfExcel $candidate
+    if (($candidatePid -eq $started.Id -or ($running -notcontains $candidatePid)) -and $candidate.Ready) { $xl = $candidate; $excelPid = $candidatePid; break }
   } catch { }
 }
-if (-not $xl) { throw "ABORT: the new Excel (process $($started.Id)) did not become the running Excel COM hands out within 30 s." }
-"Excel restarted: version $($xl.Version) build $($xl.Build) pid $($started.Id); workbooks: $(@($xl.Workbooks | ForEach-Object { $_.Name }) -join ', ')"
+if (-not $xl) { throw "ABORT: no new Excel became the running Excel COM hands out within 30 s (launcher process $($started.Id))." }
+"Excel restarted: version $($xl.Version) build $($xl.Build) pid $excelPid; workbooks: $(@($xl.Workbooks | ForEach-Object { $_.Name }) -join ', ')"
