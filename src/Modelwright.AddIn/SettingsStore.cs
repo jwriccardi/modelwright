@@ -64,7 +64,23 @@ internal static class SettingsStore
             Directory.CreateDirectory(File.DirectoryPath);
             foreach (var name in copy)
             {
-                System.IO.File.Copy(Path.Combine(legacyFolder, name), Path.Combine(File.DirectoryPath, name), overwrite: false);
+                // To a temporary name first, then moved into place: a copy cut short never looks like a settings file.
+                // The copy is not read-only (a read-only legacy file would make the new settings unsaveable).
+                var target = Path.Combine(File.DirectoryPath, name);
+                var temporary = target + ".migrating-" + Guid.NewGuid().ToString("N");
+                try
+                {
+                    System.IO.File.Copy(Path.Combine(legacyFolder, name), temporary, overwrite: false);
+                    System.IO.File.SetAttributes(temporary, System.IO.File.GetAttributes(temporary) & ~FileAttributes.ReadOnly);
+                    System.IO.File.Move(temporary, target);
+                }
+                finally
+                {
+                    if (System.IO.File.Exists(temporary))
+                    {
+                        System.IO.File.Delete(temporary);
+                    }
+                }
             }
 
             return $"copied {string.Join(", ", copy)} from {legacyFolder}";

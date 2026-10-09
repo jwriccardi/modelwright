@@ -1,6 +1,7 @@
 # Excel smoke test: Trace In / Last Audited Cell, driven by REAL keystrokes into the running Excel.
 # Run with Windows PowerShell 5.1 (needs Marshal.GetActiveObject), with Excel open:
-#   powershell -ExecutionPolicy Bypass -File tests/excel-smoke/trace-smoke.ps1 [-Xll <path to packed xll>]
+#   powershell -ExecutionPolicy Bypass -File tests/excel-smoke/trace-smoke.ps1 [-Xll <path to packed xll>] [-Bitness 64|32]
+# -Bitness picks the default -Xll (Modelwright64.xll or Modelwright32.xll): the one matching Excel's bitness.
 # It (re)builds the fixture first (build-trace-fixture.ps1: %TEMP%\emt-trace-fixture), opens EMT_TraceMain.xlsx and
 # checks through COM, after every key, which workbook, sheet and cell is active, and whether the Trace In window is
 # open. Covered: cross-sheet and same-sheet navigation, names, a hidden sheet (Goto refused, no error), F2 on a
@@ -24,13 +25,14 @@
 # - Before EVERY key it checks that the foreground window is a workbook window (XLMAIN) of the Excel it drives (the
 #   process is taken from Application.Hwnd), that it is Excel's active window, and that the active workbook is one of
 #   the fixture workbooks in the fixture folder; otherwise it aborts without sending the key. While Excel is editing
-#   (COM is refused then) the check is the window title: a fixture workbook's, or exactly "Go To" (this Excel's Go To
-#   dialog, which the add-in's F2 keys open and close in Point mode: a key sent then is queued behind them).
+#   (COM is refused then) the check is the window title: a fixture workbook's, or Excel's Go To dialog (titled "Go To",
+#   or in another language a dialog window of this Excel's, class bosa_sdm_*), which the add-in's F2 keys open and close
+#   in Point mode: a key sent then is queued behind them.
 # - The first step that does not end where expected aborts the run: no further key is sent. Ctrl+Z is sent only once
 #   COM shows the 777 typed in the fixture's B1 and Excel's own Undo is available (so the add-in's formatting undo
 #   cannot take the key).
-# - It records Excel's DisplayAlerts and Iteration settings and the installed state of every Modelwright64.xll (or
-#   pre-rename ModelingToolkit64-packed.xll) in the add-in list, and puts all of them back in `finally` (each on its
+# - It records Excel's DisplayAlerts and Iteration settings and the installed state of every Modelwright64.xll or
+#   Modelwright32.xll (or pre-rename ModelingToolkit64-packed.xll) in the add-in list, and puts all of them back in `finally` (each on its
 #   own), however the run ends: the add-in build under test is uninstalled again unless it was installed before, and
 #   the builds that were installed are installed again. Only the fixture workbooks (in the fixture folder) are closed, without saving.
 #   If Excel is still editing a cell then (a run that aborted in Point mode), Esc is sent first (at most three, each
@@ -38,10 +40,12 @@
 # The focus trick taps Shift (only when Excel is not already in front): an Alt tap would turn on ribbon KeyTips and
 # send the next key to the ribbon.
 param(
-    [string]$Xll = (Join-Path $PSScriptRoot '..\..\src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright64.xll'),
+    [string]$Xll = '',
+    [ValidateSet('64', '32')][string]$Bitness = '64',
     [string]$FixtureDir = (Join-Path $env:TEMP 'emt-trace-fixture')
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Xll) { $Xll = Join-Path $PSScriptRoot "..\..\src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright$Bitness.xll" }
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Text;
@@ -107,7 +111,7 @@ $fixXll = (Resolve-Path $Xll).Path
 
 # Our add-in in Excel's list: this build's name, or the name builds had before the rename to Modelwright (D12), so an
 # old build left installed is swapped out as well (both would claim the same shortcuts).
-function Is-OurXll([string]$fullName) { return ($fullName -like '*Modelwright64.xll') -or ($fullName -like '*ModelingToolkit64-packed.xll') }
+function Is-OurXll([string]$fullName) { return ($fullName -like '*Modelwright64.xll') -or ($fullName -like '*Modelwright32.xll') -or ($fullName -like '*ModelingToolkit64-packed.xll') }
 $fixtureFolder = [EmtPath]::Long($FixtureDir)
 $mainName = 'EMT_TraceMain.xlsx'
 $extName = 'EMT_TraceExternal.xlsx'
@@ -168,7 +172,7 @@ function Assert-SafeToSend([string]$what) {
   $title = [W]::TitleOf($fg)
   # The add-in's F2 keys open Excel's Go To dialog in Point mode and close it again (one SendInput batch): a key sent
   # while it shows is queued behind those keys and reaches Excel after the dialog has closed.
-  $goTo = ($title -eq 'Go To') -and (Edit-Mode)
+  $goTo = (Is-GoToDialog $fg) -and (Edit-Mode)
   if ($class -ne 'XLMAIN' -and -not $goTo) { throw "ABORT before [$what]: the foreground window is not an Excel workbook window (class $class, [$title]). No key sent." }
   if (Edit-Mode) {
     # Excel rejects every COM call while a cell is being edited, so the check is the window title: "<book> - Excel".
@@ -183,6 +187,14 @@ function Assert-SafeToSend([string]$what) {
 }
 
 function Window-Open { [W]::HasWindow([uint32]$excelPid, 'Trace In') }
+
+# True for Excel's Go To dialog: a window of this Excel's that is not a workbook window, titled "Go To" (English), or
+# of the class of Excel's dialogs (bosa_sdm_*) in any language.
+function Is-GoToDialog([IntPtr]$h) {
+  if ($h -eq [IntPtr]::Zero -or [W]::ProcessOf($h) -ne $excelPid) { return $false }
+  $class = [W]::ClassOf($h)
+  return ($class -ne 'XLMAIN') -and (([W]::TitleOf($h) -eq 'Go To') -or ($class -like 'bosa_sdm_*'))
+}
 
 # True while Excel is editing a cell: Application.Ready is false then (or the call is refused while Excel is busy).
 function Edit-Mode { try { return -not [bool]$xl.Ready } catch { return $true } }
@@ -206,7 +218,7 @@ function Wait-EditKeys([int]$synthBefore, [string]$goTo, [string]$label, [switch
   do {
     Start-Sleep -Milliseconds 200
     $synth = @(Log-Lines "`tTraceSynth`t")
-    $dialog = [W]::TitleOf([W]::GetForegroundWindow()) -eq 'Go To'
+    $dialog = Is-GoToDialog ([W]::GetForegroundWindow())
     $arrived = (-not $logOn) -or ($synth.Count -gt $synthBefore)
   } while (($dialog -or -not $arrived) -and (Get-Date) -lt $deadline)
   if ($dialog) { throw "ABORT [$label]: Excel's Go To dialog is still open (the reference was not accepted?)." }

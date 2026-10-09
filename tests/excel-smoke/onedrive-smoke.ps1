@@ -9,7 +9,8 @@
 # Run with Windows PowerShell 5.1, Excel open with the add-in loaded, nobody at the keyboard:
 #   powershell -ExecutionPolicy Bypass -File tests/excel-smoke/onedrive-smoke.ps1
 # Safety: keys go only to an Excel window of this process whose title starts with OD_ (the fixture); the first failed
-# step aborts; everything opened is closed without saving; nothing is ever saved or deleted.
+# step aborts; the fixture workbooks this run opened (and only those) are closed without saving; nothing is ever saved
+# or deleted.
 param([string]$ScratchDir = (Join-Path $env:USERPROFILE 'OneDrive - Pegasus Technology Group LLC\Modelwright-scratch'))
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -50,7 +51,7 @@ function Retry([scriptblock]$b) {
 $xl = [Runtime.InteropServices.Marshal]::GetActiveObject('Excel.Application')
 $excelPid = [W2]::ProcessOf([IntPtr]([int64]$xl.Hwnd))
 "Excel version $($xl.Version) build $($xl.Build), process $excelPid"
-$loaded = @($xl.AddIns | Where-Object { $_.FullName -like '*Modelwright64.xll' -and $_.Installed }).Count -gt 0
+$loaded = @($xl.AddIns | Where-Object { (($_.FullName -like '*Modelwright64.xll') -or ($_.FullName -like '*Modelwright32.xll')) -and $_.Installed }).Count -gt 0
 if (-not $loaded) { throw "ABORT: the add-in is not installed in this Excel; run trace-smoke.ps1 first (it installs the build)." }
 
 function Is-Fixture($book) { return ($null -ne $book) -and (@($mainName, $srcName) -contains [string]$book.Name) -and ([string]$book.FullName -like '*Modelwright-scratch*') }
@@ -88,6 +89,8 @@ function Step([string]$keys, [string]$label, [string]$book, [string]$sheet, [str
 
 $failures = New-Object System.Collections.Generic.List[string]
 $alertsBefore = $xl.DisplayAlerts
+# The workbooks open before the run (by name): `finally` never closes one of them (someone else's session).
+$openBefore = @($xl.Workbooks | ForEach-Object { [string]$_.Name })
 try {
   foreach ($open in @($xl.Workbooks)) { if (@($mainName, $srcName) -contains $open.Name) { throw "ABORT: $($open.Name) is already open ($($open.FullName)); close it first (not saved by this script)." } }
   $xl.DisplayAlerts = $false
@@ -126,6 +129,7 @@ finally {
   "--- putting Excel back ---"
   try { $xl.DisplayAlerts = $alertsBefore } catch { }
   foreach ($n in @($srcName, $mainName)) {
+    if ($openBefore -contains $n) { "Left $n open: it was open before this run"; continue }
     foreach ($open in @($xl.Workbooks)) { if ($open.Name -eq $n -and (Is-Fixture $open)) { try { $open.Close($false); "Closed $n without saving" } catch { } } }
   }
   "--- trace log lines since start ---"

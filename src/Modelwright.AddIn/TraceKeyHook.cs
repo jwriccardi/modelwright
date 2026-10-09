@@ -35,8 +35,11 @@ namespace Modelwright.AddIn;
 /// one of them arrives, the window closes, or <see cref="SynthesisTimeoutMilliseconds"/> pass. They can include the
 /// Go To step (<see cref="ReferenceEdit"/>): for a target in another workbook Ctrl+Tab (to the target's window), then
 /// F5, characters typed into Excel's Go To dialog (sent as Unicode characters, seen here as <c>VK_PACKET</c>: the
-/// dialog runs on Excel's thread, so its keys pass through this hook too) and Enter. They are sent in batches that end
-/// after Ctrl+Tab and after F5 (<see cref="ReferenceEdit.Batches"/>). The batch after Ctrl+Tab (F5) goes only once the
+/// dialog runs on Excel's thread, so its keys pass through this hook too) and Enter. The characters are not counted
+/// off: the hook is not shown each one reliably (Excel 2026-10-08), so every <c>VK_PACKET</c> passes untouched
+/// (<see cref="SyntheticKeyMatch.Ignored"/>; no keyboard sends one) and the batch they are in is over at Enter's
+/// release. The keys are sent in batches that end after Ctrl+Tab and after F5 (<see cref="ReferenceEdit.Batches"/>).
+/// The batch after Ctrl+Tab (F5) goes only once the
 /// target's window is the foreground window and Excel's thread has a keyboard focus (polled every
 /// <see cref="SwitchPollMilliseconds"/>, at most <see cref="SwitchWaitMilliseconds"/>); if Ctrl+Tab brought another
 /// workbook window to the front, Ctrl+Tab is sent again, at most once per visible workbook window. The batch after F5,
@@ -44,10 +47,15 @@ namespace Modelwright.AddIn;
 /// (polled every <see cref="GoToPollMilliseconds"/>, at most <see cref="GoToWaitMilliseconds"/>). If a wait runs out,
 /// the rest is not sent (Excel stays in Point mode, where Esc cancels). If the time runs out first, keys already sent
 /// still reach Excel: no Trace In command is taken while Excel is editing or a dialog has the focus. After such an edit,
-/// the Enter, Tab or Esc that ends it is passed to Excel and also tells the session to check the formula. Where F5, the
-/// first and last character of each Go To text and Enter landed, and which window each Ctrl+Tab brought to the front
-/// (the foreground window and the focused window's class as the hook saw them) is logged as one
-/// <c>TraceSynthKeys</c> line.
+/// the Enter, Tab or Esc that ends it is passed to Excel and also tells the session to check the formula; a press while
+/// Excel is ready again with no such key seen (the formula bar's Cancel button ended the edit, say) ends it where Excel
+/// is. The keys carry a tag (<c>KEYBDINPUT.dwExtraInfo</c>, read back with <c>GetMessageExtraInfo</c>), so once the
+/// hook has seen it a press without it is never counted off as one of them; nor is an untagged auto-repeat; and the
+/// user's keys queued before a batch (an F2 still held, a key rolled over after it, Esc) are handled as usual without
+/// ending the sequence (<see cref="SyntheticKeyMatch.Foreign"/>). The first batch goes from a timer, once the user has
+/// let go of F2 and the modifiers (Windows delivers a timer only when no input is waiting, so the user's keys come
+/// first). Where F5 and Enter landed, and which window each Ctrl+Tab brought to the front (the foreground window and
+/// the focused window's class as the hook saw them) is logged as one <c>TraceSynthKeys</c> line.
 /// </para>
 /// <para>
 /// <b>Coexistence with <see cref="UndoKeyHook"/>.</b> Both are thread hooks on the same thread. Windows calls the
@@ -101,6 +109,9 @@ internal static class TraceKeyHook
     /// <summary>How long <see cref="Send"/> waits, at most, for the user to let go of F2 and the modifiers.</summary>
     private const int ReleaseWaitMilliseconds = 1000;
 
+    /// <summary>How often, while <see cref="Send"/> waits for the user to let go of F2 and the modifiers, the hook checks.</summary>
+    private const int ReleasePollMilliseconds = 10;
+
     /// <summary>How often, while a batch waits for the Go To dialog, the hook checks whether it has the focus.</summary>
     private const int GoToPollMilliseconds = 20;
 
@@ -113,8 +124,17 @@ internal static class TraceKeyHook
     /// <summary>How long, at most, the batch after Ctrl+Tab waits for the target's window.</summary>
     private const int SwitchWaitMilliseconds = 1500;
 
-    /// <summary>The title of Excel's Go To dialog (F5).</summary>
+    /// <summary>
+    /// The title of Excel's Go To dialog (F5) in English: a fast check. In other languages the dialog is the new
+    /// top-level window of Excel's thread that F5 brought to the front (see <see cref="GoToHasFocus"/>).
+    /// </summary>
     private const string GoToTitle = "Go To";
+
+    /// <summary>
+    /// The tag every key <see cref="Send"/> sends carries (<c>KEYBDINPUT.dwExtraInfo</c>; "MWKY"), which
+    /// <c>GetMessageExtraInfo</c> returns while the hook handles it.
+    /// </summary>
+    private static readonly IntPtr InjectedTag = new IntPtr(0x4D574B59);
 
     /// <summary>The most keys the <c>TraceSynthKeys</c> line describes, and the most characters of a window title in it.</summary>
     private const int MaxProbes = 16;
@@ -158,11 +178,28 @@ internal static class TraceKeyHook
     private static long _syntheticSent;
     private static Timer? _syntheticTimer;
 
-    // The batches of those keys (ReferenceEdit.Batches), how many batches and keys have been sent, and the timer that
-    // sends the next batch once the Go To dialog has the focus (until _gateUntil, a Stopwatch timestamp).
+    // Before the first batch: the timer that sends it once the user has let go of F2 and the modifiers (until
+    // _releaseUntil, a Stopwatch timestamp), whether the hook has seen F2's key-up since, the window the keys must go to
+    // (zero: any workbook window), and who to tell if they cannot go after all.
+    private static Timer? _releaseTimer;
+    private static long _releaseUntil;
+    private static bool _f2UpSeen;
+    private static IntPtr _sendWindow;
+    private static Action<string>? _sendFailed;
+
+    // Whether a key carrying InjectedTag has ever been seen (from then on a key without it is not one of ours), and how
+    // many of the current keys arrived with it.
+    private static bool _tagSeen;
+    private static int _taggedKeys;
+
+    // The visible top-level windows of Excel's thread just before F5 was sent: the Go To dialog is a new one.
+    private static List<IntPtr> _windowsBeforeGoTo = new List<IntPtr>();
+
+    // The batches of those keys (ReferenceEdit.Batches), how many batches have been sent (how many keys: the
+    // tracker's Sent), and the timer that sends the next batch once the Go To dialog has the focus (until _gateUntil, a
+    // Stopwatch timestamp).
     private static IReadOnlyList<IReadOnlyList<SyntheticKey>>? _batches;
     private static int _batchesSent;
-    private static int _keysSent;
     private static Timer? _gateTimer;
     private static long _gateUntil;
 
@@ -172,8 +209,8 @@ internal static class TraceKeyHook
     private static IntPtr _switchFrom;
     private static int _ctrlTabs;
 
-    // For each sent key, its name in the TraceSynthKeys line if where it lands is logged (else null); the line's
-    // entries so far are in Probes.
+    // For each sent key counted off, its name in the TraceSynthKeys line if where it lands is logged (else null); the
+    // line's entries so far are in Probes.
     private static string?[] _probeNames = new string?[0];
 
     /// <summary>True while the hook is installed.</summary>
@@ -326,12 +363,15 @@ internal static class TraceKeyHook
     /// Sends <paramref name="keys"/> to Excel as if typed (one <c>SendInput</c> batch per <see cref="ReferenceEdit.Batches"/>
     /// batch, so none of the user's keys come in between; a batch after Ctrl+Tab once <paramref name="switchTo"/>, the
     /// target's window, is in front; a batch after F5 once the Go To dialog has the focus), with the hook passing them
-    /// untouched as they arrive (see the remarks). Waits first, up to <see cref="ReleaseWaitMilliseconds"/>, for the
-    /// user to let go of F2, Shift, Ctrl and Alt, so a held key does not change what the keys do. Only to an Excel
-    /// workbook window in the foreground (<paramref name="window"/>, if given), and only while the hook is installed.
-    /// Returns false, with the reason in <paramref name="failure"/>, if nothing was sent. Main thread, outside the hook.
+    /// untouched as they arrive (see the remarks). The first batch goes from a timer, once the user has let go of F2
+    /// (the hook has seen its key-up, or Windows says it is up) and of Shift, Ctrl and Alt, so a held key does not
+    /// change what the keys do; if that takes more than <see cref="ReleaseWaitMilliseconds"/>, or Excel's window is no
+    /// longer in front then, nothing is sent and <paramref name="failed"/> is told why. Only to an Excel workbook window
+    /// in the foreground (<paramref name="window"/>, if given), and only while the hook is installed. Returns false,
+    /// with the reason in <paramref name="failure"/>, if nothing will be sent. Main thread, outside the hook.
     /// </summary>
-    internal static bool Send(IReadOnlyList<SyntheticKey> keys, out string failure, IntPtr window = default, IntPtr switchTo = default)
+    internal static bool Send(
+        IReadOnlyList<SyntheticKey> keys, out string failure, IntPtr window = default, IntPtr switchTo = default, Action<string>? failed = null)
     {
         failure = string.Empty;
         if (!IsInstalled || _poster is null)
@@ -340,51 +380,122 @@ internal static class TraceKeyHook
             return false;
         }
 
-        var waited = Stopwatch.StartNew();
-        while (IsHeld(VkF2) || IsHeld(VkShift) || IsHeld(VkControl) || IsHeld(VkMenu))
+        failure = ForegroundFailure(window, out _) ?? string.Empty;
+        if (failure.Length > 0)
         {
-            if (waited.ElapsedMilliseconds > ReleaseWaitMilliseconds)
-            {
-                failure = "a key is still held down (F2, Shift, Ctrl or Alt)";
-                return false;
-            }
-
-            System.Threading.Thread.Sleep(10);
-        }
-
-        var foreground = NativeMethods.GetForegroundWindow();
-        if (!IsExcelWorkbookWindow(foreground))
-        {
-            failure = "Excel's workbook window is not in front";
-            return false;
-        }
-
-        if (window != IntPtr.Zero && !SameWindow(foreground, window))
-        {
-            failure = "the edited cell's workbook window is not in front";
             return false;
         }
 
         EndSynthesis("replaced by new keys");
-        _synthetic = new SyntheticKeyTracker(keys);
-        _syntheticSent = Stopwatch.GetTimestamp();
-        _batches = ReferenceEdit.Batches(keys);
-        _batchesSent = 0;
-        _keysSent = 0;
-        _probeNames = ProbeNames(keys);
-        _switchTo = switchTo;
-        _switchFrom = foreground;
-        _ctrlTabs = 0;
-        Probes.Clear();
-
-        var sendFailure = SendBatch();
-        if (sendFailure is not null)
+        try
         {
-            failure = sendFailure;
+            _synthetic = new SyntheticKeyTracker(keys, sentInBatches: true);
+            _syntheticSent = Stopwatch.GetTimestamp();
+            _batches = ReferenceEdit.Batches(keys);
+            _batchesSent = 0;
+            _taggedKeys = 0;
+            _probeNames = ProbeNames(keys);
+            _switchTo = switchTo;
+            _switchFrom = IntPtr.Zero;
+            _ctrlTabs = 0;
+            _sendWindow = window;
+            _sendFailed = failed;
+            _f2UpSeen = false;
+            Probes.Clear();
+
+            _releaseUntil = Stopwatch.GetTimestamp() + (ReleaseWaitMilliseconds * Stopwatch.Frequency / 1000);
+            var timer = new Timer { Interval = ReleasePollMilliseconds };
+            timer.Tick += (sender, e) => ReleaseTick();
+            timer.Start();
+            _releaseTimer = timer;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            failure = "the keys could not be scheduled: " + ex.Message;
+            _sendFailed = null;
+            EndSynthesis("not sent: " + failure);
             return false;
         }
+    }
 
-        return true;
+    // Why keys cannot go to Excel now (Excel's workbook window, window if given, is not the foreground window), or null;
+    // the foreground window in foreground.
+    private static string? ForegroundFailure(IntPtr window, out IntPtr foreground)
+    {
+        foreground = NativeMethods.GetForegroundWindow();
+        if (!IsExcelWorkbookWindow(foreground))
+        {
+            return "Excel's workbook window is not in front";
+        }
+
+        if (window != IntPtr.Zero && !SameWindow(foreground, window))
+        {
+            return "the edited cell's workbook window is not in front";
+        }
+
+        return null;
+    }
+
+    // The timer before the first batch: sends it once the user has let go of F2 (the hook saw its key-up, or Windows
+    // says it is up) and of Shift, Ctrl and Alt. A timer message comes only when no input is waiting, so the user's keys
+    // typed before (F2's auto-repeats and key-up, a key rolled over after it) have reached the hook by then. Gives up
+    // after ReleaseWaitMilliseconds. Never throws.
+    private static void ReleaseTick()
+    {
+        var failed = _sendFailed;
+        try
+        {
+            if (_synthetic is null)
+            {
+                StopTimer(ref _releaseTimer);
+                return;
+            }
+
+            var f2Up = _f2UpSeen || !IsHeld(VkF2);
+            if (!f2Up || IsHeld(VkShift) || IsHeld(VkControl) || IsHeld(VkMenu))
+            {
+                if (Stopwatch.GetTimestamp() >= _releaseUntil)
+                {
+                    FailSend("a key is still held down (F2, Shift, Ctrl or Alt)", failed);
+                }
+
+                return;
+            }
+
+            StopTimer(ref _releaseTimer);
+            _sendFailed = null;
+            var failure = ForegroundFailure(_sendWindow, out var foreground);
+            if (failure is null)
+            {
+                _switchFrom = foreground;
+                failure = SendBatch();
+            }
+
+            if (failure is not null)
+            {
+                FailSend(failure, failed);
+            }
+        }
+        catch (Exception ex)
+        {
+            FailSend("sending failed: " + ex.Message, failed);
+        }
+    }
+
+    // The first batch could not go: ends the synthesis (if SendBatch has not) and tells Send's caller why. Never throws.
+    private static void FailSend(string failure, Action<string>? failed)
+    {
+        _sendFailed = null;
+        EndSynthesis("not sent: " + failure);
+        try
+        {
+            failed?.Invoke(failure);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("TraceHook", "send failure handler failed", ex.Message);
+        }
     }
 
     // Sends the next batch (one SendInput call, so none of the user's keys come in between) and restarts the timeout;
@@ -393,22 +504,31 @@ internal static class TraceKeyHook
     private static string? SendBatch()
     {
         var batches = _batches;
-        if (_synthetic is null || batches is null || _batchesSent >= batches.Count)
+        var synthetic = _synthetic;
+        if (synthetic is null || batches is null || _batchesSent >= batches.Count)
         {
             return "nothing to send";
         }
 
         var batch = batches[_batchesSent];
         _batchesSent++;
+        var gated = _batchesSent < batches.Count;
+        var switching = gated && ReferenceEdit.EndsWithCtrlTab(batch);
+        if (gated && !switching)
+        {
+            // The batch ends with F5: the Go To dialog will be a window that is not there yet.
+            _windowsBeforeGoTo = VisibleThreadWindows();
+        }
+
+        synthetic.Sending(batch);
         var failure = SendKeys(batch);
         if (failure is not null)
         {
             return failure;
         }
 
-        if (_batchesSent < batches.Count)
+        if (gated)
         {
-            var switching = ReferenceEdit.EndsWithCtrlTab(batch);
             _gateUntil = Stopwatch.GetTimestamp() + ((switching ? SwitchWaitMilliseconds : GoToWaitMilliseconds) * Stopwatch.Frequency / 1000);
             var gate = new Timer { Interval = switching ? SwitchPollMilliseconds : GoToPollMilliseconds };
             if (switching)
@@ -443,7 +563,6 @@ internal static class TraceKeyHook
         timer.Start();
         _syntheticTimer = timer;
 
-        _keysSent += keys.Count;
         var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(NativeMethods.Input)));
         if (sent != inputs.Length)
         {
@@ -472,7 +591,7 @@ internal static class TraceKeyHook
                 return;
             }
 
-            if (synthetic.Seen >= _keysSent)
+            if (synthetic.Seen >= synthetic.Sent)
             {
                 var foreground = NativeMethods.GetForegroundWindow();
                 var info = new NativeMethods.GuiThreadInfo { Size = Marshal.SizeOf(typeof(NativeMethods.GuiThreadInfo)) };
@@ -495,7 +614,7 @@ internal static class TraceKeyHook
                     var ctrlTab = ReferenceEdit.CtrlTab;
                     synthetic.InsertNext(ctrlTab);
                     var names = new List<string?>(_probeNames);
-                    names.InsertRange(_keysSent, new string?[ctrlTab.Count]);
+                    names.InsertRange(synthetic.Seen, new string?[ctrlTab.Count]);
                     _probeNames = names.ToArray();
                     SendKeys(ctrlTab);
                     return;
@@ -511,7 +630,7 @@ internal static class TraceKeyHook
                     SwitchWaitMilliseconds,
                     _ctrlTabs,
                     synthetic.Seen,
-                    _keysSent,
+                    synthetic.Sent,
                     WhereKeysGo()));
             }
         }
@@ -521,8 +640,12 @@ internal static class TraceKeyHook
         }
     }
 
-    // Window handles are 32-bit values (Window.Hwnd is an Int32).
-    private static bool SameWindow(IntPtr a, IntPtr b) => (a.ToInt64() & 0xFFFFFFFFL) == (b.ToInt64() & 0xFFFFFFFFL);
+    /// <summary>
+    /// True if two window handles name the same window. Window handles are 32-bit values, and Excel's
+    /// <c>Window.Hwnd</c> is an Int32, which a 64-bit handle with the high bit set would come back sign-extended from:
+    /// so compare a handle from Excel with a native one this way, never with <c>==</c>.
+    /// </summary>
+    internal static bool SameWindow(IntPtr a, IntPtr b) => (a.ToInt64() & 0xFFFFFFFFL) == (b.ToInt64() & 0xFFFFFFFFL);
 
     // The number of visible workbook windows (XLMAIN) on Excel's thread: how many windows Ctrl+Tab can cycle through.
     private static int WorkbookWindowCount()
@@ -554,7 +677,7 @@ internal static class TraceKeyHook
                 return;
             }
 
-            if (synthetic.Seen >= _keysSent && GoToHasFocus())
+            if (synthetic.Seen >= synthetic.Sent && GoToHasFocus())
             {
                 StopTimer(ref _gateTimer);
                 SendBatch();
@@ -568,7 +691,7 @@ internal static class TraceKeyHook
                     "the Go To dialog did not get the focus within {0} ms (keys arrived={1}/{2}; foreground={3}): the rest was not sent",
                     GoToWaitMilliseconds,
                     synthetic.Seen,
-                    _keysSent,
+                    synthetic.Sent,
                     WhereKeysGo()));
             }
         }
@@ -578,22 +701,71 @@ internal static class TraceKeyHook
         }
     }
 
-    // True if the foreground window is a visible top-level window titled Go To on Excel's thread, and the keyboard
-    // focus on that thread is in it.
+    // True if the foreground window is Excel's Go To dialog and the keyboard focus on Excel's thread is in it. The
+    // dialog is a visible top-level window on Excel's thread that is not a workbook window (XLMAIN), and either is
+    // titled Go To (English Excel: the fast check) or was not there before F5 was sent (any language: the title is
+    // translated). Which check matched, and the dialog's class, is a TraceSynthKeys entry.
     private static bool GoToHasFocus()
     {
         var foreground = NativeMethods.GetForegroundWindow();
         if (foreground == IntPtr.Zero || !NativeMethods.IsWindowVisible(foreground) ||
             NativeMethods.GetAncestor(foreground, GaRoot) != foreground ||
-            NativeMethods.GetWindowThreadProcessId(foreground, out _) != _thread ||
-            !string.Equals(WindowTitle(foreground), GoToTitle, StringComparison.Ordinal))
+            NativeMethods.GetWindowThreadProcessId(foreground, out _) != _thread)
+        {
+            return false;
+        }
+
+        var windowClass = ClassOf(foreground);
+        if (string.Equals(windowClass, WorkbookWindowClass, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var byTitle = string.Equals(WindowTitle(foreground), GoToTitle, StringComparison.Ordinal);
+        if (!byTitle && _windowsBeforeGoTo.Contains(foreground))
         {
             return false;
         }
 
         var info = new NativeMethods.GuiThreadInfo { Size = Marshal.SizeOf(typeof(NativeMethods.GuiThreadInfo)) };
-        return NativeMethods.GetGUIThreadInfo(_thread, ref info) && info.Focus != IntPtr.Zero &&
+        var focused = NativeMethods.GetGUIThreadInfo(_thread, ref info) && info.Focus != IntPtr.Zero &&
             (info.Focus == foreground || NativeMethods.IsChild(foreground, info.Focus));
+        if (focused)
+        {
+            AddProbe("GoTo=" + (byTitle ? "title" : "new window") + "/" + windowClass);
+        }
+
+        return focused;
+    }
+
+    // The visible top-level windows of Excel's thread. Never throws.
+    private static List<IntPtr> VisibleThreadWindows()
+    {
+        var windows = new List<IntPtr>();
+        try
+        {
+            NativeMethods.EnumThreadWindows(_thread, (window, data) =>
+            {
+                if (NativeMethods.IsWindowVisible(window))
+                {
+                    windows.Add(window);
+                }
+
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch (Exception)
+        {
+            // None known: only the title then identifies the Go To dialog.
+        }
+
+        return windows;
+    }
+
+    private static string ClassOf(IntPtr window)
+    {
+        var name = new StringBuilder(64);
+        return NativeMethods.GetClassName(window, name, name.Capacity) > 0 ? name.ToString() : string.Empty;
     }
 
     // "[title]/CLASS": the foreground window's title (shortened) and the class of the window with the keyboard focus
@@ -635,36 +807,22 @@ internal static class TraceKeyHook
         return NativeMethods.InternalGetWindowText(window, text, text.Capacity) > 0 ? text.ToString() : string.Empty;
     }
 
-    // The keys whose landing the TraceSynthKeys line records: each F5 and Enter press, and the first and last
-    // character typed of each Go To text (presses).
+    // For each key counted off (typed characters are not: see SyntheticKeyTracker), its name in the TraceSynthKeys
+    // line if its landing is recorded: each F5 and Enter press.
     private static string?[] ProbeNames(IReadOnlyList<SyntheticKey> keys)
     {
-        var names = new string?[keys.Count];
-        for (var i = 0; i < keys.Count; i++)
+        var names = new List<string?>(keys.Count);
+        foreach (var key in keys)
         {
-            var key = keys[i];
-            if (key.KeyUp)
+            if (key.IsCharacter)
             {
                 continue;
             }
 
-            if (key.IsCharacter)
-            {
-                var first = i == 0 || !keys[i - 1].IsCharacter;
-                var last = i + 2 >= keys.Count || !keys[i + 2].IsCharacter;
-                names[i] = first || last ? "'" + key.Character + "'" : null;
-            }
-            else if (key.VirtualKey == VkF5)
-            {
-                names[i] = "F5";
-            }
-            else if (key.VirtualKey == VkReturn)
-            {
-                names[i] = "Enter";
-            }
+            names.Add(key.KeyUp ? null : key.VirtualKey == VkF5 ? "F5" : key.VirtualKey == VkReturn ? "Enter" : null);
         }
 
-        return names;
+        return names.ToArray();
     }
 
     // Stops and disposes a timer. Never throws.
@@ -752,14 +910,19 @@ internal static class TraceKeyHook
         }
 
         _synthetic = null;
+        _sendFailed = null;
+        StopTimer(ref _releaseTimer);
         StopTimer(ref _syntheticTimer);
         StopTimer(ref _gateTimer);
         var batches = _batches?.Count ?? 0;
         _batches = null;
+        _windowsBeforeGoTo = new List<IntPtr>();
         var fields = new[]
         {
             how,
             "keys=" + synthetic.Seen.ToString(CultureInfo.InvariantCulture) + "/" + synthetic.Count.ToString(CultureInfo.InvariantCulture),
+            "typed=" + synthetic.Typed.ToString(CultureInfo.InvariantCulture),
+            "tagged=" + _taggedKeys.ToString(CultureInfo.InvariantCulture),
             "batches=" + _batchesSent.ToString(CultureInfo.InvariantCulture) + "/" + batches.ToString(CultureInfo.InvariantCulture),
             "ms=" + ((Stopwatch.GetTimestamp() - _syntheticSent) * 1000.0 / Stopwatch.Frequency).ToString("0.0", CultureInfo.InvariantCulture),
         };
@@ -786,6 +949,22 @@ internal static class TraceKeyHook
 
             DiagnosticsLog.Write("TraceSynth", fields);
         }
+    }
+
+    // In the hook, for a sent key it has just seen: counts its tag (logging once if the first key came without it: the
+    // hook then matches by key alone), and where it landed, if the TraceSynthKeys line records it.
+    private static void Arrived(SyntheticKeyTracker synthetic, bool tagged)
+    {
+        if (tagged)
+        {
+            _taggedKeys++;
+        }
+        else if (synthetic.Seen == 1)
+        {
+            Log("TraceSynth", "the first key arrived without the tag (GetMessageExtraInfo): matching by key alone");
+        }
+
+        Probe(synthetic.Seen - 1);
     }
 
     // In the hook, for a sent key it has just seen (index): where it landed, if the TraceSynthKeys line records it.
@@ -833,6 +1012,7 @@ internal static class TraceKeyHook
                     {
                         ScanCode = key.Character,
                         Flags = KeyEventFUnicode | (key.KeyUp ? KeyEventFKeyUp : 0),
+                        ExtraInfo = InjectedTag,
                     },
                 },
             };
@@ -851,6 +1031,7 @@ internal static class TraceKeyHook
                     VirtualKey = (ushort)key.VirtualKey,
                     ScanCode = (ushort)NativeMethods.MapVirtualKey((uint)key.VirtualKey, 0),
                     Flags = (key.KeyUp ? KeyEventFKeyUp : 0) | (extended ? KeyEventFExtendedKey : 0),
+                    ExtraInfo = InjectedTag,
                 },
             },
         };
@@ -866,23 +1047,44 @@ internal static class TraceKeyHook
         _inProc = true;
         try
         {
-            // Keys we sent (Send): passed untouched until the last one. A stray release is handled as usual below;
-            // any other press ends them and is handled as usual.
+            // Keys we sent (Send): passed untouched until the last one. A stray release, and the user's press queued
+            // before the batch, are handled as usual below; any other press ends them and is handled as usual. Only a
+            // key with our tag is one of ours, once the tag has been seen at all (else the key alone decides). A typed
+            // character (VK_PACKET) is never counted off (SyntheticKeyMatch.Ignored): it passes untouched.
             if (code == HcAction && _synthetic is SyntheticKeyTracker synthetic)
             {
                 var key = wParam.ToInt32();
-                var keyUp = (lParam.ToInt64() & 0x80000000L) != 0;
-                switch (synthetic.Observe(key, keyUp))
+                if (key == SyntheticKey.VkPacket)
+                {
+                    return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
+                }
+
+                var flags = lParam.ToInt64();
+                var keyUp = (flags & 0x80000000L) != 0;
+                var tagged = NativeMethods.GetMessageExtraInfo() == InjectedTag;
+                _tagSeen |= tagged;
+
+                // A key carrying our tag is ours whatever its repeat bit. The repeat rule guards the untagged
+                // fallback only.
+                var repeat = !tagged && (flags & 0x40000000L) != 0;
+                if (key == VkF2 && keyUp && _releaseTimer is not null)
+                {
+                    _f2UpSeen = true;
+                }
+
+                // Presses only: a key-up matched by its key alone cannot take a user's keystroke (no command acts on
+                // a release).
+                switch (synthetic.Observe(key, keyUp, repeat, foreign: !keyUp && _tagSeen && !tagged))
                 {
                     case SyntheticKeyMatch.Expected:
-                        Probe(synthetic.Seen - 1);
+                        Arrived(synthetic, tagged);
                         return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
                     case SyntheticKeyMatch.Completed:
-                        Probe(synthetic.Seen - 1);
+                        Arrived(synthetic, tagged);
                         EndSynthesis("complete");
                         return NativeMethods.CallNextHookEx(_hook, code, wParam, lParam);
                     case SyntheticKeyMatch.Unexpected:
-                        EndSynthesis("ended by another key (0x" + key.ToString("X2", CultureInfo.InvariantCulture) + ")");
+                        EndSynthesis("ended by another key (0x" + key.ToString("X2", CultureInfo.InvariantCulture) + (tagged ? ", tagged" : string.Empty) + ")");
                         break;
                 }
             }
@@ -959,10 +1161,20 @@ internal static class TraceKeyHook
                     _swallowedKey = 0;
                     var modifiers = Modifiers();
 
-                    // The key that ends an F2 edit goes to Excel (below); after it the session checks the formula.
-                    if (session.AwaitsEditEnd && TraceKeys.EndsEdit(key, modifiers) && Context() == TraceKeyContext.Editing)
+                    // The key that ends an F2 edit goes to Excel (below); after it the session checks the formula. A
+                    // press once Excel is ready again, with no keys of ours in flight, means the edit ended otherwise
+                    // (the formula bar's Cancel button, say): it ends there, without going back to the edited cell.
+                    if (session.AwaitsEditEnd)
                     {
-                        session.Enqueue(() => session.EndEdit(goBack: true, "key"));
+                        var editContext = Context();
+                        if (TraceKeys.EndsEdit(key, modifiers) && editContext == TraceKeyContext.Editing)
+                        {
+                            session.Enqueue(() => session.EndEdit(goBack: true, "key"));
+                        }
+                        else if (TraceKeys.EditEndedElsewhere(true, _synthetic is not null, editContext))
+                        {
+                            session.Enqueue(() => session.EndEdit(goBack: false, "edit ended elsewhere"));
+                        }
                     }
 
                     var command = TraceKeys.Command(key, modifiers);
@@ -1009,7 +1221,7 @@ internal static class TraceKeyHook
     {
         var pressed = Stopwatch.GetTimestamp();
         var focusRoot = FocusRoot();
-        if (focusRoot != IntPtr.Zero && focusRoot != session.OwnerHandle && !session.Enqueue(() => session.Follow(focusRoot)))
+        if (focusRoot != IntPtr.Zero && !SameWindow(focusRoot, session.OwnerHandle) && !session.Enqueue(() => session.Follow(focusRoot)))
         {
             return false;
         }
@@ -1044,7 +1256,7 @@ internal static class TraceKeyHook
     private static bool CanFollowFocus(TraceSession session)
     {
         var root = FocusRoot();
-        return root != IntPtr.Zero && root != session.OwnerHandle;
+        return root != IntPtr.Zero && !SameWindow(root, session.OwnerHandle);
     }
 
     /// <summary>Whether Excel can hand keys to Trace In now (see the remarks). Never throws.</summary>
@@ -1153,6 +1365,10 @@ internal static class TraceKeyHook
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
+
+        // The extra information of the message being retrieved: for a key from SendInput, its dwExtraInfo.
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetMessageExtraInfo();
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetFocus();

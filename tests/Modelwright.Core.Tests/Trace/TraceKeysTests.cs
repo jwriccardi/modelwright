@@ -136,6 +136,17 @@ public class TraceKeysTests
         Assert.Equal(ends, TraceKeys.EndsEdit(key, modifiers));
     }
 
+    [Theory]
+    [InlineData(true, false, TraceKeyContext.Ready, true)]
+    [InlineData(true, false, TraceKeyContext.Editing, false)]
+    [InlineData(true, false, TraceKeyContext.Elsewhere, false)]
+    [InlineData(true, true, TraceKeyContext.Ready, false)]
+    [InlineData(false, false, TraceKeyContext.Ready, false)]
+    public void An_F2_edit_ended_elsewhere_once_Excel_is_ready_and_no_keys_are_in_flight(bool awaits, bool synthesizing, TraceKeyContext context, bool ended)
+    {
+        Assert.Equal(ended, TraceKeys.EditEndedElsewhere(awaits, synthesizing, context));
+    }
+
     [Fact]
     public void Enter_stays_and_escape_returns_to_the_audited_cell()
     {

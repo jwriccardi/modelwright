@@ -94,54 +94,125 @@ public enum SyntheticKeyMatch
 
     /// <summary>A press that is not the next key (the user typed): the sequence is over; handle the key as usual.</summary>
     Unexpected,
+
+    /// <summary>
+    /// A press that is not one of ours and came before any key of the batch sent last (the user's key, queued before
+    /// it: an auto-repeat of the F2 that started the sequence, a key rolled over after it, Esc): <c>SendInput</c>
+    /// inserts a batch whole, so this key is not inside it. Handle the key as usual; the sequence goes on.
+    /// </summary>
+    Foreign,
+
+    /// <summary>
+    /// A typed character (<see cref="SyntheticKey.VkPacket"/>): never counted off, since the hook is not shown each one
+    /// reliably (a release may come without the tag, a press may never come), nor told which character it is. A
+    /// keyboard never sends one (only <c>SendInput</c>, an IME or an on-screen keyboard), so pass it to Excel
+    /// untouched; the sequence goes on.
+    /// </summary>
+    Ignored,
 }
 
 /// <summary>
 /// The keys the add-in has sent to Excel (with <c>SendInput</c>) and the Trace In key hook has not yet seen. While a
 /// sequence is in flight the hook passes its keys to Excel untouched, although some are Trace In keys (F2, Right,
 /// Shift+Right) and arrive before Excel is editing; it stops at the sequence's last key, or at the first press that
-/// is not the next one (see <see cref="SyntheticKeyMatch"/>). A typed character arrives as
-/// <see cref="SyntheticKey.VkPacket"/> (the hook is not told which character), so it is matched by that key and
-/// whether it is a press or release. <c>SendInput</c> inserts a batch into the input stream
-/// without the user's keys in between, so the sequence arrives whole, but a release the user made just before can
-/// still be ahead of it.
+/// is not the next one once a key of the batch sent last has arrived (see <see cref="SyntheticKeyMatch"/>). Typed
+/// characters are sent but never tracked: the keys counted off are the sequence's other keys, in order, and a
+/// <see cref="SyntheticKey.VkPacket"/> the hook sees is <see cref="SyntheticKeyMatch.Ignored"/> (so a batch of
+/// characters and Enter is over at Enter's release). <c>SendInput</c> inserts a batch into the input stream without
+/// the user's keys in between, so the batch arrives whole, but the user's keys queued before it (a release, an
+/// auto-repeat of a held key, a key rolled over after F2) are still ahead of it: a press before the batch's first key
+/// is <see cref="SyntheticKeyMatch.Foreign"/>, and an auto-repeat (or a key the hook knows is not ours: see
+/// <see cref="Observe"/>) is never taken for one of the sequence's keys.
 /// </summary>
 /// <remarks>Not thread-safe: the hook's thread (Excel's main thread).</remarks>
 public sealed class SyntheticKeyTracker
 {
+    // The keys counted off: the sequence's keys that are not typed characters.
     private readonly List<SyntheticKey> _expected;
     private int _next;
 
-    /// <summary>Starts waiting for <paramref name="expected"/>, in order.</summary>
+    // How many of the expected keys have been sent, and where the batch sent last starts.
+    private int _sent;
+    private int _batchStart;
+
+    /// <summary>
+    /// Starts waiting for the keys of <paramref name="expected"/> that are not typed characters, in order: sent at
+    /// once, as one batch, unless <paramref name="sentInBatches"/> (each batch then counts once <see cref="Sending"/>
+    /// says it goes).
+    /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="expected"/> is null.</exception>
-    /// <exception cref="ArgumentException"><paramref name="expected"/> is empty.</exception>
-    public SyntheticKeyTracker(IReadOnlyList<SyntheticKey> expected)
+    /// <exception cref="ArgumentException"><paramref name="expected"/> has no key that is not a typed character.</exception>
+    public SyntheticKeyTracker(IReadOnlyList<SyntheticKey> expected, bool sentInBatches = false)
     {
         if (expected is null)
         {
             throw new ArgumentNullException(nameof(expected));
         }
 
-        if (expected.Count == 0)
+        _expected = Tracked(expected, out var typed);
+        if (_expected.Count == 0)
         {
-            throw new ArgumentException("A sequence has at least one key.", nameof(expected));
+            throw new ArgumentException("A sequence has at least one key that is not a typed character.", nameof(expected));
         }
 
-        _expected = new List<SyntheticKey>(expected);
+        if (!sentInBatches)
+        {
+            _sent = _expected.Count;
+            Typed = typed;
+        }
     }
 
-    /// <summary>The number of keys in the sequence.</summary>
+    /// <summary>The number of keys in the sequence that are counted off (not typed characters).</summary>
     public int Count => _expected.Count;
 
-    /// <summary>The number of the sequence's keys seen so far.</summary>
+    /// <summary>The number of the keys counted off seen so far.</summary>
     public int Seen => _next;
+
+    /// <summary>The number of the keys counted off sent so far.</summary>
+    public int Sent => _sent;
+
+    /// <summary>The number of characters typed (presses) in the keys sent so far: sent, never counted off.</summary>
+    public int Typed { get; private set; }
 
     /// <summary>True once the last key has been seen, or a key that ends the sequence early.</summary>
     public bool IsOver { get; private set; }
 
     /// <summary>
-    /// Expects <paramref name="keys"/> next, before the rest of the sequence: keys sent in between, once every key
-    /// sent so far has been seen (an extra Ctrl+Tab while waiting for a window, say).
+    /// The next keys of the sequence, <paramref name="batch"/>, go now, as one batch (call it before
+    /// <c>SendInput</c>): until the first of them that is counted off arrives, a press that is not one of them is
+    /// <see cref="SyntheticKeyMatch.Foreign"/>. Its typed characters only add to <see cref="Typed"/>.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="batch"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="batch"/> has no key that is not a typed character, or more such keys than are left.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">The sequence is over.</exception>
+    public void Sending(IReadOnlyList<SyntheticKey> batch)
+    {
+        if (batch is null)
+        {
+            throw new ArgumentNullException(nameof(batch));
+        }
+
+        var count = Tracked(batch, out var typed).Count;
+        if (count < 1 || count > _expected.Count - _sent)
+        {
+            throw new ArgumentException("A batch has at least one key that is not a typed character, and no more than are left.", nameof(batch));
+        }
+
+        if (IsOver)
+        {
+            throw new InvalidOperationException("The sequence is over.");
+        }
+
+        _batchStart = _sent;
+        _sent += count;
+        Typed += typed;
+    }
+
+    /// <summary>
+    /// Expects <paramref name="keys"/> next, before the rest of the sequence, sent now as a batch of their own: keys
+    /// sent in between, once every key sent so far has been seen (an extra Ctrl+Tab while waiting for a window, say).
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="keys"/> is null.</exception>
     /// <exception cref="InvalidOperationException">The sequence is over.</exception>
@@ -157,23 +228,41 @@ public sealed class SyntheticKeyTracker
             throw new InvalidOperationException("The sequence is over.");
         }
 
-        _expected.InsertRange(_next, keys);
+        var tracked = Tracked(keys, out var typed);
+        _expected.InsertRange(_next, tracked);
+        _batchStart = _next;
+        _sent += tracked.Count;
+        Typed += typed;
     }
 
-    /// <summary>Compares a key event the hook sees with the next expected one, and moves on if it matches.</summary>
-    public SyntheticKeyMatch Observe(int virtualKey, bool keyUp)
+    /// <summary>
+    /// Compares a key event the hook sees with the next expected one, and moves on if it matches; a typed character
+    /// (<see cref="SyntheticKey.VkPacket"/>) is always <see cref="SyntheticKeyMatch.Ignored"/>. Never a match: a
+    /// press that is an auto-repeat (<paramref name="repeat"/>: the key was already down, bit 30 of the hook's
+    /// <c>lParam</c>), a key that is <paramref name="foreign"/> (the hook knows it is not one the add-in sent: it lacks
+    /// the tag the add-in's keys carry), or a key not sent yet.
+    /// </summary>
+    public SyntheticKeyMatch Observe(int virtualKey, bool keyUp, bool repeat = false, bool foreign = false)
     {
+        if (virtualKey == SyntheticKey.VkPacket)
+        {
+            return SyntheticKeyMatch.Ignored;
+        }
+
         if (IsOver)
         {
             return SyntheticKeyMatch.Unexpected;
         }
 
-        var next = _expected[_next];
-        if (next.VirtualKey == virtualKey && next.KeyUp == keyUp)
+        if (!foreign && (keyUp || !repeat) && _next < _sent)
         {
-            _next++;
-            IsOver = _next == _expected.Count;
-            return IsOver ? SyntheticKeyMatch.Completed : SyntheticKeyMatch.Expected;
+            var next = _expected[_next];
+            if (next.VirtualKey == virtualKey && next.KeyUp == keyUp)
+            {
+                _next++;
+                IsOver = _next == _expected.Count;
+                return IsOver ? SyntheticKeyMatch.Completed : SyntheticKeyMatch.Expected;
+            }
         }
 
         if (keyUp)
@@ -181,7 +270,33 @@ public sealed class SyntheticKeyTracker
             return SyntheticKeyMatch.Stray;
         }
 
+        // Nothing of the batch sent last has arrived (or nothing is sent yet): the user's key, from before it.
+        if (_next == _batchStart)
+        {
+            return SyntheticKeyMatch.Foreign;
+        }
+
         IsOver = true;
         return SyntheticKeyMatch.Unexpected;
+    }
+
+    // The keys of keys that are counted off (not typed characters); in typed, how many character presses it has.
+    private static List<SyntheticKey> Tracked(IReadOnlyList<SyntheticKey> keys, out int typed)
+    {
+        var tracked = new List<SyntheticKey>(keys.Count);
+        typed = 0;
+        foreach (var key in keys)
+        {
+            if (!key.IsCharacter)
+            {
+                tracked.Add(key);
+            }
+            else if (!key.KeyUp)
+            {
+                typed++;
+            }
+        }
+
+        return tracked;
     }
 }

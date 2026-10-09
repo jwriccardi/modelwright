@@ -233,6 +233,37 @@ public static class ReferenceEdit
     }
 
     /// <summary>
+    /// True when the caret keys for <paramref name="span"/> (<see cref="Keys(ReferenceSpan, string?, bool)"/>) would
+    /// cross a character outside the Basic Multilingual Plane (a surrogate pair: an emoji in a string or sheet name,
+    /// say): the keys count UTF-16 code units, but Excel's editor moves over such a character with one arrow press,
+    /// so they would select the wrong text. F2 then edits the cell as usual.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="span"/> is null.</exception>
+    public static bool CrossesSurrogatePair(ReferenceSpan span)
+    {
+        if (span is null)
+        {
+            throw new ArgumentNullException(nameof(span));
+        }
+
+        // As in Keys: from the start the caret crosses the text before the reference, from the end the text after
+        // its start; Shift+Right crosses the reference either way.
+        var textLength = span.Formula.Length;
+        var fromStart = span.Start <= textLength - span.Start;
+        var from = fromStart ? 0 : span.Start;
+        var to = fromStart ? span.Start + span.Length : textLength;
+        for (var i = from; i < to; i++)
+        {
+            if (char.IsSurrogate(span.Formula[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// The keys that select <paramref name="span"/>'s reference in Excel's editor, switch to Point mode and, if
     /// <paramref name="goTo"/> is given, go to it, after Ctrl+Tab if <paramref name="switchWindow"/> (see
     /// <see cref="Keys(int, int, int, string?, bool)"/>), or null if that takes more than <see cref="MaxKeyEvents"/>.

@@ -48,6 +48,9 @@ internal sealed class TraceSession
     /// <summary>How long after the add-in loads <see cref="WarmUp"/> runs.</summary>
     private const int WarmUpDelayMilliseconds = 1500;
 
+    /// <summary><c>XlReferenceStyle.xlA1</c>.</summary>
+    private const int XlA1 = 1;
+
     private static System.Windows.Forms.Timer? _warmUpTimer;
 
     private readonly TraceWindow _window;
@@ -225,6 +228,7 @@ internal sealed class TraceSession
             session._queue.Clear(); // keys meant for the old trace
             session._pendingMoves = 0;
             session._edit = null;
+            session.CancelReturnAfterOpen(); // a return meant for the old trace
             session._openedCount = 0;
             session.ReOwn();
         }
@@ -266,7 +270,7 @@ internal sealed class TraceSession
     /// </summary>
     public void Follow(IntPtr excelWindow)
     {
-        if (!_closing && excelWindow != _window.Handle && excelWindow != _window.OwnerHandle &&
+        if (!_closing && !TraceKeyHook.SameWindow(excelWindow, _window.Handle) && !TraceKeyHook.SameWindow(excelWindow, _window.OwnerHandle) &&
             TraceKeyHook.IsExcelWorkbookWindow(excelWindow))
         {
             _window.ReOwn(excelWindow);
@@ -401,8 +405,15 @@ internal sealed class TraceSession
             result = goBack ? GoTo(edit.Cell) : "stayed";
             if (changed)
             {
+                // Following the path in the new tree can open a closed workbook, whose window Excel then activates:
+                // back to where the edit ended.
+                var back = goBack ? edit.Cell : ActiveCell();
                 Reload(edit.Path);
                 result += "; tree rebuilt";
+                if (back is not null)
+                {
+                    ReturnAfterOpen(() => GoTo(back));
+                }
             }
         }
         catch (Exception ex)
@@ -525,7 +536,16 @@ internal sealed class TraceSession
 
         try
         {
-            if (!WindowsOf(workbook).Contains(_window.OwnerHandle))
+            // An F2 edit of a cell in it can no longer end there (its cell is gone with the workbook).
+            dynamic closing = workbook;
+            string closingName = closing.Name;
+            if (_edit is PendingEdit edit && string.Equals(edit.Span.Workbook, closingName, StringComparison.OrdinalIgnoreCase))
+            {
+                _edit = null;
+                DiagnosticsLog.Write("TraceEditEnd", "source=workbook closing", "owner=" + edit.Span, "dropped");
+            }
+
+            if (!WindowsOf(workbook).Exists(window => TraceKeyHook.SameWindow(window, _window.OwnerHandle)))
             {
                 return;
             }
@@ -562,14 +582,11 @@ internal sealed class TraceSession
 
     // The audited cell's precedents changed (an F2 edit): a new tree in the same window, with the selection brought
     // back along the same path, or as near as the new tree allows.
+    // If the new tree cannot be shown, the old one stays (and is shown again) and the exception propagates.
     private void Reload(IReadOnlyList<int> path)
     {
         var provider = new ExcelPrecedentProvider();
         var tree = new PrecedentTree(provider, provider.CreateRoot(_audited));
-        _provider = provider;
-        _tree = tree;
-        _pendingMoves = 0;
-        _skippedGoTo = false;
         try
         {
             tree.SelectPath(path);
@@ -579,13 +596,43 @@ internal sealed class TraceSession
             // Excel is busy: the selection stays as deep as the path was followed.
         }
 
-        Load();
+        var oldProvider = _provider;
+        var oldTree = _tree;
+        var oldOpenedCount = _openedCount;
+        _provider = provider;
+        _tree = tree;
+        _openedCount = 0; // the new provider's count (ReturnAfterOpen)
+        try
+        {
+            Load();
+        }
+        catch (Exception)
+        {
+            _provider = oldProvider;
+            _tree = oldTree;
+            _openedCount = oldOpenedCount;
+            try
+            {
+                Load();
+            }
+            catch (Exception)
+            {
+                // The old rows stay as they were drawn.
+            }
+
+            throw;
+        }
+
+        _pendingMoves = 0;
+        _skippedGoTo = false;
         _window.SetStatus(Where(_tree.Selected));
     }
 
     // F2 (outside macro context): see EditReference. Logs the start.
     private void StartEdit(long pressed, string source)
     {
+        // A return after a workbook opened would undo the Goto to the edited cell.
+        CancelReturnAfterOpen();
         var stopwatch = Stopwatch.StartNew();
         var owner = "-";
         var keyCount = 0;
@@ -624,6 +671,11 @@ internal sealed class TraceSession
         }
 
         owner = span.ToString();
+        if (!IsA1ReferenceStyle())
+        {
+            return PlainF2("R1C1 reference style", "Edit the reference: A1 reference style only.");
+        }
+
         var place = span.Sheet + "!" + span.Address;
         var cell = ExcelPrecedentProvider.CellAt(span.Workbook, span.Sheet, span.Address);
         if (cell is null)
@@ -646,6 +698,11 @@ internal sealed class TraceSession
         if (!string.Equals(ExcelPrecedentProvider.LocalFormulaText(cell), formula, StringComparison.Ordinal))
         {
             return PlainF2("the editor shows the formula localized", "Edit the reference: not available for this Excel language yet.");
+        }
+
+        if (ReferenceEdit.CrossesSurrogatePair(span))
+        {
+            return PlainF2("a character outside the BMP", "Edit the reference: not available where the formula holds characters such as emoji before it.");
         }
 
         if (IsLockedOnProtectedSheet(cell))
@@ -692,7 +749,7 @@ internal sealed class TraceSession
 
         // Only into the edited cell's window: GoTo may just have switched workbooks, and the keys must not edit a cell
         // of the one the selection was in.
-        if (!TraceKeyHook.Send(keys, out var failure, ActiveWindowHandle(), targetWindow))
+        if (!TraceKeyHook.Send(keys, out var failure, ActiveWindowHandle(), targetWindow, KeysNotSent))
         {
             Message("Edit the reference: " + failure + ".");
             return "not sent: " + failure;
@@ -766,13 +823,68 @@ internal sealed class TraceSession
             Message(message);
         }
 
-        if (TraceKeyHook.Send(ReferenceEdit.PlainF2, out var failure))
+        if (TraceKeyHook.Send(ReferenceEdit.PlainF2, out var failure, failed: PlainF2NotSent))
         {
             return "plain F2: " + reason;
         }
 
         Message("F2 could not be passed to Excel: " + failure + ".");
         return "plain F2 not sent (" + failure + "): " + reason;
+    }
+
+    // The keys of an F2 edit could not go after all (TraceKeyHook.Send waits for the user to let go of F2): no edit.
+    private void KeysNotSent(string failure)
+    {
+        if (_closing || !ReferenceEquals(Current, this))
+        {
+            return;
+        }
+
+        _edit = null;
+        Message("Edit the reference: " + failure + ".");
+        DiagnosticsLog.Write("TraceEditReference", "source=send", "not sent: " + failure);
+    }
+
+    private void PlainF2NotSent(string failure)
+    {
+        if (_closing || !ReferenceEquals(Current, this))
+        {
+            return;
+        }
+
+        Message("F2 could not be passed to Excel: " + failure + ".");
+        DiagnosticsLog.Write("TraceEditReference", "source=send", "plain F2 not sent: " + failure);
+    }
+
+    // True unless Excel shows references in R1C1 style (the keys count characters of the A1 formula); true if that
+    // cannot be read.
+    private static bool IsA1ReferenceStyle()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            object style = app.ReferenceStyle;
+            return Convert.ToInt32(style, CultureInfo.InvariantCulture) == XlA1;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    // Excel's active cell, or null.
+    private static object? ActiveCell()
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            object? cell = app.ActiveCell;
+            return cell;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     // True if Excel would refuse to edit the cell (locked, on a protected sheet). False if that cannot be read.
@@ -1037,6 +1149,12 @@ internal sealed class TraceSession
 
             Enqueue(() =>
             {
+                // An F2 edit started since: going anywhere would end it, or edit the wrong cell.
+                if (_edit is not null || IsEditing())
+                {
+                    return;
+                }
+
                 var active = ActiveWindowHandle();
                 if (active == expected || active == IntPtr.Zero)
                 {
@@ -1055,7 +1173,7 @@ internal sealed class TraceSession
     private void ReOwn()
     {
         var active = ActiveWindowHandle();
-        if (active != IntPtr.Zero && active != _window.OwnerHandle)
+        if (active != IntPtr.Zero && !TraceKeyHook.SameWindow(active, _window.OwnerHandle))
         {
             _window.ReOwn(active);
         }

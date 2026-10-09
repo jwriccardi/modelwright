@@ -128,6 +128,9 @@ internal sealed class TraceWindow : Window
     private const uint SwpShowWindow = 0x0040;
     private const uint MonitorDefaultToNearest = 2;
 
+    /// <summary>MONITOR_DPI_TYPE MDT_EFFECTIVE_DPI.</summary>
+    private const int MdtEffectiveDpi = 0;
+
     // GridViewRowPresenter's margin before each cell's content.
     private const double CellMargin = 6;
 
@@ -248,7 +251,9 @@ internal sealed class TraceWindow : Window
         SetWrap(wrap, byUser: false);
 
         var workArea = WorkAreaOf(owner);
-        var scale = Scale();
+
+        // The owner's monitor's DPI: the window kept from the last trace may still be on another monitor.
+        var scale = ScaleOf(owner);
         var bounds = remembered is WindowRect saved
             ? TraceWindowGeometry.EnsureVisible(saved, AllWorkAreas(), workArea, scale)
             : TraceWindowGeometry.DefaultBounds(WindowBoundsOf(owner) ?? workArea, workArea, scale);
@@ -260,7 +265,7 @@ internal sealed class TraceWindow : Window
     /// <summary>Re-owns the window to another Excel window (after a Goto into another workbook) and raises it, without activating it.</summary>
     public void ReOwn(IntPtr owner)
     {
-        if (owner == IntPtr.Zero || owner == _owner || _hwnd == IntPtr.Zero)
+        if (owner == IntPtr.Zero || TraceKeyHook.SameWindow(owner, _owner) || _hwnd == IntPtr.Zero)
         {
             return;
         }
@@ -550,6 +555,30 @@ internal sealed class TraceWindow : Window
         }
     }
 
+    // The DPI over 96 of the monitor hwnd is on (mostly), or the window's own (Scale) where that cannot be read
+    // (Windows before 8.1).
+    private double ScaleOf(IntPtr hwnd)
+    {
+        try
+        {
+            var monitor = NativeMethods.MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+            if (monitor != IntPtr.Zero && NativeMethods.GetDpiForMonitor(monitor, MdtEffectiveDpi, out var dpi, out _) == 0 && dpi > 0)
+            {
+                return dpi / 96.0;
+            }
+        }
+        catch (DllNotFoundException)
+        {
+            // No shcore.dll: below.
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // No GetDpiForMonitor: below.
+        }
+
+        return Scale();
+    }
+
     private static WindowRect? WindowBoundsOf(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect))
@@ -603,11 +632,27 @@ internal sealed class TraceWindow : Window
 
     private static class NativeMethods
     {
+        // 32-bit user32.dll does not export GetWindowLongPtrW/SetWindowLongPtrW (they are macros for
+        // GetWindowLongW/SetWindowLongW there), so 32-bit Excel would throw EntryPointNotFoundException.
+        public static IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex) =>
+            IntPtr.Size == 8 ? GetWindowLongPtr64(hWnd, nIndex) : new IntPtr(GetWindowLong32(hWnd, nIndex));
+
+        public static IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong) =>
+            IntPtr.Size == 8
+                ? SetWindowLongPtr64(hWnd, nIndex, dwNewLong)
+                : new IntPtr(SetWindowLong32(hWnd, nIndex, dwNewLong.ToInt32()));
+
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
-        public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+        private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
 
         [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
-        public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+        private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+        private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
+        private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -626,6 +671,9 @@ internal sealed class TraceWindow : Window
 
         [DllImport("user32.dll")]
         public static extern uint GetDpiForWindow(IntPtr hwnd);
+
+        [DllImport("shcore.dll")]
+        public static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetFocus();

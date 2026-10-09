@@ -240,6 +240,15 @@ public static class TraceKeys
         (virtualKey == VkReturn || virtualKey == VkTab || virtualKey == VkEscape) && (modifiers & KeyModifiers.Alt) == 0;
 
     /// <summary>
+    /// True for a press that shows an F2 edit ended without its end key or a change to the cell (the formula bar's
+    /// Cancel button, say, or keys that never put Excel in edit mode): the session still waits for its end
+    /// (<paramref name="awaitsEditEnd"/>), no keys the add-in sent are in flight (<paramref name="synthesizing"/>), and
+    /// Excel is <see cref="TraceKeyContext.Ready"/>. The edit then ends where Excel is, without going back to its cell.
+    /// </summary>
+    public static bool EditEndedElsewhere(bool awaitsEditEnd, bool synthesizing, TraceKeyContext context) =>
+        awaitsEditEnd && !synthesizing && context == TraceKeyContext.Ready;
+
+    /// <summary>
     /// Where the selection is left by a closing command: <see cref="TraceKeyCommand.Close"/> stays on the current
     /// cell, <see cref="TraceKeyCommand.Cancel"/> does what <see cref="CancelCloseMode"/> says. Null for a command
     /// that does not close the window.

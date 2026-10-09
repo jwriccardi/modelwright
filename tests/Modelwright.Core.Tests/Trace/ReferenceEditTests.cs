@@ -494,4 +494,23 @@ public class ReferenceEditTests
         Assert.Null(ReferenceEdit.SpanOf(tree.Root.Children.Last()));
         Assert.Throws<ArgumentNullException>(() => ReferenceEdit.SpanOf(null!));
     }
+
+    [Fact]
+    public void Keys_that_would_cross_a_surrogate_pair_are_not_used()
+    {
+        const string Emoji = "😀";
+
+        // From the start (the reference is in the first half): the caret crosses the emoji before it.
+        var before = "=\"" + Emoji + "\"&B2&\"a long text after the reference\"";
+        Assert.True(ReferenceEdit.CrossesSurrogatePair(Span(before, "B2", "B2")));
+
+        // From the end: the caret crosses only what follows the reference's start.
+        Assert.False(ReferenceEdit.CrossesSurrogatePair(Span("=\"" + Emoji + "\"&B2", "B2", "B2")));
+        Assert.True(ReferenceEdit.CrossesSurrogatePair(Span("=\"a long text before the reference\"&B2&\"" + Emoji + "\"", "B2", "B2")));
+
+        // In the reference itself (a sheet name).
+        Assert.True(ReferenceEdit.CrossesSurrogatePair(Span("='" + Emoji + "'!A1", "'" + Emoji + "'!A1")));
+        Assert.False(ReferenceEdit.CrossesSurrogatePair(Span("=A1+B2", "B2", "B2")));
+        Assert.Throws<ArgumentNullException>(() => ReferenceEdit.CrossesSurrogatePair(null!));
+    }
 }
