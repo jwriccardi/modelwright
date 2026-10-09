@@ -119,6 +119,16 @@ Measured on 2026-10-09 in Excel 16.0 (build 20430) with the Macabacus 2016 build
 3. A key Modelwright releases while Excel runs goes to Excel's built-in meaning, not back to Macabacus: Macabacus binds its keys only when it loads. Hence "restart Excel" above.
 4. Ctrl+Z: Modelwright's undo hook decides Ctrl+Z / Ctrl+Y whenever its shortcuts are on, even while Macabacus owns the formatting keys; with Modelwright's undo history empty the key went to Excel. With Modelwright changes in that history, a Ctrl+Z meant for a Macabacus change would undo Modelwright's older change instead. With its shortcuts off, Modelwright leaves Ctrl+Z / Ctrl+Y alone (use Undo formatting on its ribbon).
 
+### Switching from Macabacus
+
+You don't need to uninstall Macabacus first.
+
+1. **Install Modelwright** as above, with Macabacus still installed.
+2. **Start Excel.** When the notice appears, choose **Use Modelwright's shortcuts**.
+3. **Try both side by side** for as long as you like. Macabacus's commands stay on its ribbon. While both are installed, undo a Macabacus change with Excel's Undo button rather than Ctrl+Z (see point 4 above).
+4. **Turn Macabacus off** when you're ready: File › Options › Add-ins › Manage: **COM Add-ins** › **Go…** › untick Macabacus › OK. Or uninstall it from Windows Settings › Apps (on a work computer this may need IT). Modelwright needs no change afterwards.
+5. **Set up your own formats again.** If you customised Macabacus's number-format or colour cycles, enter them in Modelwright › Settings…. Modelwright can't read Macabacus's settings.
+
 ### Where your settings live
 
 - Settings: `%APPDATA%\Modelwright\settings.json` (change them with Modelwright › Settings…). Settings from the earlier ModelingToolkit builds are copied over on first start.
