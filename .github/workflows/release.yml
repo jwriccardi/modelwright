@@ -196,6 +196,8 @@ jobs:
           "@
           Set-Content -LiteralPath release-notes.md -Value $notes
           $assets = @("dist/Modelwright-$env:VERSION.zip", 'dist/Modelwright64.xll', 'dist/SHA256SUMS.txt')
-          $prerelease = if ($env:VERSION -match '-') { @('--prerelease') } else { @() }
+          # A typed array: "if { @('x') }" would unwrap to a string, and splatting a string passes its characters.
+          [string[]]$prerelease = @()
+          if ($env:VERSION -match '-') { $prerelease += '--prerelease' }
           gh release create $env:TAG @assets --draft --verify-tag --title "Modelwright $env:VERSION" --notes-file release-notes.md --generate-notes @prerelease
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed.' }
