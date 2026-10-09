@@ -22,15 +22,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/install/install-script
 
 ## Load the development add-in in Excel
 
-The build produces a packed add-in for each Excel bitness (use the one that matches Excel, usually 64-bit):
+The build produces one packed add-in, for 64-bit Excel (32-bit Excel is not supported):
 
 ```
 src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright64.xll
-src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright32.xll
 ```
 
 1. **Disable Macabacus first, or change its keys.** Whichever add-in registers a shortcut last owns it.
-2. In Excel: **File > Options > Add-ins > Manage: Excel Add-ins > Go... > Browse...**, select the `.xll`, and click **OK**.3. You should see a **Modelwright** ribbon tab and the status-bar message "Modelwright *version* loaded".
+2. In Excel: **File > Options > Add-ins > Manage: Excel Add-ins > Go... > Browse...**, select the `.xll`, and click **OK**.
+3. You should see a **Modelwright** ribbon tab and the status-bar message "Modelwright *version* loaded".
 4. Press **Ctrl+Alt+Shift+F12**, or click **Modelwright > About**, to show the version, commit, build date and add-in path.
 
 ### Rebuilding while Excel is open
@@ -51,9 +51,34 @@ With Excel open, `tests/excel-smoke/undo-smoke.ps1` and `tests/excel-smoke/trace
 
 A downloaded `.xll` is blocked by Mark-of-the-Web. If Excel refuses to load one you did not build yourself, right-click the file > **Properties** > tick **Unblock**.
 
+## Build the MSI
+
+The optional per-user installer lives in `installer/msi` (design notes and trade-offs: [installer/msi/README.md](installer/msi/README.md)). It is not part of `Modelwright.sln`, so the normal build doesn't need WiX. To build it locally:
+
+```powershell
+dotnet tool install --global wix --version 5.0.2     # once; WiX 5 on purpose (no OSMF EULA), see installer/msi/README.md
+dotnet build Modelwright.sln -c Release              # builds Modelwright64.xll
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/msi/build-msi.ps1 -Validate
+```
+
+This writes `dist\Modelwright-<version>-x64.msi`. `-Validate` runs the ICE checks (`wix msi validate`), lists the MSI's files, registry entries and custom actions, and extracts it with `msiexec /a` into `installer\msi\obj\extract` to compare the add-in with the build. It never installs anything. Use `-XllPath` to package another build, for example one built with `-p:OutputPath=bin\scratch\`.
+
+- **Installing a development MSI changes your own Excel registration.** It writes the `OPEN` entry in your `HKCU`, and so does uninstalling it. Test installs on a VM or a spare Windows account, not on the profile you develop in.
+- The custom actions (`installer/msi/CustomActions`, C# with WixToolset.Dtf) follow the same registration rules as `install/install.ps1` and `install/uninstall.ps1`. Their pure logic, `AddInRegistration.cs`, is linked into `tests/Modelwright.Core.Tests` and tested there. **If you change the rules in one place, change them in the other and in both tests.**
+- CI builds and validates the MSI for every pull request and push to `main`, and uploads it as the `Modelwright-msi` artifact.
+
 ## Releases
 
-Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. The tag must match the version in `Directory.Build.props`. The workflow builds and tests, then creates a **draft** GitHub Release with `Modelwright-X.Y.Z.zip` (both add-ins, `install/*`, `LICENSE`, `THIRD_PARTY_NOTICES.md` and a `SHA256SUMS.txt`), the bare `.xll` files, `SHA256SUMS.txt` and build-provenance attestations. The add-ins are code-signed only if the `SIGNING_*` secrets are set (see the comment at the top of the workflow); otherwise they ship unsigned. Before publishing the draft, scan the assets on VirusTotal and add the links to the notes.
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`. The tag must match the version in `Directory.Build.props`. The workflow builds and tests, then creates a **draft** GitHub Release with:
+- `Modelwright-X.Y.Z.zip`, containing `Modelwright64.xll`, `install/*`, `LICENSE`, `THIRD_PARTY_NOTICES.md` and a `SHA256SUMS.txt`;
+- `Modelwright-X.Y.Z-x64.msi`;
+- the bare `Modelwright64.xll`;
+- `SHA256SUMS.txt`;
+- build-provenance attestations.
+
+The add-in and the MSI are code-signed only if the `SIGNING_*` secrets are set (see the comment at the top of the workflow). The add-in is signed before the MSI is built around it, and then the MSI is signed. Without the secrets they ship unsigned, which is the owner's decision for v0.1, and the release notes say so.
+
+Before publishing the draft, scan the assets on VirusTotal and add the links to the notes.
 
 ## Coding standards
 

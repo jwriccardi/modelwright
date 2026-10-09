@@ -133,7 +133,6 @@ $realManagerBefore = Get-Snapshot $realManagerKey
 try {
     $null = New-Item -ItemType Directory -Path $source -Force
     Set-Content -LiteralPath (Join-Path $source 'Modelwright64.xll') -Value 'fake 64-bit add-in'
-    Set-Content -LiteralPath (Join-Path $source 'Modelwright32.xll') -Value 'fake 32-bit add-in'
     # Mark the 64-bit file as downloaded from the internet (Mark-of-the-Web), as a browser would.
     Set-Content -LiteralPath (Join-Path $source 'Modelwright64.xll') -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`r`nZoneId=3"
     $target64 = Join-Path $addIns 'Modelwright64.xll'
@@ -200,12 +199,20 @@ try {
     $expected = (@('OPEN="C:\Other\First.xlam"', 'OPEN1="C:\Other\Second.xlam"', "OPEN2=$value64") | Sort-Object) -join "`n"
     Assert-Equal (Get-Snapshot $optionsKey) $expected 'registered as the next free OPENn'
 
-    Write-Host '--- install.ps1 switching to 32-bit replaces the 64-bit entry'
+    Write-Host '--- install.ps1 -ExcelBitness 32 is refused (Modelwright is 64-bit only)'
+    $before = Get-Snapshot $optionsKey
     $out = Invoke-Script $install @{ ExcelBitness = '32'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 8 'exit code 8'
+    Assert-True ($out -match 'Modelwright is 64-bit only; your Excel is 32-bit') 'says Modelwright is 64-bit only'
+    Assert-Equal (Get-Snapshot $optionsKey) $before 'registry unchanged'
+    Assert-True (-not (Test-Path -LiteralPath $target32)) 'no 32-bit add-in copied'
+
+    Write-Host '--- install.ps1 replaces a 32-bit entry left by an earlier build'
+    Reset-Options @{ OPEN = '"C:\Other\First.xlam"'; OPEN1 = $value32 }
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
     Assert-Equal $LASTEXITCODE 0 'exit code 0'
-    $expected = (@('OPEN="C:\Other\First.xlam"', 'OPEN1="C:\Other\Second.xlam"', "OPEN2=$value32") | Sort-Object) -join "`n"
-    Assert-Equal (Get-Snapshot $optionsKey) $expected 'one Modelwright entry, now the 32-bit add-in'
-    Assert-Equal (Get-Content -LiteralPath $target32) 'fake 32-bit add-in' 'copied the 32-bit add-in'
+    $expected = (@('OPEN="C:\Other\First.xlam"', "OPEN1=$value64") | Sort-Object) -join "`n"
+    Assert-Equal (Get-Snapshot $optionsKey) $expected 'the 32-bit entry is replaced by the 64-bit one in its slot'
 
     # On exit Excel rewrites entries for files in its own AddIns folder as a bare name, and may keep the
     # full-path entry too.
@@ -312,9 +319,10 @@ try {
         Assert-True ($out -match 'Excel is 64-bit: installing Modelwright64\.xll') 'a 64-bit .exe: picks Modelwright64.xll'
         $wow64 = Join-Path $env:SystemRoot 'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
         if (Test-Path -LiteralPath $wow64) {
-            $out = Invoke-Script $install @{ SourceFolder = $source; RegistryRoot = $noOfficeRoot; WhatIf = $true; ExcelExePath = $wow64 }
-            Assert-Equal $LASTEXITCODE 0 'a 32-bit .exe: exit code 0'
-            Assert-True ($out -match 'Excel is 32-bit: installing Modelwright32\.xll') 'a 32-bit .exe: picks Modelwright32.xll'
+            $out = Invoke-Script $install @{ SourceFolder = $source; RegistryRoot = $noOfficeRoot; ExcelExePath = $wow64 }
+            Assert-Equal $LASTEXITCODE 8 'a 32-bit .exe: exit code 8'
+            Assert-True ($out -match 'Modelwright is 64-bit only; your Excel is 32-bit') 'a 32-bit .exe: says 32-bit Excel is not supported'
+            Assert-True (-not (Test-Path -LiteralPath $noOfficeRoot)) 'a 32-bit .exe: nothing written under -RegistryRoot'
         }
     } else {
         Write-Host "SKIP  needs a 64-bit (AMD64) PowerShell, this is $env:PROCESSOR_ARCHITECTURE"
@@ -322,9 +330,11 @@ try {
 
     Write-Host '--- install.ps1 bitness detection on this machine (read-only registry and EXCEL.EXE reads)'
     $out = Invoke-Script $install @{ SourceFolder = $source; WhatIf = $true }
-    Assert-True ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3) "detection ends with 0 (found) or 3 (no Excel), not an error (exit $LASTEXITCODE)"
+    Assert-True ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3 -or $LASTEXITCODE -eq 8) "detection ends with 0 (64-bit), 8 (32-bit) or 3 (no Excel), not an error (exit $LASTEXITCODE)"
     if ($LASTEXITCODE -eq 0) {
-        Assert-True ($out -match 'Excel is (32|64)-bit') 'reports the detected bitness'
+        Assert-True ($out -match 'Excel is 64-bit') 'reports the detected bitness'
+    } elseif ($LASTEXITCODE -eq 8) {
+        Assert-True ($out -match 'Modelwright is 64-bit only') 'explains that 32-bit Excel is not supported'
     } else {
         Assert-True ($out -match 'Could not tell whether Excel is 32-bit or 64-bit') 'explains that it could not tell'
     }
@@ -353,11 +363,12 @@ try {
 
     Write-Host '--- uninstall.ps1 closes gaps left by others'
     Reset-Options @{ OPEN = $value64; OPEN2 = '"C:\Other\First.xlam"'; OPEN5 = '"C:\Other\Second.xlam"' }
+    Set-Content -LiteralPath $target32 -Value 'fake 32-bit add-in left by an earlier build'
     $out = Invoke-Script $uninstall @{ RemoveFile = $true }
     Assert-Equal $LASTEXITCODE 0 'exit code 0'
     Assert-Equal (Get-Snapshot $optionsKey) $expected 'renumbered OPEN, OPEN1 in the old order'
     Assert-True (-not (Test-Path -LiteralPath $target64)) '-RemoveFile deleted Modelwright64.xll'
-    Assert-True (-not (Test-Path -LiteralPath $target32)) '-RemoveFile deleted Modelwright32.xll'
+    Assert-True (-not (Test-Path -LiteralPath $target32)) '-RemoveFile deleted a Modelwright32.xll left by an earlier build'
 
     Write-Host '--- uninstall.ps1 again has nothing to do'
     $out = Invoke-Script $uninstall @{}

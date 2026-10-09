@@ -6,16 +6,16 @@
     <AssemblyName>Modelwright.AddIn</AssemblyName>
 
     <!--
-      Excel-DNA: a 64-bit and a 32-bit add-in, each packed into a single .xll under bin\<Config>\net48\publish\,
-      named Modelwright64.xll and Modelwright32.xll (the shipped names). The pack suffix is %none% (the default is
-      "-packed"); the publish folder keeps the packed files apart from the unpacked ones in bin\<Config>\net48\.
+      Excel-DNA: a 64-bit add-in only (owner decision 2026-10-09: 32-bit Excel is not supported), packed into a
+      single .xll under bin\<Config>\net48\publish\, named Modelwright64.xll (the shipped name). The pack suffix
+      is %none% (the default is "-packed"); the publish folder keeps the packed file apart from the unpacked ones
+      in bin\<Config>\net48\.
     -->
     <ExcelAddInName>Modelwright</ExcelAddInName>
     <ExcelAddInFileName>Modelwright</ExcelAddInFileName>
     <ExcelAddInExplicitExports>true</ExcelAddInExplicitExports>
-    <ExcelDnaCreate32BitAddIn>true</ExcelDnaCreate32BitAddIn>
+    <ExcelDnaCreate32BitAddIn>false</ExcelDnaCreate32BitAddIn>
     <ExcelDnaCreate64BitAddIn>true</ExcelDnaCreate64BitAddIn>
-    <ExcelDna32BitAddInSuffix>32</ExcelDna32BitAddInSuffix>
     <ExcelDna64BitAddInSuffix>64</ExcelDna64BitAddInSuffix>
     <ExcelDnaPackXllSuffix>%none%</ExcelDnaPackXllSuffix>
     <RunExcelDnaPack>true</RunExcelDnaPack>
