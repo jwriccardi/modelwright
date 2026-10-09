@@ -15,6 +15,11 @@ namespace Modelwright.AddIn;
 /// Several Excel instances can share the file: each line is appended under a session-wide named mutex, with the
 /// file opened for append and shared, so lines do not interleave and rolling never races an append. If the mutex
 /// is busy for longer than <see cref="LockTimeout"/>, the line is dropped rather than stall a command.
+/// <para>
+/// What it holds: workbook, sheet and cell names, timings and results. Trace In lines also hold parts of the audited
+/// formulas and their values (row labels such as <c>F2+G2</c>, function names, and in evaluate mode each built row's
+/// label and value, TraceEvalRow, cut to 120 characters). Keep that in mind before sharing the log.
+/// </para>
 /// </remarks>
 internal static class DiagnosticsLog
 {

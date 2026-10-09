@@ -52,6 +52,24 @@ public class TraceValueTextTests
     }
 
     [Fact]
+    public void Evaluated_numbers_are_grouped_to_15_significant_digits()
+    {
+        Assert.Equal("15,120", TraceValueText.FromEvaluated(15120d, Us));
+        Assert.Equal("15.120", TraceValueText.FromEvaluated(15120d, German));
+        Assert.Equal("14.9", TraceValueText.FromEvaluated(14.9, Us));
+        Assert.Equal("-4", TraceValueText.FromEvaluated(-4d, Us));
+        Assert.Equal("-1,234.5", TraceValueText.FromEvaluated(-1234.5, Us));
+        Assert.Equal("0.3", TraceValueText.FromEvaluated(0.1 + 0.2, Us));
+        Assert.Equal("0", TraceValueText.FromEvaluated(-0d, Us));
+        Assert.Equal("1E+20", TraceValueText.FromEvaluated(1e20, Us));
+        Assert.Equal("123,456,789,012,345", TraceValueText.FromEvaluated(123456789012345d, Us));
+        Assert.Equal("TRUE", TraceValueText.FromEvaluated(true, Us));
+        Assert.Equal("Revenue", TraceValueText.FromEvaluated("Revenue", Us));
+        Assert.Equal("#N/A", TraceValueText.FromEvaluated(-2146826246, Us));
+        Assert.Equal(string.Empty, TraceValueText.FromEvaluated(null, Us));
+    }
+
+    [Fact]
     public void Text_is_one_line_and_cut_at_the_limit()
     {
         Assert.Equal("a↵b↵c d", TraceValueText.FromValue("a\r\nb\nc\td", Us));

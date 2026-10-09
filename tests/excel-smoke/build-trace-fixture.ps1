@@ -30,7 +30,10 @@
 # Sheet Eval (Evaluate functions & groups, Ctrl+E): the formula of Macabacus's Trace In help page (research/07) in A2,
 #   =(B2+C2/D2)+IF(E2>0,F2+G2,SUM(H2:J2))*(K2+L2-ABS(M2))+PRODUCT(N2:T2,U2)+V2, with inputs in B2:V2 that give the
 #   values shown there: (B2+C2/D2) 5.5, IF(...) 14.9 (E2>0 TRUE, F2+G2 14.9, SUM 20), (K2+L2-ABS(M2)) -4,
-#   PRODUCT(...) 15,120, and A2 $15,066.
+#   PRODUCT(...) 15,120, and A2 $15,066. Also on Eval, rows evaluate mode must not (or cannot simply) evaluate:
+#   A4  =LET(x,B4,x*2)+C4 (B4 5, C4 1)       LET(...) is 10; its x*2 uses the LET name: not evaluated
+#   A6:C9 the table Lines (Qty, Price, Total), Total =([@Qty]*[@Price])+1: in C8 (Qty 2, Price 9) the group is 18
+#   A11 =SUM(B2,B2,...) 90 times (> 255 characters): the SUM(...) row is the whole formula, so the cell's 360
 param(
     [object]$Excel,
     [string]$OutDir = (Join-Path $env:TEMP 'emt-trace-fixture')
@@ -169,6 +172,19 @@ try {
     foreach ($cell in $inputs2.Keys) { $eval.Range($cell).Value2 = [double]$inputs2[$cell] }
     $eval.Range('A2').Formula = '=(B2+C2/D2)+IF(E2>0,F2+G2,SUM(H2:J2))*(K2+L2-ABS(M2))+PRODUCT(N2:T2,U2)+V2'
     $eval.Range('A2').NumberFormat = '$#,##0'
+    $eval.Range('B4').Value2 = 5
+    $eval.Range('C4').Value2 = 1
+    try { $eval.Range('A4').Formula2 = '=LET(x,B4,x*2)+C4' } catch { $eval.Range('A4').Formula = '=LET(x,B4,x*2)+C4' }
+    $eval.Range('A6').Value2 = 'Qty'; $eval.Range('B6').Value2 = 'Price'; $eval.Range('C6').Value2 = 'Total'
+    $lineRows = @(@(3, 10), @(2, 9), @(4, 8))
+    for ($r = 0; $r -lt $lineRows.Count; $r++) {
+        $eval.Range("A$($r + 7)").Value2 = [int]$lineRows[$r][0]
+        $eval.Range("B$($r + 7)").Value2 = [int]$lineRows[$r][1]
+    }
+    $lines = $eval.ListObjects.Add($xlSrcRange, $eval.Range('A6:C9'), [Type]::Missing, $xlYes)
+    $lines.Name = 'Lines'
+    $lines.ListColumns.Item('Total').DataBodyRange.Formula = '=([@Qty]*[@Price])+1'
+    $eval.Range('A11').Formula = '=SUM(' + ((1..90 | ForEach-Object { 'B2' }) -join ',') + ')'
 
     # Calc: the traced formulas. B11 and B15 are written while the external workbook is open, so Excel resolves the link.
     $calc.Range('B2').Formula = '=Inputs!B2*(1+Growth)'
@@ -199,6 +215,7 @@ try {
     "ExtRate with the external workbook closed:     $($wb.Names.Item('ExtRate').RefersTo)"
     "A1 formula: $($calc.Range('A1').Formula)"
     "Eval!A2:    $($eval.Range('A2').Formula) = $($eval.Range('A2').Text)"
+    "Eval!A4:    $($eval.Range('A4').Formula) = $($eval.Range('A4').Text); C8 $($eval.Range('C8').Formula) = $($eval.Range('C8').Text); A11 = $($eval.Range('A11').Text) ($($eval.Range('A11').Formula.Length) characters)"
     $wb.Close($false)
     $wb = $null
     "Fixture written: $mainPath"

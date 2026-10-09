@@ -190,6 +190,8 @@ Behavior spec: [research/07](research/07-macabacus-trace-in-spec.md).
   - Parenthesized groups are `(x)` nodes, and functions are `ƒx NAME(...)` nodes.
   - A function's children are its arguments, labelled with Excel's parameter names from a **function signature table** (the top ~100 functions first).
   - Each node's value comes from `Worksheet.Evaluate(subexpression)` in the audited cell's sheet context.
+    - A node that is the whole formula shows the cell's own value instead.
+    - Not evaluated, with the reason as the value: a node that uses a LET/LAMBDA name declared outside it (or is an uncalled LAMBDA), calls a function that is not Excel's (VBA, add-in, named LAMBDA) or that reaches outside the workbook (WEBSERVICE, STOCKHISTORY, RTD, CUBE*...), refers to a closed workbook, uses the implicit-intersection `@` or a relative name, or is longer than 255 characters. `[@Col]` and unqualified table references are rewritten to the cells they mean for the audited cell; NOW/TODAY/RAND* values are marked "(volatile)".
   - A function that returns a reference (INDEX, OFFSET, INDIRECT, CHOOSE) is resolved to its target range, so you can navigate to it.
 - **How precedents are found.** Parse `Range.Formula` (invariant A1) with XLParser, which also produces the structure for v1.1. Then resolve each reference:
   - **A1 references** → `Range`.

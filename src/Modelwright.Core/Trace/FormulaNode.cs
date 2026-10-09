@@ -80,10 +80,21 @@ public sealed class FormulaNode
     public string? ParameterName { get; internal set; }
 
     /// <summary>
+    /// True for a LAMBDA called where it is written, <c>LAMBDA(x,x*2)(A1)</c>: an intersection (the parser reads the
+    /// call that way) of a <c>LAMBDA</c> call and the parenthesized arguments written right after it. A trace tree shows
+    /// it as one row, not as its two operands.
+    /// </summary>
+    public bool IsLambdaCall =>
+        Kind == FormulaNodeKind.Operator && Operator == " " && Children.Count == 2 &&
+        Children[0].Kind == FormulaNodeKind.Function && Children[0].FunctionName == "LAMBDA" &&
+        Children[0].Start + Children[0].Length == Children[1].Start && Children[1].Length > 0 && _formula[Children[1].Start] == '(';
+
+    /// <summary>
     /// The nodes a trace tree shows under this one, the way Macabacus's "Evaluate functions &amp; groups" view does
     /// (research/07): a function's arguments, each as-is; for any other node, its operands with operator
     /// expressions flattened away, keeping groups, function calls and references but not constants. So for
     /// <c>(B2+C2/D2)+IF(...)*(K2+L2)+V2</c> the root's trace children are the group, IF, the second group and V2.
+    /// A LAMBDA called in place (<see cref="IsLambdaCall"/>) shows the LAMBDA, then the arguments passed to it.
     /// The audited cell's own row shows <see cref="ParsedFormula.TopLevelNodes"/>, which treats the root the same way.
     /// </summary>
     public IReadOnlyList<FormulaNode> TraceChildren
@@ -96,6 +107,19 @@ public sealed class FormulaNode
             }
 
             var result = new List<FormulaNode>();
+            if (IsLambdaCall)
+            {
+                // LAMBDA(x,y,x+y)(A1,B1): the LAMBDA, then A1 and B1 (the arguments' group, or their union, unwrapped).
+                result.Add(Children[0]);
+                var arguments = Children[1];
+                foreach (var argument in arguments.Kind == FormulaNodeKind.Group ? arguments.Children : new[] { arguments })
+                {
+                    AddOperands(argument, result);
+                }
+
+                return result;
+            }
+
             foreach (var child in Children)
             {
                 AddOperands(child, result);
@@ -119,6 +143,9 @@ public sealed class FormulaNode
             var current = pending.Pop();
             switch (current.Kind)
             {
+                case FormulaNodeKind.Operator when current.IsLambdaCall:
+                    result.Add(current);
+                    break;
                 case FormulaNodeKind.Operator:
                 case FormulaNodeKind.Other:
                     for (var index = current.Children.Count - 1; index >= 0; index--)

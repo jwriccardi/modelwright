@@ -294,4 +294,330 @@ public class EvaluatePrecedentsTests
         Assert.Same(span, copy.Span);
         Assert.NotSame(item, copy);
     }
+
+    // The rows under a formula, then under each of its top-level rows, with each value asked recorded ("asked") and
+    // given as "=text".
+    private static (IReadOnlyList<EvaluatePrecedent> Top, IReadOnlyList<IReadOnlyList<EvaluatePrecedent>> Children) Expand(
+        string formula, List<string> asked, Func<string>? cellValue = null)
+    {
+        string? ValueOf(FormulaNode node)
+        {
+            asked.Add(node.Text);
+            return "=" + node.Text;
+        }
+
+        var top = EvaluatePrecedents.Of(Parse(formula), ValueOf, Reference, cellValue);
+        var children = top.Select(row => row.Node.Kind == FormulaNodeKind.Reference
+            ? (IReadOnlyList<EvaluatePrecedent>)new EvaluatePrecedent[0]
+            : EvaluatePrecedents.Of(row.Node, ValueOf, Reference)).ToList();
+        return (top, children);
+    }
+
+    [Fact]
+    public void A_row_using_a_let_name_is_not_evaluated()
+    {
+        var asked = new List<string>();
+        var (top, children) = Expand("=LET(x,A1,x*2)+1", asked);
+
+        // LET(...) declares x itself, so it is evaluated; x*2 alone would be #NAME? (or a defined name x's value).
+        Assert.Equal("=LET(x,A1,x*2)", top.Single().Item.ValueText);
+        Assert.Equal(new[] { "A1", "x*2" }, children[0].Select(r => r.Item.Label));
+        Assert.Equal(EvaluatePrecedents.UsesLocalNames, children[0][1].Item.ValueText);
+        Assert.DoesNotContain("x*2", asked);
+        Assert.Equal(new[] { "LET(x,A1,x*2)" }, asked);
+    }
+
+    [Theory]
+    [InlineData("=LET(_xlpm.x,A1,_xlpm.x*2)+1", "_xlpm.x*2")]
+    [InlineData("=LET(x,A1,y,B1,SUM(x,y))+1", "SUM(x,y)")]
+    [InlineData("=LET(x,A1,y,x+1,(y+A2)*2)+1", "(y+A2)*2")]
+    [InlineData("=LET(_xlpm.f,LAMBDA(_xlpm.y,_xlpm.y+1),_xlpm.f(A1))+1", "_xlpm.f(A1)")]
+    public void Rows_using_names_declared_outside_them_are_not_evaluated(string formula, string fragment)
+    {
+        var asked = new List<string>();
+        var (top, children) = Expand(formula, asked);
+
+        var row = children[0].Single(r => r.Node.Text == fragment);
+        Assert.Equal(EvaluatePrecedents.UsesLocalNames, row.Item.ValueText);
+        Assert.DoesNotContain(fragment, asked);
+        Assert.Equal(EvaluatePrecedents.UsesLocalNames, EvaluatePrecedents.NotEvaluated(row.Node));
+        Assert.Null(EvaluatePrecedents.NotEvaluated(top[0].Node)); // the LET declares them
+    }
+
+    [Fact]
+    public void A_lambda_called_in_place_is_one_function_row()
+    {
+        var asked = new List<string>();
+        var (top, children) = Expand("=LAMBDA(x,y,x+y)(A1,B1)*2", asked);
+
+        var call = top.Single();
+        Assert.True(call.Node.IsLambdaCall);
+        Assert.Equal(PrecedentKind.Function, call.Item.Kind);
+        Assert.Equal(EvaluatePrecedents.LambdaCallLabel, call.Item.Label);
+        Assert.Equal("=LAMBDA(x,y,x+y)(A1,B1)", call.Item.ValueText); // self-contained: evaluated
+        Assert.True(call.Item.CanExpand);
+
+        // Its children: the LAMBDA (a function value: not evaluated), then the arguments passed to it.
+        Assert.Equal(new[] { "LAMBDA(...)", "A1", "B1" }, children[0].Select(r => r.Item.Label));
+        Assert.Equal(EvaluatePrecedents.UsesLocalNames, children[0][0].Item.ValueText);
+        Assert.Equal(new[] { "LAMBDA(x,y,x+y)(A1,B1)" }, asked);
+
+        // Inside the LAMBDA: the parameters are left out, the calculation uses them.
+        var inside = EvaluatePrecedents.Of(children[0][0].Node, _ => throw new InvalidOperationException("not evaluated"), Reference);
+        Assert.Equal(EvaluatePrecedents.UsesLocalNames, inside.Single().Item.ValueText);
+    }
+
+    [Fact]
+    public void A_lambda_followed_by_a_space_is_an_intersection_not_a_call()
+    {
+        var rows = EvaluatePrecedents.Of(Parse("=LAMBDA(x,x*2) (A1)"), _ => "1", Reference);
+
+        Assert.Equal(new[] { "LAMBDA(...)", "(A1)" }, rows.Select(r => r.Item.Label));
+        Assert.Equal(EvaluatePrecedents.UsesLocalNames, rows[0].Item.ValueText);
+    }
+
+    [Fact]
+    public void A_lambda_passed_to_a_function_does_not_stop_the_call_being_evaluated()
+    {
+        var asked = new List<string>();
+        var (top, children) = Expand("=SUM(MAP(A1:A3,LAMBDA(x,x*2)))+1", asked);
+        var map = EvaluatePrecedents.Of(children[0].Single().Node, node =>
+        {
+            asked.Add(node.Text);
+            return "1";
+        }, Reference);
+
+        Assert.Contains("MAP(A1:A3,LAMBDA(x,x*2))", asked);
+        Assert.Equal(new[] { "A1:A3", "LAMBDA(...)" }, map.Select(r => r.Item.Label));
+        Assert.Equal(EvaluatePrecedents.UsesLocalNames, map[1].Item.ValueText);
+        Assert.DoesNotContain("LAMBDA(x,x*2)", asked);
+    }
+
+    [Theory]
+    [InlineData("=MyUdf(A1)+1", "MyUdf(A1)")]
+    [InlineData("=Book.xlsx!MyUdf(A1)+1", "Book.xlsx!MyUdf(A1)")]
+    [InlineData("=SUM(A1,MyUdf(B1))+1", "SUM(A1,MyUdf(B1))")]
+    [InlineData("=(A1+_xll.Price(B1))*2", "(A1+_xll.Price(B1))")]
+    [InlineData("=NamedLambda(A1)+1", "NamedLambda(A1)")]
+    public void Rows_calling_a_function_that_is_not_excels_are_not_evaluated(string formula, string fragment)
+    {
+        var asked = new List<string>();
+        var (top, _) = Expand(formula, asked);
+
+        Assert.Equal(EvaluatePrecedents.UnknownFunction, top.Single(r => r.Node.Text == fragment).Item.ValueText);
+        Assert.Empty(asked);
+    }
+
+    [Theory]
+    [InlineData("=WEBSERVICE(A1)&\"\"", "WEBSERVICE(A1)", "WEBSERVICE")]
+    [InlineData("=_xlfn.STOCKHISTORY(A1,B1)+0", "_xlfn.STOCKHISTORY(A1,B1)", "STOCKHISTORY")]
+    [InlineData("=RTD(\"srv\",,A1)+0", "RTD(\"srv\",,A1)", "RTD")]
+    [InlineData("=(CUBEVALUE(\"c\",A1)+1)*2", "(CUBEVALUE(\"c\",A1)+1)", "CUBEVALUE")]
+    public void Rows_reaching_outside_the_workbook_are_not_evaluated(string formula, string fragment, string function)
+    {
+        var asked = new List<string>();
+        var (top, _) = Expand(formula, asked);
+
+        var value = top.Single(r => r.Node.Text == fragment).Item.ValueText;
+        Assert.Equal(EvaluatePrecedents.ReachesOutside(function), value);
+        Assert.Contains(function + " reads external data", value);
+        Assert.Empty(asked);
+    }
+
+    [Fact]
+    public void Excel_functions_old_and_new_are_evaluated()
+    {
+        var asked = new List<string>();
+        Expand("=XLOOKUP(A1,B:B,C:C)+_xlfn.TEXTSPLIT(A2,\",\")+IFERROR(A3,0)+NOW()", asked);
+
+        Assert.Equal(new[] { "XLOOKUP(A1,B:B,C:C)", "_xlfn.TEXTSPLIT(A2,\",\")", "IFERROR(A3,0)", "NOW()" }, asked);
+    }
+
+    [Fact]
+    public void The_whole_formula_shows_the_cell_value_without_evaluating()
+    {
+        var asked = new List<string>();
+        var (top, children) = Expand("=IF(A1>0,B1+1,C1)", asked, () => "$15,066");
+
+        Assert.Equal("$15,066", top.Single().Item.ValueText);
+        Assert.Equal(new[] { "A1>0", "B1+1" }, asked); // only its arguments, when expanded
+        Assert.Equal("=A1>0", children[0][0].Item.ValueText);
+
+        asked.Clear();
+        Assert.Equal("cell", Expand("=MyUdf(A1)", asked, () => "cell").Top.Single().Item.ValueText);
+        Assert.Equal("cell", Expand("=LET(x,A1,x*2)", asked, () => "cell").Top.Single().Item.ValueText);
+        Assert.Equal("cell", Expand("=(A1+B1)", asked, () => "cell").Top.Single().Item.ValueText);
+        Assert.Empty(asked);
+
+        // Without the cell's value, it is evaluated like any other row.
+        Assert.Equal("=IF(A1>0,B1+1,C1)", Expand("=IF(A1>0,B1+1,C1)", asked).Top.Single().Item.ValueText);
+    }
+
+    [Fact]
+    public void A_whole_formula_returning_a_reference_is_evaluated_to_find_its_range()
+    {
+        var asked = new List<string>();
+        var index = Expand("=INDEX(A1:A9,2)", asked, () => "cell").Top.Single();
+
+        Assert.Equal("=INDEX(A1:A9,2)", index.Item.ValueText);
+        Assert.Equal(new[] { "INDEX(A1:A9,2)" }, asked);
+
+        // Too long to evaluate: the cell's value.
+        var tooLong = EvaluatePrecedents.Of(Parse("=INDEX(A1:A9,2)"), _ => EvaluatePrecedents.TooLong, Reference, () => "cell").Single();
+        Assert.Equal("cell", tooLong.Item.ValueText);
+    }
+
+    private static FormulaNode Node(string formula, string fragment)
+    {
+        var pending = new Stack<FormulaNode>();
+        pending.Push(Parse(formula).Structure!);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            if (node.Text == fragment)
+            {
+                return node;
+            }
+
+            foreach (var child in node.Children)
+            {
+                pending.Push(child);
+            }
+        }
+
+        throw new InvalidOperationException(fragment + " is not a node of " + formula);
+    }
+
+    private static readonly Func<string, bool> AllOpen = _ => true;
+
+    private static readonly Func<FormulaReference, string?> AsWritten = reference => reference.Text;
+
+    [Fact]
+    public void Prepare_gives_the_text_with_row_and_column_made_the_cells()
+    {
+        var request = EvaluatePrecedents.Prepare(Node("=(ROW()+COLUMN()+A1)*2", "(ROW()+COLUMN()+A1)"), 7, 3, AllOpen, AsWritten);
+
+        Assert.Equal("(7+3+A1)", request.Text);
+        Assert.Null(request.NotEvaluated);
+        Assert.False(request.IsVolatile);
+        Assert.Equal("5", request.Finish("5"));
+    }
+
+    [Theory]
+    [InlineData("=LET(_xlpm.x,A1,_xlpm.x*2)+1", "LET(_xlpm.x,A1,_xlpm.x*2)", "LET(x,A1,x*2)")]
+    [InlineData("=LET(_xlpm.f,LAMBDA(_xlpm.y,_xlpm.y+1),_xlpm.f(A1))+1", "LET(_xlpm.f,LAMBDA(_xlpm.y,_xlpm.y+1),_xlpm.f(A1))",
+        "LET(f,LAMBDA(y,y+1),f(A1))")]
+    [InlineData("=LET(x,A1,x*2)+1", "LET(x,A1,x*2)", "LET(x,A1,x*2)")]
+    public void Prepare_writes_let_and_lambda_names_as_typed(string formula, string fragment, string expected)
+    {
+        Assert.Equal(expected, EvaluatePrecedents.Prepare(Node(formula, fragment), 1, 1, AllOpen, AsWritten).Text);
+    }
+
+    [Fact]
+    public void Prepare_marks_volatile_rows()
+    {
+        var request = EvaluatePrecedents.Prepare(Node("=(NOW()+A1)*2", "(NOW()+A1)"), 1, 1, AllOpen, AsWritten);
+
+        Assert.True(request.IsVolatile);
+        Assert.Equal("45000 (volatile)", request.Finish("45000"));
+        Assert.True(EvaluatePrecedents.Prepare(Node("=_xlfn.RANDARRAY(2)+1", "_xlfn.RANDARRAY(2)"), 1, 1, AllOpen, AsWritten).IsVolatile);
+    }
+
+    [Fact]
+    public void Prepare_does_not_evaluate_a_closed_workbook()
+    {
+        const string Formula = "=SUM('C:\\x\\[Ext.xlsx]Rates'!B3:B5)+1";
+        var node = Node(Formula, "SUM('C:\\x\\[Ext.xlsx]Rates'!B3:B5)");
+        var checkedBooks = new List<string>();
+
+        var closed = EvaluatePrecedents.Prepare(node, 1, 1, name =>
+        {
+            checkedBooks.Add(name);
+            return false;
+        }, AsWritten);
+        var open = EvaluatePrecedents.Prepare(node, 1, 1, AllOpen, AsWritten);
+
+        Assert.Null(closed.Text);
+        Assert.Equal(EvaluatePrecedents.ClosedWorkbook("Ext.xlsx"), closed.NotEvaluated);
+        Assert.Contains("[Ext.xlsx] is closed", closed.NotEvaluated);
+        Assert.Contains("trace again", closed.NotEvaluated);
+        Assert.Equal(new[] { "Ext.xlsx" }, checkedBooks);
+        Assert.Equal("SUM('C:\\x\\[Ext.xlsx]Rates'!B3:B5)", open.Text);
+    }
+
+    [Fact]
+    public void Prepare_writes_table_references_to_the_current_row_as_their_cells()
+    {
+        var asked = new List<string>();
+        var request = EvaluatePrecedents.Prepare(Node("=([@Qty]*[@Price])+1", "([@Qty]*[@Price])"), 7, 3, AllOpen, reference =>
+        {
+            asked.Add(reference.Text);
+            return reference.TableColumns[0] == "Qty" ? "'Eval'!$A$7" : "'Eval'!$B$7";
+        });
+
+        Assert.Equal("('Eval'!$A$7*'Eval'!$B$7)", request.Text);
+        Assert.Equal(new[] { "[@Qty]", "[@Price]" }, asked);
+    }
+
+    [Fact]
+    public void Prepare_asks_only_for_table_references_that_need_the_cell_and_for_names()
+    {
+        var asked = new List<string>();
+        var request = EvaluatePrecedents.Prepare(
+            Node("=SUM(Sales[Qty],Sales[@Qty],Sales[[#This Row],[Qty]],[Qty],Rate,A1)+1", "SUM(Sales[Qty],Sales[@Qty],Sales[[#This Row],[Qty]],[Qty],Rate,A1)"),
+            3, 1, AllOpen, reference =>
+            {
+                asked.Add(reference.Text);
+                return reference.Kind == FormulaReferenceKind.Name ? reference.Text : "X";
+            });
+
+        Assert.Equal(new[] { "Sales[@Qty]", "Sales[[#This Row],[Qty]]", "[Qty]", "Rate" }, asked);
+        Assert.Equal("SUM(Sales[Qty],X,X,X,Rate,A1)", request.Text);
+    }
+
+    [Theory]
+    [InlineData("=([@Qty]*2)+1", "([@Qty]*2)")]
+    [InlineData("=(RelativeName*2)+1", "(RelativeName*2)")]
+    [InlineData("=(@A1:A10+1)*2", "(@A1:A10+1)")]
+    [InlineData("=(_xlfn.SINGLE(A1:A10)+1)*2", "(_xlfn.SINGLE(A1:A10)+1)")]
+    public void Prepare_does_not_evaluate_what_depends_on_its_cell(string formula, string fragment)
+    {
+        var request = EvaluatePrecedents.Prepare(Node(formula, fragment), 1, 1, AllOpen, _ => null);
+
+        Assert.Null(request.Text);
+        Assert.Equal(EvaluatePrecedents.DependsOnItsCell, request.NotEvaluated);
+    }
+
+    [Fact]
+    public void Prepare_reports_text_longer_than_excel_evaluates()
+    {
+        var sum = "SUM(" + string.Join(",", Enumerable.Repeat("B2", 90)) + ")";
+        var request = EvaluatePrecedents.Prepare(Node("=" + sum + "+1", sum), 1, 1, AllOpen, AsWritten);
+
+        Assert.Null(request.Text);
+        Assert.Equal(EvaluatePrecedents.TooLong, request.NotEvaluated);
+        Assert.Contains("255-character", EvaluatePrecedents.TooLong);
+    }
+
+    [Fact]
+    public void Prepare_gives_the_reasons_rows_are_never_evaluated()
+    {
+        Assert.Equal(EvaluatePrecedents.UsesLocalNames,
+            EvaluatePrecedents.Prepare(Node("=LET(x,A1,x*2)", "x*2"), 1, 1, AllOpen, AsWritten).NotEvaluated);
+        Assert.Equal(EvaluatePrecedents.UnknownFunction,
+            EvaluatePrecedents.Prepare(Node("=MyUdf(A1)+1", "MyUdf(A1)"), 1, 1, AllOpen, AsWritten).NotEvaluated);
+    }
+
+    [Fact]
+    public void Prepare_checks_its_arguments()
+    {
+        var node = Node("=SUM(A1)", "SUM(A1)");
+
+        Assert.Throws<ArgumentNullException>(() => EvaluatePrecedents.Prepare(null!, 1, 1, AllOpen, AsWritten));
+        Assert.Throws<ArgumentNullException>(() => EvaluatePrecedents.Prepare(node, 1, 1, null!, AsWritten));
+        Assert.Throws<ArgumentNullException>(() => EvaluatePrecedents.Prepare(node, 1, 1, AllOpen, null!));
+        Assert.Throws<ArgumentNullException>(() => EvaluatePrecedents.NotEvaluated(null!));
+        Assert.Throws<ArgumentNullException>(() => EvaluatePrecedents.ClosedWorkbook(null!));
+        Assert.Throws<ArgumentNullException>(() => EvaluatePrecedents.Prepare(node, 1, 1, AllOpen, AsWritten).Finish(null!));
+    }
 }

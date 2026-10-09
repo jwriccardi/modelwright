@@ -44,10 +44,12 @@ namespace Modelwright.AddIn;
 /// </para>
 /// <para>
 /// <b>Ctrl+E</b> (or the gear menu) turns "Evaluate functions &amp; groups" on or off: the setting is saved in
-/// ui-state.json at once and the tree is rebuilt in the same window, from a provider in the new mode, with the
-/// selection brought back along the same path where the new tree allows. Function and group rows are not places:
-/// moving onto one keeps Excel where it is and shows the row's value in the footer (a reference-returning function's
-/// row goes to its target).
+/// ui-state.json at once and the tree is rebuilt in the same window, from a provider in the new mode. The two trees
+/// have different shapes, so the selection is not brought back along its path (that could expand and evaluate
+/// unrelated rows, or open closed workbooks): it is the top-level row of the same cell or range if the new tree has
+/// one, else the audited cell, and Excel stays where it is. Not while an F2 edit is awaited. Function and group rows
+/// are not places: moving onto one keeps Excel where it is and shows the row's value in the footer (a function that
+/// evaluated to a range goes there).
 /// </para>
 /// </remarks>
 internal sealed class TraceSession
@@ -582,8 +584,10 @@ internal sealed class TraceSession
     }
 
     // Ctrl+E or the gear menu (outside macro context): evaluate mode on or off, saved at once, and the tree rebuilt in
-    // the new mode with the selection along the same path. Excel stays where it is (a workbook the new tree opens is
-    // left again). Logs one line with the new mode and the rows under the audited cell. Never throws.
+    // the new mode, the selection on the top-level row with the selected row's Id (nothing is expanded), else on the
+    // audited cell. Excel stays where it is (a workbook the new tree opens is left again). Refused while an F2 edit is
+    // awaited (its end rebuilds the tree in the current mode). Logs one line with the new mode and the rows under the
+    // audited cell. Never throws.
     private void ToggleEvaluate(long pressed, string source)
     {
         if (_closing || !ReferenceEquals(Current, this))
@@ -594,10 +598,10 @@ internal sealed class TraceSession
         var on = !_provider.EvaluateFunctions;
         var stopwatch = Stopwatch.StartNew();
         string result;
-        if (IsEditing())
+        if (IsEditing() || AwaitsEditEnd)
         {
             Message("Finish editing the cell (Enter or Esc) to use Trace In.");
-            result = "ignored: editing a cell";
+            result = AwaitsEditEnd ? "ignored: an F2 edit is awaited" : "ignored: editing a cell";
         }
         else
         {
@@ -605,7 +609,7 @@ internal sealed class TraceSession
             try
             {
                 var back = ActiveCell();
-                Reload(_tree.PathOf(_tree.Selected), on);
+                Reload(null, on, _tree.Selected.Item.Id);
                 _ui = _ui.WithEvaluateFunctions(on);
                 UiStateStore.Save(_window.LastBounds is WindowRect bounds ? _ui.WithBounds(bounds) : _ui);
                 if (back is not null)
@@ -649,20 +653,36 @@ internal sealed class TraceSession
         _window.SetStatus(Where(_tree.Root));
     }
 
-    // The audited cell's precedents changed (an F2 edit), or evaluate mode was turned on or off: a new tree in the same
-    // window, from a provider in that mode, with the selection brought back along the same path, or as near as the new
-    // tree allows. If the new tree cannot be shown, the old one stays (and is shown again) and the exception propagates.
-    private void Reload(IReadOnlyList<int> path, bool evaluateFunctions)
+    // The audited cell's precedents changed (an F2 edit): a new tree in the same window, with the selection brought
+    // back along the same path, or as near as the new tree allows. Or evaluate mode was turned on or off (path null):
+    // a new tree from a provider in that mode, whose shape differs, so nothing is expanded: the selection is the
+    // top-level row whose item has the Id selectId (the same cell or range), if any, else the audited cell. If the new
+    // tree cannot be shown, the old one stays (and is shown again) and the exception propagates.
+    private void Reload(IReadOnlyList<int>? path, bool evaluateFunctions, string? selectId = null)
     {
         var provider = new ExcelPrecedentProvider(evaluateFunctions);
         var tree = new PrecedentTree(provider, provider.CreateRoot(_audited));
-        try
+        if (path is not null)
         {
-            tree.SelectPath(path);
+            try
+            {
+                tree.SelectPath(path);
+            }
+            catch (PrecedentsUnavailableException)
+            {
+                // Excel is busy: the selection stays as deep as the path was followed.
+            }
         }
-        catch (PrecedentsUnavailableException)
+        else if (selectId is not null)
         {
-            // Excel is busy: the selection stays as deep as the path was followed.
+            foreach (var row in tree.Root.Children)
+            {
+                if (row.Item.Id == selectId)
+                {
+                    tree.Select(row);
+                    break;
+                }
+            }
         }
 
         var oldProvider = _provider;

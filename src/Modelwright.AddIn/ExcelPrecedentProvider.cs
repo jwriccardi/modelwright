@@ -22,8 +22,9 @@ namespace Modelwright.AddIn;
 /// <c>Worksheet.Evaluate</c> in the formula's sheet. A formula the parser rejects falls back to Excel's
 /// <c>Range.DirectPrecedents</c> (same sheet only, and labelled so). In evaluate mode
 /// (<see cref="EvaluateFunctions"/>) a cell's rows follow its formula's structure instead (<see cref="EvaluatePrecedents"/>):
-/// each group's and function's value is its text evaluated with <c>Worksheet.Evaluate</c> in the cell's sheet, and a
-/// function that can return a reference (INDEX, OFFSET, INDIRECT, CHOOSE) goes to the range it evaluates to.
+/// each group's and function's value is its text evaluated with <c>Worksheet.Evaluate</c> in the cell's sheet (as
+/// <see cref="EvaluatePrecedents.Prepare"/> writes it, or not at all, with the reason), a row that is the whole formula
+/// shows the cell's value, and a function that evaluates to a range (INDEX, OFFSET, XLOOKUP...) goes there.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -54,7 +55,10 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
     private const int XlR1C1 = -4150;
 
     // Worksheet.Evaluate accepts at most 255 characters.
-    private const int MaxEvaluateLength = 255;
+    private const int MaxEvaluateLength = EvaluatePrecedents.MaxEvaluateLength;
+
+    // The longest label or value a TraceEvalRow log line carries.
+    private const int MaxLoggedText = 120;
 
     // Names whose formula is just another name (A = B, B = C, ...) are followed this deep: a circular pair stops here.
     private const int MaxNameDepth = 16;
@@ -350,16 +354,18 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         var owner = LocalAddress(cell);
         if (EvaluateFunctions)
         {
+            // A row that is the whole formula shows the cell's own value (nothing to evaluate).
             return EvaluateRows(EvaluatePrecedents.Of(parsed, node => EvaluateText(node, origin),
-                (node, argument) => ReferenceRow(node, argument, parsed, origin, owner)), new StructureRow(parsed.Structure!, parsed, origin, owner));
+                (node, argument) => ReferenceRow(node, argument, parsed, origin, owner), () => CellValue(cell)),
+                new StructureRow(parsed.Structure!, parsed, origin, owner));
         }
 
         return Resolve(parsed, origin, owner);
     }
 
     // Evaluate mode: the items of rows built under a cell or a function or group row (parent, for the formula and its
-    // origin). Each function or group row remembers its node, to list its own children when expanded; a
-    // reference-returning function that evaluated to a range goes there.
+    // origin). Each function or group row remembers its node, to list its own children when expanded; a function
+    // that evaluated to a range goes there. Each row is logged (TraceEvalRow: its kind, label and value, cut short).
     private IReadOnlyList<PrecedentItem> EvaluateRows(IReadOnlyList<EvaluatePrecedent> rows, StructureRow parent)
     {
         var items = new List<PrecedentItem>(rows.Count);
@@ -376,11 +382,14 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
                 }
             }
 
+            DiagnosticsLog.Write("TraceEvalRow", "kind=" + item.Kind, "label=" + Cut(item.Label), "value=" + Cut(item.ValueText ?? string.Empty));
             items.Add(item);
         }
 
         return items;
     }
+
+    private static string Cut(string text) => text.Length <= MaxLoggedText ? text : text.Substring(0, MaxLoggedText - 1) + "…";
 
     // Evaluate mode: a reference row, resolved as in classic mode (with where it is written, for F2) and labelled with
     // its parameter name.
@@ -397,17 +406,19 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         return argument is null ? item : Moved(item, item.WithArgument(argument));
     }
 
-    // Evaluate mode: the Value column of a group or function, its text evaluated in the formula's sheet with ROW() and
-    // COLUMN() made the formula cell's. A range result shows its first cell's value (and its cell count); for a
-    // reference-returning function it is also the row's target (_computed). Never throws, unless Excel is busy.
+    // Evaluate mode: the Value column of a group or function: the text EvaluatePrecedents.Prepare gives (references
+    // that need the formula's cell resolved for it, ROW() and COLUMN() made its) evaluated in the formula's sheet, or
+    // why it is not evaluated. A range result shows its first cell's value (and its cell count); for a function (INDEX,
+    // OFFSET, XLOOKUP, IF...) it is also the row's target (_computed). Never throws, unless Excel is busy.
     private string EvaluateText(FormulaNode node, Origin origin)
     {
         try
         {
-            var text = CallingCell.SubstituteRowAndColumn(node.Text, origin.Row, origin.Column);
-            if (text.Length > MaxEvaluateLength)
+            var request = EvaluatePrecedents.Prepare(node, origin.Row, origin.Column, IsWorkbookOpen,
+                reference => WithoutItsCell(reference, origin));
+            if (request.Text is not string text)
             {
-                return EvaluatePrecedents.TooLong;
+                return request.NotEvaluated ?? EvaluatePrecedents.CannotEvaluate;
             }
 
             dynamic ws = origin.Sheet;
@@ -415,9 +426,9 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
             string value;
             if (!IsRange(result))
             {
-                value = TraceValueText.FromValue(result, _culture);
+                value = TraceValueText.FromEvaluated(result, _culture);
             }
-            else if (node.ReturnsReference)
+            else if (node.Kind == FormulaNodeKind.Function)
             {
                 var target = RangeItem(DisplayAddress(result, origin.FormulaWorkbook), result);
                 _computed[node] = target;
@@ -428,7 +439,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
                 value = RangeValue(result);
             }
 
-            return CallingCell.HasRelativeR1C1Indirect(text) ? value + OutsideItsCell : value;
+            return request.Finish(CallingCell.HasRelativeR1C1Indirect(text) ? value + OutsideItsCell : value);
         }
         catch (Exception ex) when (IsBusy(ex))
         {
@@ -455,6 +466,109 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         }
 
         return TraceValueText.ForRange(CellValue(range), cells, _culture);
+    }
+
+    // True if a workbook of that file name is open (it is not opened here). Throws only if Excel is busy.
+    private static bool IsWorkbookOpen(string name)
+    {
+        try
+        {
+            dynamic app = ExcelDnaUtil.Application;
+            object open = app.Workbooks.Item(name);
+            return open is not null;
+        }
+        catch (COMException ex) when (!IsBusy(ex))
+        {
+            return false;
+        }
+    }
+
+    // Evaluate mode (EvaluatePrecedents.Prepare): what a reference means outside the formula's cell. A table reference
+    // to the formula's row or its own table: the cells classic mode resolves it to (TableLayout), as 'Sheet'!$E$3, or
+    // null if there are none. A defined name: itself, or null if its formula has relative references
+    // (Worksheet.Evaluate would take them from the active cell). Anything else: itself.
+    private string? WithoutItsCell(FormulaReference reference, Origin origin)
+    {
+        switch (reference.Kind)
+        {
+            case FormulaReferenceKind.StructuredReference:
+                return TableCells(reference, origin);
+            case FormulaReferenceKind.Name:
+                return IsRelativeName(reference, origin) ? null : reference.Text;
+            default:
+                return reference.Text;
+        }
+    }
+
+    // The cells a table reference means for the formula's cell, as text Worksheet.Evaluate reads in the formula's
+    // sheet ('Data'!$E$3, '[Book.xlsx]Data'!$E$3), or null if they cannot be found (a closed workbook is not opened).
+    private string? TableCells(FormulaReference reference, Origin origin)
+    {
+        object? table;
+        if (reference.Name is null)
+        {
+            table = TableOf(origin.Cell);
+        }
+        else
+        {
+            var book = reference.WorkbookName is null
+                ? origin.Book
+                : FindWorkbook(reference.WorkbookName, reference.WorkbookPath, mayOpen: false, origin.Book, out _);
+            table = book is null ? null : FindTable(book, reference.Name);
+        }
+
+        if (table is null)
+        {
+            return null;
+        }
+
+        dynamic lo = table;
+        object parent = lo.Parent;
+        dynamic ws = parent;
+        string sheetName = ws.Name;
+        object book2 = ws.Parent;
+        dynamic wb = book2;
+        string workbookName = wb.Name;
+        var rect = Layout(table, workbookName).Resolve(reference.TableSpecifiers, reference.TableColumns, origin.Row, out _);
+        if (rect is not CellRect cells)
+        {
+            return null;
+        }
+
+        var prefix = string.Equals(workbookName, origin.FormulaWorkbook, StringComparison.OrdinalIgnoreCase)
+            ? sheetName
+            : "[" + workbookName + "]" + sheetName;
+        return "'" + prefix.Replace("'", "''") + "'!" + cells.Address;
+    }
+
+    // True if the defined name a reference names has relative references in its formula (Name.RefersTo, relative to
+    // the active cell), so evaluating it outside the formula's cell takes them from elsewhere. False if it is not
+    // found (Excel then evaluates it as it can). A closed workbook is not opened.
+    private bool IsRelativeName(FormulaReference reference, Origin origin)
+    {
+        foreach (var lookup in NameLookup.Candidates(reference, origin.Context))
+        {
+            var book = lookup.WorkbookName is null
+                ? origin.Book
+                : FindWorkbook(lookup.WorkbookName, reference.WorkbookPath, mayOpen: false, origin.Book, out _);
+            if (book is null)
+            {
+                continue;
+            }
+
+            var name = lookup.SheetName is null ? WorkbookLevelName(book, lookup.Name) : SheetLevelName(book, lookup.SheetName, lookup.Name);
+            if (name is null)
+            {
+                continue;
+            }
+
+            dynamic n = name;
+            string refersTo = n.RefersTo;
+            var parsed = FormulaParser.Parse(refersTo, origin.Context);
+            return CallingCell.HasRelativeR1C1Indirect(refersTo) || (parsed.IsParsed && AnyRelative(parsed));
+        }
+
+        return false;
     }
 
     // The rows of a parsed formula (a cell's, or a name's), each resolved from origin. For a cell's formula
@@ -740,7 +854,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
         string value;
         if (text.Length > MaxEvaluateLength)
         {
-            value = $"(not evaluated: longer than Excel's {MaxEvaluateLength}-character limit)";
+            value = EvaluatePrecedents.TooLong;
         }
         else
         {
@@ -905,8 +1019,7 @@ internal sealed class ExcelPrecedentProvider : IPrecedentProvider
 
             if (text.Length > MaxEvaluateLength)
             {
-                return new PrecedentItem(PrecedentKind.DynamicReference, label,
-                    valueText: $"(not evaluated: longer than Excel's {MaxEvaluateLength}-character limit)", canExpand: false);
+                return new PrecedentItem(PrecedentKind.DynamicReference, label, valueText: EvaluatePrecedents.TooLong, canExpand: false);
             }
 
             dynamic ws = origin.Sheet;

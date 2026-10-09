@@ -69,6 +69,32 @@ public static class TraceValueText
     }
 
     /// <summary>
+    /// A value <c>Worksheet.Evaluate</c> returned for a fragment of a formula (Trace In's evaluate mode): as
+    /// <see cref="FromValue"/>, except that a number shows its digits grouped, as a cell formatted <c>#,##0.##</c>
+    /// would (<c>15,120</c>, <c>-1,234.5</c>), still to 15 significant digits; a very large or small number stays in
+    /// scientific notation.
+    /// </summary>
+    /// <param name="value">The value.</param>
+    /// <param name="culture">Formats numbers (separators) and dates.</param>
+    public static string FromEvaluated(object? value, IFormatProvider culture)
+    {
+        if (value is not double number || double.IsNaN(number) || double.IsInfinity(number))
+        {
+            return FromValue(value, culture);
+        }
+
+        var general = (number == 0 ? 0d : number).ToString("G15", CultureInfo.InvariantCulture); // no "-0"
+        if (general.IndexOf('E') >= 0)
+        {
+            return number.ToString("G15", culture);
+        }
+
+        var point = general.IndexOf('.');
+        var decimals = point < 0 ? 0 : general.Length - point - 1;
+        return double.Parse(general, CultureInfo.InvariantCulture).ToString("N" + decimals.ToString(CultureInfo.InvariantCulture), culture);
+    }
+
+    /// <summary>
     /// Excel's text for an error value (<c>#DIV/0!</c>, <c>#N/A</c>, <c>#SPILL!</c>...), given as a COM error code
     /// (<c>-2146826246</c>, how <c>Value2</c> returns <c>#N/A</c>) or as Excel's error number (<c>2042</c>); null if
     /// <paramref name="code"/> is neither.

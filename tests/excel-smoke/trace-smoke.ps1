@@ -20,8 +20,14 @@
 # of Macabacus's help page (research/07) in Eval!A2: Ctrl+E rebuilds the tree in the same window (log: TraceEvaluate
 # on=true rows=5), Down onto a group row and onto the IF(...) row keeps Excel on A2 (not places: log "not a place"),
 # Right expands IF into its three arguments (log: TraceExpand kind=Function name=IF args=3), Down and Right into its
-# logical_test E2>0, Down onto E2 goes there, Esc returns to A2; traced again the mode is remembered (TraceOpen
-# evaluate=true), Ctrl+E turns it off (on=false rows=13) and Down goes to the first reference, Eval!B2.
+# logical_test E2>0, Down onto E2 goes there, Down three times (Excel stays on E2) and Right expand
+# (K2+L2-ABS(M2)), Esc returns to A2. Each row's value is checked in the log (TraceEvalRow: (B2+C2/D2) 5.5, IF(...)
+# 14.9, E2>0 TRUE, F2+G2 14.9, SUM(...) 20, (K2+L2-ABS(M2)) -4, ABS(...) 7, PRODUCT(...) 15,120). Then, in evaluate
+# mode, Eval!A4 =LET(x,B4,x*2)+C4 (LET(...) 10; expanded, x*2 is "(uses LET/LAMBDA names: not evaluated)"), Eval!C8
+# in the table Lines =([@Qty]*[@Price])+1 (the group is 18, its own row's) and Eval!A11, a SUM of 90 cells longer
+# than Excel's 255-character Evaluate limit (the row is the whole formula: the cell's 360). Traced again the mode is
+# remembered (TraceOpen evaluate=true), Ctrl+E turns it off (on=false rows=13) and Down goes to the first reference,
+# Eval!B2.
 # Timings (open, and each Up/Down step) are read back from the diagnostics log and reported against the targets
 # (300 ms, 100 ms); they are reported, not failed on. With the diagnostics log off (diagnosticsLog: false in
 # settings.json) those log checks are skipped and the output says so; settings.json is never touched.
@@ -587,6 +593,10 @@ try {
     if ($here -ne 'Eval!A2') { throw "ABORT [$label]: Excel moved to $here; a group or function row is not a place." }
     "ok   still on Eval!A2 after: $label"
   }
+  # A row built in evaluate mode, as the log shows it: "TraceEvalRow kind=... label=... value=...". $value is a regex.
+  function Expect-EvalRow([int]$mark, [string]$kind, [string]$label, [string]$value) {
+    Expect-Log $mark ("`tTraceEvalRow`tkind=$kind`tlabel=" + [regex]::Escape($label) + "`tvalue=$value$") "$label = $value"
+  }
   $mark = Log-Mark
   Select-Cell 'A2' $eval
   Step '^+{[}'   'Ctrl+Shift+[ on Eval!A2 (classic)' $mainName 'Eval' 'A2' $true -waitMs 3000
@@ -596,6 +606,10 @@ try {
   $mark = Log-Mark
   Step '^e'      'Ctrl+E: evaluate on, Excel stays'  $mainName 'Eval' 'A2' $true -waitMs 1500
   Expect-Log $mark "`tTraceEvaluate`ton=true`trows=5`t.*`tok$" 'Ctrl+E rebuilt the tree with 5 rows under A2'
+  Expect-EvalRow $mark 'Group' '(B2+C2/D2)' '5\.5'
+  Expect-EvalRow $mark 'Function' 'IF(...)' '14\.9'
+  Expect-EvalRow $mark 'Group' '(K2+L2-ABS(M2))' '-4'
+  Expect-EvalRow $mark 'Function' 'PRODUCT(...)' '15,?120'
   foreach ($row in @('(B2+C2/D2)', 'IF(...)')) {
     $mark = Log-Mark
     Step '{DOWN}' "Down: $row (not a place)"         $mainName 'Eval' 'A2' $true
@@ -605,13 +619,43 @@ try {
   $mark = Log-Mark
   Step '{RIGHT}' 'Right: expand IF(...)'             $mainName 'Eval' 'A2' $true
   Expect-Log $mark "`tTraceExpand`tkind=Function`tname=IF`targs=3$" 'IF(...) expanded into its 3 arguments'
+  Expect-EvalRow $mark 'Group' 'E2>0' 'TRUE'
+  Expect-EvalRow $mark 'Group' 'F2+G2' '14\.9'
+  Expect-EvalRow $mark 'Function' 'SUM(...)' '20'
   $mark = Log-Mark
   Step '{DOWN}'  'Down: E2>0 [logical_test]'         $mainName 'Eval' 'A2' $true
   Expect-Log $mark "`tTraceNavigate`tkey=Down`t.*`tmove=Moved`ttarget=E2>0`tnot a place$" 'Down onto E2>0'
   Assert-StillOnA2 'Down onto E2>0'
   Step '{RIGHT}' 'Right: expand E2>0'                $mainName 'Eval' 'A2' $true
   Step '{DOWN}'  'Down: E2 (a reference: goes there)' $mainName 'Eval' 'E2' $true
+  Step '{DOWN}'  'Down: F2+G2 (Excel stays on E2)'   $mainName 'Eval' 'E2' $true
+  Step '{DOWN}'  'Down: SUM(...) (stays on E2)'      $mainName 'Eval' 'E2' $true
+  Step '{DOWN}'  'Down: (K2+L2-ABS(M2)) (stays on E2)' $mainName 'Eval' 'E2' $true
+  $mark = Log-Mark
+  Step '{RIGHT}' 'Right: expand (K2+L2-ABS(M2))'     $mainName 'Eval' 'E2' $true
+  Expect-EvalRow $mark 'Function' 'ABS(...)' '7'
   Step '{ESC}'   'Esc: back to A2, closed'           $mainName 'Eval' 'A2' $false
+  # Rows evaluate mode must not, or cannot simply, evaluate (the mode stays on: traces open in it).
+  $mark = Log-Mark
+  Select-Cell 'A4' $eval
+  Step '^+{[}'   'Ctrl+Shift+[ on Eval!A4 (LET)'     $mainName 'Eval' 'A4' $true -waitMs 3000
+  Expect-Log $mark "`tTraceOpen`t.*`tevaluate=true`ttarget=[^`t]*\|Eval\|A4`tok" 'TraceOpen on A4 in evaluate mode'
+  Expect-EvalRow $mark 'Function' 'LET(...)' '10'
+  Step '{DOWN}'  'Down: LET(...) (not a place)'      $mainName 'Eval' 'A4' $true
+  $mark = Log-Mark
+  Step '{RIGHT}' 'Right: expand LET(...)'            $mainName 'Eval' 'A4' $true
+  Expect-Log $mark "`tTraceEvalRow`tkind=Group`tlabel=(_xlpm\.)?x\*2`tvalue=\(uses LET/LAMBDA names: not evaluated\)$" 'x*2 uses the LET name: not evaluated'
+  Step '{ESC}'   'Esc: back to A4, closed'           $mainName 'Eval' 'A4' $false
+  $mark = Log-Mark
+  Select-Cell 'C8' $eval
+  Step '^+{[}'   'Ctrl+Shift+[ on Eval!C8 (table row)' $mainName 'Eval' 'C8' $true -waitMs 3000
+  Expect-EvalRow $mark 'Group' '([@Qty]*[@Price])' '18'
+  Step '{ESC}'   'Esc: back to C8, closed'           $mainName 'Eval' 'C8' $false
+  $mark = Log-Mark
+  Select-Cell 'A11' $eval
+  Step '^+{[}'   'Ctrl+Shift+[ on Eval!A11 (> 255 characters)' $mainName 'Eval' 'A11' $true -waitMs 3000
+  Expect-EvalRow $mark 'Function' 'SUM(...)' '360'
+  Step '{ESC}'   'Esc: back to A11, closed'          $mainName 'Eval' 'A11' $false
   # The mode is remembered: traced again it opens in evaluate mode; Ctrl+E goes back to the classic rows.
   $mark = Log-Mark
   Step '^+{[}'   'Ctrl+Shift+[ on Eval!A2 (evaluate)' $mainName 'Eval' 'A2' $true -waitMs 3000
