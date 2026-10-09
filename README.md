@@ -110,15 +110,16 @@ Uninstalling never deletes them. Delete those folders yourself if you want them 
   It removes Modelwright from Excel's add-in list; `-RemoveFile` also deletes the `.xll` from `%APPDATA%\Microsoft\AddIns`.
 - **By hand:** File › Options › Add-ins › Manage: Excel Add-ins › Go… › untick **Modelwright** › OK. Then close Excel and delete the `.xll`.
 
-## Status: formatting cycles shipped; Trace In in progress
+## Status: all four features built; release work in progress
 
 The architecture is decided: an **Excel-DNA (C#) add-in for Windows desktop Excel** ([ADR-0002](docs/decisions/0002-excel-dna-windows-first.md)), validated by decision spikes ([results](docs/spike-results.md)). Working today, on Macabacus's exact keys:
 - **Number-format cycles:** Ctrl+Shift+1 / 2 / 4 / 5 / 8, Ctrl+Shift+Y and Alt+Shift+;.
 - **Color cycles:** Ctrl+' (font), Ctrl+Shift+K (fill) and Ctrl+; (blue/black toggle).
 - **Undo:** Ctrl+Z / Ctrl+Y work alongside Excel's own undo.
 - **Settings dialog** (Modelwright › Settings…).
+- **Trace In** (Ctrl+Shift+[): a tree of the formula's precedents across sheets and workbooks (closed ones are opened read-only, OneDrive/SharePoint links included); Up/Down go there, Right/Left expand and collapse, Enter stays, Esc returns, **F2** edits the traced reference in Point mode, **Ctrl+E** evaluates functions and groups with Excel's argument names, **Ctrl+Shift+\** returns to the last audited cell.
 
-Trace In (Ctrl+Shift+[) is next ([PLAN](docs/PLAN.md)).
+Left before a first release ([PLAN](docs/PLAN.md)): code signing and an MSI (owner decisions), testing on 32-bit Excel, screenshots.
 
 ### Build and test
 
