@@ -12,12 +12,11 @@ The Modelwright zip contains:
   SHA256SUMS.txt          checksum of the add-in
   LICENSE, THIRD_PARTY_NOTICES.md
 
-There are four ways to install. Pick one:
+There are three ways to install. Pick one:
   A  Install script       recommended; needs PowerShell scripts to be allowed
-  B  Windows installer    Modelwright-<version>-x64.msi from the release page; needs installers
-     (MSI)                to be allowed; uninstall from Settings > Apps
-  C  By hand              no scripts and no installer: Excel's own Add-ins dialog
-  D  IT / from source     for locked-down companies, and anyone who must not run downloads
+  B  By hand              no scripts: Excel's own Add-ins dialog
+  C  IT / from source     for locked-down companies, and anyone who must not run downloads
+An MSI installer is planned for a future release (#13).
 
 
 BEFORE YOU START
@@ -36,16 +35,16 @@ BEFORE YOU START
 WHY WINDOWS WARNS YOU
 ---------------------
 This release is not code-signed (signed builds are planned). So:
-- When you run the MSI, Windows SmartScreen may say "Windows protected your PC". Click
-  "More info", check the file name, then click "Run anyway".
 - Excel refuses the downloaded add-in until it is unblocked (Before you start, step 2). The
-  install script and the MSI unblock it for you; by hand, you unblock it yourself.
+  install script unblocks it for you; by hand, you unblock it yourself.
+- Windows SmartScreen may say "Windows protected your PC" when you open an unsigned download.
+  Click "More info", check the file name, then click "Run anyway".
 Unblocking trusts this one file; it does not change any security setting.
 
 If your company requires signed add-ins (Trust Center > Add-ins > "Require Application Add-ins
 to be signed by Trusted Publisher"), this unsigned release cannot load there, whatever you do.
 Ask IT to trust Modelwright's publisher once a signed build exists, or to build and deploy it
-themselves (Option D).
+themselves (Option C).
 
 
 OPTION A - RUN THE INSTALL SCRIPT (recommended)
@@ -72,30 +71,12 @@ If the script stops, it says why. Its exit codes (for IT and deployment tools):
   5  .NET Framework 4.8 is missing
   6  the .xll does not match SHA256SUMS.txt: download the release again
   7  the .xll could not be checked against SHA256SUMS.txt (neither Get-FileHash nor certutil
-     worked): verify it by hand (FOR IT, below) or use Option C
+     worked): verify it by hand (FOR IT, below) or use Option B
   8  your Excel is 32-bit: Modelwright is 64-bit only, and nothing was changed
 
 
-OPTION B - RUN THE WINDOWS INSTALLER (MSI)
-------------------------------------------
-Use this if you prefer a normal Windows installer, or scripts are blocked but installers are not.
-1. On the release page, download Modelwright-<version>-x64.msi (not the zip).
-2. Close Excel.
-3. Double-click the .msi. If SmartScreen says "Windows protected your PC", click "More info" >
-   "Run anyway" (see "Why Windows warns you"). No administrator password is needed; if Windows
-   asks for one, your company blocks installers: use Option A or C.
-4. A progress window appears for a few seconds. If Excel is still open it asks you to close it
-   (Retry), and it stops with a message on 32-bit Excel.
-5. Start Excel. The Modelwright tab appears on the ribbon.
-The MSI installs for you only, to %LOCALAPPDATA%\Programs\Modelwright, and registers the add-in
-with Excel the same way the script does. A newer MSI upgrades it in place.
-To remove it: Settings > Apps > Installed apps > Modelwright > Uninstall (with Excel closed).
-For IT: msiexec /i Modelwright-<version>-x64.msi /qn /l*v install.log installs silently (exit
-code 0 success, 1603 failure, for example Excel open or 32-bit; the log says why).
-
-
-OPTION C - ADD IT BY HAND (no scripts, no installer)
-----------------------------------------------------
+OPTION B - ADD IT BY HAND (no scripts)
+--------------------------------------
 1. Close Excel.
 2. Copy Modelwright64.xll to your add-ins folder: paste  %APPDATA%\Microsoft\AddIns  into the
    File Explorer address bar and press Enter.
@@ -109,7 +90,7 @@ OPTION C - ADD IT BY HAND (no scripts, no installer)
 IF YOUR COMPANY BLOCKS IT
 -------------------------
 - "Leave this add-in disabled": the file is still marked as downloaded. Close Excel, unblock the
-  .xll in %APPDATA%\Microsoft\AddIns (step C3) or run install.ps1 again, then start Excel.
+  .xll in %APPDATA%\Microsoft\AddIns (step B3) or run install.ps1 again, then start Excel.
   Do not turn the block off in the Trust Center or the registry; that weakens security for every
   add-in. Unblocking this one file is enough.
 - "The file format and extension of 'Modelwright64.xll' don't match": your Excel is 32-bit,
@@ -117,9 +98,8 @@ IF YOUR COMPANY BLOCKS IT
 - The tab is missing after a crash: File > Options > Add-ins > Manage: "Disabled Items" > Go...,
   select Modelwright > Enable.
 - Signed add-ins required, or scripts and add-ins blocked outside approved folders: see "Why
-  Windows warns you" above, and ask IT (Option D).
-- Scripts blocked: use Option B or C. Installers blocked (Windows asks for an administrator, or
-  AppLocker blocks unsigned installers): use Option A or C.
+  Windows warns you" above, and ask IT (Option C).
+- Scripts blocked: use Option B.
 
 
 USING IT WITH MACABACUS
@@ -138,7 +118,6 @@ REMOVE IT
 ---------
 Close Excel completely first (check Task Manager for a background EXCEL.EXE): Excel rewrites its
 add-in list when it closes, which would undo the removal. Remove it the way you installed it:
-- Installed with the MSI: Settings > Apps > Installed apps > Modelwright > Uninstall.
 - Installed with the script: right-click uninstall.ps1 > Run with PowerShell, or paste:
     powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\Modelwright\uninstall.ps1" -RemoveFile
   (-RemoveFile also deletes the .xll from %APPDATA%\Microsoft\AddIns.)
@@ -152,7 +131,7 @@ Your settings are kept in %APPDATA%\Modelwright (settings.json) and the log in
 want them gone.
 
 
-OPTION D - FOR IT, AND BUILDING FROM SOURCE
+OPTION C - FOR IT, AND BUILDING FROM SOURCE
 -------------------------------------------
 Verify the files. Compare each file's SHA-256 with SHA256SUMS.txt (and with the digest GitHub
 shows next to each release asset):
@@ -168,8 +147,7 @@ Deploy. Per-user registration is one registry value, written with Excel closed:
   (no gaps), type REG_SZ, data:  /R "C:\path\to\Modelwright64.xll"
 The file can live in any local folder (not a network share; Program Files is fine for a
 per-machine copy). Group Policy Preferences or Intune can set the value; install.ps1 does exactly
-this and runs in Constrained Language mode; the per-user MSI does it too and installs silently
-(Option B).
+this and runs in Constrained Language mode.
 
 Build from source, for people who must not run downloaded binaries. Needs Windows 10 or 11 and
 internet access to nuget.org (or your company's NuGet proxy). Visual Studio is not needed.
@@ -183,8 +161,7 @@ internet access to nuget.org (or your company's NuGet proxy). Visual Studio is n
      dotnet build Modelwright.sln -c Release
 4. The add-in is written to:
      src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright64.xll
-5. Install it with Option A (run install.ps1 -SourceFolder <that publish folder>) or Option C.
-   To build the MSI as well, see CONTRIBUTING.md in the source.
+5. Install it with Option A (run install.ps1 -SourceFolder <that publish folder>) or Option B.
 6. Verify: Get-FileHash <file> -Algorithm SHA256. The build is not yet bit-for-bit reproducible
    (it embeds the build date), so a rebuilt file's hash will differ from the release's; use the
    attestation above to tie a release file to its commit.

@@ -308,7 +308,7 @@ try {
             if (-not $actual) {
                 Stop-WithError 7 ("Could not check $xllName against SHA256SUMS.txt: neither Get-FileHash nor " +
                     'certutil.exe could compute its SHA-256 (run with -Verbose for details). Check the file by hand ' +
-                    '(INSTALL.txt, "FOR IT: VERIFY THE FILES"), or install it by hand (INSTALL.txt, Option C).')
+                    '(INSTALL.txt, "FOR IT: VERIFY THE FILES"), or install it by hand (INSTALL.txt, Option B).')
             }
             if ($actual -ne $expected) {
                 Stop-WithError 6 "$xllName does not match SHA256SUMS.txt (it may be damaged or altered). Download the release again."

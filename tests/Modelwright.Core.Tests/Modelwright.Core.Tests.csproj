@@ -19,9 +19,4 @@
     <ProjectReference Include="..\..\src\Modelwright.Core\Modelwright.Core.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- The MSI's OPEN/OPENn registration rules (pure logic; the installer project itself is built only with WiX). -->
-    <Compile Include="..\..\installer\msi\CustomActions\AddInRegistration.cs" Link="Installer\AddInRegistration.cs" />
-  </ItemGroup>
-
 </Project>
