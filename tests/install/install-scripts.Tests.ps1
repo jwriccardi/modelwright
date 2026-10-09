@@ -11,6 +11,11 @@
     -ExcelProcessName (a name that is not running, so a running Excel does not matter). The real Excel
     Options key is compared before and after to prove it was not touched. Both are removed at the end.
 
+    The CI runner has no Office, and its PSModulePath makes Get-FileHash fail under hand-set ConstrainedLanguage.
+    Both are reproduced on any machine: -ExcelExePath points detection at a missing file (or at powershell.exe as
+    a stand-in), and Get-FileHash / certutil.exe are shadowed by test aliases and functions.
+    Every failed check prints the last script run's command line, exit code and full output.
+
     Exit code: 0 if every check passed, 1 otherwise.
 
 .EXAMPLE
@@ -38,12 +43,23 @@ $realOptionsKey = 'HKCU:\Software\Microsoft\Office\16.0\Excel\Options'
 $notRunning = "NoSuchProcess$runId"
 
 $script:failures = 0
+$script:lastRun = $null
+
+# On a failed check, print the exit code and the full output of the last script run, so CI logs show why.
+function Write-LastRun {
+    if (-not $script:lastRun) { return }
+    Write-Host "      last run: $($script:lastRun.Command)"
+    Write-Host "      exit code: $($script:lastRun.ExitCode)"
+    Write-Host '      output (stdout, stderr, Write-Host):'
+    foreach ($line in @($script:lastRun.Output -split "`r?`n")) { Write-Host "      | $line" }
+}
 
 function Assert-True([bool]$Condition, [string]$Message) {
     if ($Condition) {
         Write-Host "PASS  $Message"
     } else {
         Write-Host "FAIL  $Message" -ForegroundColor Red
+        Write-LastRun
         $script:failures++
     }
 }
@@ -55,8 +71,18 @@ function Assert-Equal($Actual, $Expected, [string]$Message) {
         Write-Host "FAIL  $Message" -ForegroundColor Red
         Write-Host "      expected: $Expected"
         Write-Host "      actual:   $Actual"
+        Write-LastRun
         $script:failures++
     }
+}
+
+# SHA-256 via certutil.exe, parsed as install.ps1 does: the first line that is 64 hex digits without spaces.
+function Get-CertUtilSha256([string]$Path) {
+    foreach ($line in @(& certutil.exe -hashfile $Path SHA256)) {
+        $hex = "$line" -replace '\s', ''
+        if ($hex -match '^[0-9A-Fa-f]{64}$') { return $hex.ToUpperInvariant() }
+    }
+    return $null
 }
 
 # "NAME=value" lines for every value of a key, sorted; "<missing>" if the key does not exist.
@@ -68,14 +94,17 @@ function Get-Snapshot([string]$Key) {
     return (@($lines | Sort-Object) -join "`n")
 }
 
-# Runs a script with the scratch locations; returns its output (Write-Host included) as one string.
-# The exit code is left in $LASTEXITCODE.
+# Runs a script with the scratch locations; returns all its output (Write-Host, verbose and errors included) as
+# one string. The exit code is left in $LASTEXITCODE; both are kept in $script:lastRun for failure reports.
 function Invoke-Script([string]$Path, [hashtable]$Arguments) {
-    $Arguments.RegistryRoot = $officeRoot
+    if (-not $Arguments.ContainsKey('RegistryRoot')) { $Arguments.RegistryRoot = $officeRoot }
     $Arguments.AddInsFolder = $addIns
     $Arguments.NoPause = $true
     if (-not $Arguments.ContainsKey('ExcelProcessName')) { $Arguments.ExcelProcessName = $notRunning }
-    $output = & $Path @Arguments 6>&1 2>&1 | Out-String
+    $output = & $Path @Arguments *>&1 | Out-String -Width 4096
+    $exitCode = $LASTEXITCODE
+    $argText = @(foreach ($key in @($Arguments.Keys | Sort-Object)) { "-$key $($Arguments[$key])" }) -join ' '
+    $script:lastRun = @{ Command = "$(Split-Path -Leaf $Path) $argText"; ExitCode = $exitCode; Output = $output }
     Write-Verbose $output
     return $output
 }
@@ -166,31 +195,93 @@ try {
     Assert-Equal (Get-Snapshot $optionsKey) $expected 'one Modelwright entry, now the 32-bit add-in'
     Assert-Equal (Get-Content -LiteralPath $target32) 'fake 32-bit add-in' 'copied the 32-bit add-in'
 
-    Write-Host '--- install.ps1 checks SHA256SUMS.txt'
+    # In a hand-constrained Windows PowerShell 5.1 session, Get-FileHash (script code there) is either missing
+    # (when PowerShell 7's Microsoft.PowerShell.Utility is first on PSModulePath, as on a developer machine) or
+    # fails on its first .NET call (as on the CI runner). Both are forced here by shadowing it: an alias wins over
+    # a function, and a function over a cmdlet or an .exe, and the scripts run in a child scope that sees them.
+    Write-Host '--- install.ps1 checks SHA256SUMS.txt (Get-FileHash fails, as on CI: certutil.exe is used)'
     $sums = Join-Path $source 'SHA256SUMS.txt'
+    $hash = Get-CertUtilSha256 (Join-Path $source 'Modelwright64.xll')
+    Assert-True ($null -ne $hash) "the test can hash with certutil.exe ($hash)"
+    Set-Item -Path 'function:Get-FileHash' -Value { throw 'Get-FileHash is disabled by the test' }
     Set-Content -LiteralPath $sums -Value ('0' * 64 + '  Modelwright64.xll')
     $before = Get-Snapshot $optionsKey
-    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source; Verbose = $true }
     Assert-Equal $LASTEXITCODE 6 'a wrong checksum: exit code 6'
+    Assert-True ($out -match 'does not match SHA256SUMS') 'a wrong checksum: says it does not match'
+    Assert-True ($out -match 'using certutil') 'a wrong checksum: fell back to certutil.exe'
     Assert-Equal (Get-Snapshot $optionsKey) $before 'a wrong checksum: registry unchanged'
-    # Get-FileHash (script code in 5.1) is unavailable in a hand-constrained session; certutil is part of Windows.
-    $hash = @(& certutil.exe -hashfile (Join-Path $source 'Modelwright64.xll') SHA256)[1] -replace '\s', ''
-    Set-Content -LiteralPath $sums -Value "$hash  Modelwright64.xll"
+    Set-Content -LiteralPath $sums -Value "$($hash.ToLowerInvariant())  Modelwright64.xll"
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 0 'a matching (lower-case) checksum: exit code 0'
+
+    Write-Host '--- install.ps1 checks SHA256SUMS.txt (Get-FileHash missing, as on a developer machine)'
+    Remove-Item -LiteralPath 'function:Get-FileHash'
+    Set-Alias -Name Get-FileHash -Value "NoSuchCommand$runId" -Scope Script
     $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
     Assert-Equal $LASTEXITCODE 0 'a matching checksum: exit code 0'
+
+    Write-Host '--- install.ps1 parses certutil.exe output by shape, not wording'
+    # Localised wording and the hex printed in spaced pairs (older Windows).
+    # The fake reads $fakeCertUtilOutput through PowerShell's dynamic scoping (install.ps1 does not define it).
+    $fakeCertUtilOutput = @('Hachage SHA256 de Modelwright64.xll :', ($hash -replace '(..)', '$1 ').Trim(),
+        "CertUtil: -hashfile La commande s'est terminee correctement.")
+    Set-Item -Path 'function:certutil.exe' -Value { $fakeCertUtilOutput }
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 0 'localised, spaced certutil output: exit code 0'
+    Set-Item -Path 'function:certutil.exe' -Value { 'CertUtil: unexpected output'; 'no hash here' }
+    $before = Get-Snapshot $optionsKey
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 7 'certutil.exe output without a hash: exit code 7'
+    Assert-True ($out -match 'Could not check Modelwright64\.xll against SHA256SUMS') 'says it could not check the file'
+    Assert-Equal (Get-Snapshot $optionsKey) $before 'could not check: registry unchanged'
+    Set-Alias -Name certutil.exe -Value "NoSuchCommand$runId" -Scope Script
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 7 'certutil.exe missing: exit code 7'
+    Remove-Item -LiteralPath 'alias:certutil.exe', 'function:certutil.exe', 'alias:Get-FileHash'
     Remove-Item -LiteralPath $sums
 
     Write-Host '--- install.ps1 with the add-in file missing'
     $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = (Join-Path $scratch 'empty') }
     Assert-Equal $LASTEXITCODE 4 'exit code 4'
 
-    Write-Host '--- install.ps1 bitness detection (read-only registry and EXCEL.EXE reads; no Excel on CI)'
+    # As on the CI runner (no Office): no Office keys under -RegistryRoot, and -ExcelExePath blocks the lookup of
+    # this machine's EXCEL.EXE.
+    Write-Host '--- install.ps1 bitness detection without Excel'
+    $noOfficeRoot = Join-Path $regRoot 'NoOffice'
+    $before = Get-Snapshot $optionsKey
+    $out = Invoke-Script $install @{ SourceFolder = $source; RegistryRoot = $noOfficeRoot; ExcelExePath = (Join-Path $scratch 'NoOffice\EXCEL.EXE') }
+    Assert-Equal $LASTEXITCODE 3 'EXCEL.EXE missing: exit code 3'
+    Assert-True ($out -match 'Could not find or read EXCEL\.EXE') 'says it could not find EXCEL.EXE'
+    Assert-True ($out -match 'Could not tell whether Excel is 32-bit or 64-bit') 'explains that it could not tell'
+    Assert-True ($out -match '-ExcelBitness 64') 'explains how to pass -ExcelBitness'
+    Assert-True (-not (Test-Path -LiteralPath $noOfficeRoot)) 'EXCEL.EXE missing: nothing written under -RegistryRoot'
+    Assert-Equal (Get-Snapshot $optionsKey) $before 'EXCEL.EXE missing: registry unchanged'
+    $out = Invoke-Script $install @{ SourceFolder = $source; RegistryRoot = $noOfficeRoot; ExcelExePath = (Join-Path $source 'Modelwright64.xll') }
+    Assert-Equal $LASTEXITCODE 3 'a file that is not an .exe: exit code 3'
+
+    Write-Host '--- install.ps1 bitness detection from an .exe header (PowerShell itself stands in for EXCEL.EXE)'
+    if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') {
+        $out = Invoke-Script $install @{ SourceFolder = $source; RegistryRoot = $noOfficeRoot; WhatIf = $true; ExcelExePath = (Join-Path $PSHOME 'powershell.exe') }
+        Assert-Equal $LASTEXITCODE 0 'a 64-bit .exe: exit code 0'
+        Assert-True ($out -match 'Excel is 64-bit: installing Modelwright64\.xll') 'a 64-bit .exe: picks Modelwright64.xll'
+        $wow64 = Join-Path $env:SystemRoot 'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+        if (Test-Path -LiteralPath $wow64) {
+            $out = Invoke-Script $install @{ SourceFolder = $source; RegistryRoot = $noOfficeRoot; WhatIf = $true; ExcelExePath = $wow64 }
+            Assert-Equal $LASTEXITCODE 0 'a 32-bit .exe: exit code 0'
+            Assert-True ($out -match 'Excel is 32-bit: installing Modelwright32\.xll') 'a 32-bit .exe: picks Modelwright32.xll'
+        }
+    } else {
+        Write-Host "SKIP  needs a 64-bit (AMD64) PowerShell, this is $env:PROCESSOR_ARCHITECTURE"
+    }
+
+    Write-Host '--- install.ps1 bitness detection on this machine (read-only registry and EXCEL.EXE reads)'
     $out = Invoke-Script $install @{ SourceFolder = $source; WhatIf = $true }
-    Assert-True ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3) "detection ends cleanly (exit $LASTEXITCODE)"
+    Assert-True ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3) "detection ends with 0 (found) or 3 (no Excel), not an error (exit $LASTEXITCODE)"
     if ($LASTEXITCODE -eq 0) {
         Assert-True ($out -match 'Excel is (32|64)-bit') 'reports the detected bitness'
     } else {
-        Assert-True ($out -match 'Could not tell') 'explains that it could not tell'
+        Assert-True ($out -match 'Could not tell whether Excel is 32-bit or 64-bit') 'explains that it could not tell'
     }
 
     Write-Host '--- uninstall.ps1 refuses while Excel is running'

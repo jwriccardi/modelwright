@@ -18,11 +18,15 @@
     Works in Windows PowerShell 5.1 and in Constrained Language mode (only built-in cmdlets are used).
 
     Exit codes: 0 installed (or already installed); 1 unexpected error; 2 Excel is running;
-    3 Excel's bitness could not be worked out or is not supported; 4 the add-in file is missing;
-    5 .NET Framework 4.8 is missing; 6 the add-in file does not match SHA256SUMS.txt.
+    3 Excel's bitness could not be worked out or is not supported (pass -ExcelBitness); 4 the add-in file is
+    missing; 5 .NET Framework 4.8 is missing; 6 the add-in file does not match SHA256SUMS.txt;
+    7 the add-in file could not be checked against SHA256SUMS.txt (neither Get-FileHash nor certutil.exe worked).
 
 .PARAMETER ExcelBitness
     32 or 64: skip the detection and install that add-in.
+
+.PARAMETER ExcelExePath
+    Read the bitness from this EXCEL.EXE only, instead of finding Excel through the registry. For testing.
 
 .PARAMETER OfficeVersion
     The Office registry version. 16.0 covers Office 2016 and every later version, including Microsoft 365.
@@ -52,6 +56,8 @@
 param(
     [ValidateSet('32', '64')]
     [string]$ExcelBitness,
+
+    [string]$ExcelExePath,
 
     [ValidatePattern('^\d+\.0$')]
     [string]$OfficeVersion = '16.0',
@@ -87,15 +93,31 @@ function Test-ShouldChange([string]$Target, [string]$Action) {
     return $true
 }
 
-# SHA-256 of a file as hex. Get-FileHash is script code in Windows PowerShell 5.1 and is unavailable when the
-# session is constrained by hand (not by AppLocker), so certutil.exe (part of Windows) is the fallback.
+# SHA-256 of a file as upper-case hex, or $null if it cannot be computed. Get-FileHash is script code in Windows
+# PowerShell 5.1: in a session constrained by hand (not by AppLocker) it is either missing or fails on its first
+# .NET call, so certutil.exe (part of Windows) is the fallback. certutil's wording is localised, so its hash is
+# the first output line that is 64 hex digits once spaces are removed (older Windows prints it in spaced pairs).
 function Get-Sha256([string]$Path) {
-    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
-        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    try {
+        $hash = [string](Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash
+        if ($hash -match '^[0-9A-Fa-f]{64}$') { return $hash.ToUpperInvariant() }
+    } catch {
+        Write-Verbose "Get-FileHash did not work ($($_.Exception.Message)); using certutil.exe."
     }
-    $lines = @(& certutil.exe -hashfile $Path SHA256)
-    if ($LASTEXITCODE -ne 0 -or $lines.Count -lt 2) { throw "certutil could not hash $Path" }
-    return ($lines[1] -replace '\s', '')
+    $lines = @()
+    try {
+        $ErrorActionPreference = 'Continue' # a native command's stderr must not become a terminating error
+        $lines = @(& certutil.exe -hashfile $Path SHA256)
+    } catch {
+        Write-Verbose "certutil.exe did not run: $($_.Exception.Message)"
+        return $null
+    }
+    foreach ($line in $lines) {
+        $hex = "$line" -replace '\s', ''
+        if ($hex -match '^[0-9A-Fa-f]{64}$') { return $hex.ToUpperInvariant() }
+    }
+    Write-Verbose "certutil.exe printed no SHA-256: $($lines -join ' | ')"
+    return $null
 }
 
 function Exit-Script([int]$Code) {
@@ -143,30 +165,40 @@ function Get-RegistryString([string]$Key, [string]$Name) {
     return [string]$item.$Name
 }
 
+# Returns '32' or '64', or $null if Excel cannot be found or read. The EXCEL.EXE paths it tried are left in
+# $script:excelExesTried for the error message.
 function Get-ExcelBitness {
     $candidates = @()
-    foreach ($appPaths in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\excel.exe',
-                            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\excel.exe',
-                            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\excel.exe')) {
-        $path = Get-RegistryString $appPaths '(default)'
-        if ($path) { $candidates += $path.Trim().Trim('"') }
-    }
     $clickToRun = 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration'
-    $installPath = Get-RegistryString $clickToRun 'InstallationPath'
-    if ($installPath) { $candidates += Join-Path $installPath 'root\Office16\EXCEL.EXE' }
+    if ($ExcelExePath) {
+        $candidates += $ExcelExePath
+    } else {
+        foreach ($appPaths in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\excel.exe',
+                                'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\excel.exe',
+                                'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\excel.exe')) {
+            $path = Get-RegistryString $appPaths '(default)'
+            if ($path) { $candidates += $path.Trim().Trim('"') }
+        }
+        $installPath = Get-RegistryString $clickToRun 'InstallationPath'
+        if ($installPath) { $candidates += Join-Path $installPath 'root\Office16\EXCEL.EXE' }
+    }
+    $script:excelExesTried = $candidates
 
     foreach ($exe in $candidates) {
         Write-Verbose "Checking $exe"
-        $bitness = Get-ExeBitness $exe
+        $bitness = $null
+        try { $bitness = Get-ExeBitness $exe } catch { Write-Verbose "Could not read ${exe}: $($_.Exception.Message)" }
         if ($bitness) {
             Write-Verbose "Excel is $bitness-bit (from the header of $exe)"
             return $bitness
         }
     }
 
-    switch (Get-RegistryString $clickToRun 'Platform') {
-        'x64' { Write-Verbose 'Excel is 64-bit (from the Click-to-Run Platform setting)'; return '64' }
-        'x86' { Write-Verbose 'Excel is 32-bit (from the Click-to-Run Platform setting)'; return '32' }
+    if (-not $ExcelExePath) {
+        switch (Get-RegistryString $clickToRun 'Platform') {
+            'x64' { Write-Verbose 'Excel is 64-bit (from the Click-to-Run Platform setting)'; return '64' }
+            'x86' { Write-Verbose 'Excel is 32-bit (from the Click-to-Run Platform setting)'; return '32' }
+        }
     }
     return $null
 }
@@ -218,19 +250,27 @@ try {
             'background EXCEL.EXE), then run this again.')
     }
 
-    # 2. Bitness.
-    if ($ExcelBitness) {
-        Write-Verbose "Excel bitness given: $ExcelBitness-bit"
+    # 2. Bitness. (Not assigned back to $ExcelBitness: its ValidateSet rejects $null, which would throw.)
+    $bitness = $ExcelBitness
+    if ($bitness) {
+        Write-Verbose "Excel bitness given: $bitness-bit"
     } else {
-        $ExcelBitness = Get-ExcelBitness
-        if (-not $ExcelBitness) {
-            Stop-WithError 3 ('Could not tell whether Excel is 32-bit or 64-bit. In Excel, open File > Account > ' +
-                'About Excel; the first line ends in "32-bit" or "64-bit". Then run this again with ' +
-                '-ExcelBitness 64 (or 32).')
+        $script:excelExesTried = @()
+        $bitness = Get-ExcelBitness
+        if (-not $bitness) {
+            $found = if ($script:excelExesTried.Count -gt 0) {
+                "Could not find or read EXCEL.EXE (tried: $($script:excelExesTried -join '; '))."
+            } else {
+                'Could not find EXCEL.EXE (Excel is not registered in App Paths or Click-to-Run).'
+            }
+            Stop-WithError 3 ("$found Could not tell whether Excel is 32-bit or 64-bit. In Excel, open " +
+                'File > Account > About Excel; the first line ends in "32-bit" or "64-bit". Then run this again ' +
+                'with -ExcelBitness 64 (or 32), for example:' + "`n" +
+                '  powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -ExcelBitness 64')
         }
     }
-    $xllName = "Modelwright$ExcelBitness.xll"
-    Write-Host "Excel is $ExcelBitness-bit: installing $xllName."
+    $xllName = "Modelwright$bitness.xll"
+    Write-Host "Excel is $bitness-bit: installing $xllName."
 
     # 3. .NET Framework 4.8 (Release 528040 or later) is part of Windows 10 1903+ and every Windows 11.
     $netRelease = Get-RegistryString 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' 'Release'
@@ -253,6 +293,11 @@ try {
         }
         if ($expected) {
             $actual = Get-Sha256 $source
+            if (-not $actual) {
+                Stop-WithError 7 ("Could not check $xllName against SHA256SUMS.txt: neither Get-FileHash nor " +
+                    'certutil.exe could compute its SHA-256 (run with -Verbose for details). Check the file by hand ' +
+                    '(INSTALL.txt, "FOR IT: VERIFY THE FILES"), or install it by hand (INSTALL.txt, Option B).')
+            }
             if ($actual -ne $expected) {
                 Stop-WithError 6 "$xllName does not match SHA256SUMS.txt (it may be damaged or altered). Download the release again."
             }

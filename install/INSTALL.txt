@@ -41,6 +41,18 @@ OPTION A - RUN THE INSTALL SCRIPT (recommended)
 
 To preview without changing anything, add -WhatIf to the command. -Verbose shows more detail.
 
+If the script stops, it says why. Its exit codes (for IT and deployment tools):
+  0  installed, or already installed
+  1  unexpected error
+  2  Excel is running: close it completely
+  3  could not tell 32-bit from 64-bit Excel (for example EXCEL.EXE was not found): add
+     -ExcelBitness 64 (or 32) to the command
+  4  the .xll is not next to install.ps1: extract the whole zip
+  5  .NET Framework 4.8 is missing
+  6  the .xll does not match SHA256SUMS.txt: download the release again
+  7  the .xll could not be checked against SHA256SUMS.txt (neither Get-FileHash nor certutil
+     worked): verify it by hand (FOR IT, below) or use Option B
+
 
 OPTION B - ADD IT BY HAND (no scripts)
 --------------------------------------
