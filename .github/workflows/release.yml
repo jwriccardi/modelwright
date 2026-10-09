@@ -160,7 +160,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
           REPO: ${{ github.repository }}
+          PRIVATE: ${{ github.event.repository.private }}
         run: |
+          $provenance = if ($env:PRIVATE -eq 'true') { 'Build provenance: not attested (the repository is private; GitHub attests public repositories only).' } else { "Build provenance: ``gh attestation verify Modelwright64.xll -R $env:REPO``" }
           $signing = if ($env:SIGNING_ENABLED -eq 'true') {
             'The add-in in this release is **Authenticode-signed**.'
           } else {
@@ -187,7 +189,7 @@ jobs:
           $sums
           ``````
 
-          Build provenance: ``gh attestation verify Modelwright64.xll -R $env:REPO``
+          $provenance
 
           ## Before publishing this draft
 
