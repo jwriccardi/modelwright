@@ -137,7 +137,7 @@ Verify the files. Compare each file's SHA-256 with SHA256SUMS.txt (and with the 
 shows next to each release asset):
   Get-FileHash .\Modelwright64.xll -Algorithm SHA256
   certutil -hashfile Modelwright64.xll SHA256        (where PowerShell is blocked)
-Check which workflow run and commit built a file (GitHub CLI):
+Check which workflow run and commit built a file (GitHub CLI; releases made while the repository is public):
   gh attestation verify .\Modelwright64.xll -R jwriccardi/modelwright
 Show a code signature, if the release is signed:
   Get-AuthenticodeSignature .\Modelwright64.xll

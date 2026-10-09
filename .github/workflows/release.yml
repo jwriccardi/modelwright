@@ -144,7 +144,10 @@ jobs:
           Get-Content dist/SHA256SUMS.txt
           (Get-ChildItem $stage).Name
 
+      # GitHub stores attestations only for public repositories (and private ones in organizations), not for
+      # user-owned private repositories: skipped until the repository is public.
       - name: Attest build provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
