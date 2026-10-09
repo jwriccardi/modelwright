@@ -3,16 +3,14 @@ name: Release
 # Builds a tagged version and creates a DRAFT GitHub Release with:
 #   Modelwright-<version>.zip      (Modelwright64.xll, install.ps1, uninstall.ps1, INSTALL.txt, LICENSE,
 #                                   THIRD_PARTY_NOTICES.md and a SHA256SUMS.txt for the add-in)
-#   Modelwright-<version>-x64.msi  (the optional per-user installer, installer/msi; WiX 5)
 #   Modelwright64.xll              (the bare add-in, for IT)
-#   SHA256SUMS.txt                 (the zip, the MSI and the add-in, sha256sum format)
+#   SHA256SUMS.txt                 (the zip and the add-in, sha256sum format)
 # plus a build-provenance attestation for each (verify with: gh attestation verify <file> -R <owner>/<repo>).
 # Modelwright is 64-bit only (owner decision 2026-10-09): there is no 32-bit add-in.
 # A maintainer reviews the draft (VirusTotal links, notes) and publishes it by hand.
 #
-# Code signing runs only when the SIGNING_* secrets are set; otherwise the add-in and the MSI ship unsigned (the
-# owner's decision for v0.1) and the steps are skipped. Order: sign the add-in, build the MSI around the signed
-# add-in, sign the MSI. It uses Azure Artifact Signing with OIDC (azure/login), and needs these repository secrets:
+# Code signing runs only when the SIGNING_* secrets are set; otherwise the add-in ships unsigned (the
+# owner's decision for v0.1) and the step is skipped. It uses Azure Artifact Signing with OIDC (azure/login), and needs these repository secrets:
 #   SIGNING_TENANT_ID, SIGNING_CLIENT_ID, SIGNING_SUBSCRIPTION_ID   (an app registration with a federated
 #                                                                  credential for this repo's tags)
 #   SIGNING_ENDPOINT, SIGNING_ACCOUNT_NAME, SIGNING_PROFILE_NAME    (the Artifact Signing account)
@@ -108,40 +106,11 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      # The MSI (installer/msi): WiX 5 as a .NET tool. WiX 6+ would need the Open Source Maintenance Fee EULA
-      # accepted (installer/msi/README.md). -Validate runs the ICE checks, lists the MSI's files, registry entries
-      # and custom actions, and extracts it with msiexec /a (files only: nothing is installed on the runner).
-      - name: Install WiX
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 5.0.2
-          if ($LASTEXITCODE -ne 0) { throw 'Could not install the WiX tool.' }
-          "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
-
-      - name: Build the MSI
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: ./installer/msi/build-msi.ps1 -XllPath dist/Modelwright64.xll -Version $env:VERSION -OutputDirectory dist -Validate
-
-      - name: Sign the MSI
-        if: env.SIGNING_ENABLED == 'true'
-        uses: Azure/artifact-signing-action@v2
-        with:
-          endpoint: ${{ secrets.SIGNING_ENDPOINT }}
-          signing-account-name: ${{ secrets.SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.SIGNING_PROFILE_NAME }}
-          files: |
-            ${{ github.workspace }}\dist\Modelwright-${{ steps.version.outputs.version }}-x64.msi
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-
       - name: Check the signatures
         if: env.SIGNING_ENABLED == 'true'
         shell: pwsh
         run: |
-          foreach ($file in @(Get-ChildItem dist -Filter *.xll) + @(Get-ChildItem dist -Filter *.msi)) {
+          foreach ($file in Get-ChildItem dist -Filter *.xll) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
             if ($signature.Status -ne 'Valid') { throw "$($file.Name): signature is $($signature.Status)." }
             "$($file.Name): signed by $($signature.SignerCertificate.Subject)"
@@ -150,7 +119,7 @@ jobs:
       - name: Unsigned build
         if: env.SIGNING_ENABLED != 'true'
         shell: pwsh
-        run: '"::notice::SIGNING_* secrets are not set: the add-in and the MSI in this release are unsigned."'
+        run: '"::notice::SIGNING_* secrets are not set: the add-in in this release is unsigned."'
 
       - name: Package
         shell: pwsh
@@ -168,7 +137,7 @@ jobs:
           Write-Sums @("$stage/Modelwright64.xll") "$stage/SHA256SUMS.txt"
           $zip = "dist/Modelwright-$env:VERSION.zip"
           Compress-Archive -Path "$stage/*" -DestinationPath $zip
-          Write-Sums @($zip, "dist/Modelwright-$env:VERSION-x64.msi", 'dist/Modelwright64.xll') 'dist/SHA256SUMS.txt'
+          Write-Sums @($zip, 'dist/Modelwright64.xll') 'dist/SHA256SUMS.txt'
           Get-Content dist/SHA256SUMS.txt
           (Get-ChildItem $stage).Name
 
@@ -177,7 +146,6 @@ jobs:
         with:
           subject-path: |
             dist/Modelwright-${{ steps.version.outputs.version }}.zip
-            dist/Modelwright-${{ steps.version.outputs.version }}-x64.msi
             dist/Modelwright64.xll
 
       - name: Create the draft release
@@ -188,11 +156,10 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           $signing = if ($env:SIGNING_ENABLED -eq 'true') {
-            'The add-in and the MSI in this release are **Authenticode-signed**.'
+            'The add-in in this release is **Authenticode-signed**.'
           } else {
-            'The add-in and the MSI in this release are **unsigned** (not code-signed). When you run the MSI, Windows SmartScreen ' +
-            'may say "Windows protected your PC": choose **More info** > **Run anyway**. Excel refuses an add-in downloaded from ' +
-            'the internet until it is unblocked; the install instructions show how (the script and the MSI do it for you). ' +
+            'The add-in in this release is **unsigned** (not code-signed). Excel refuses an add-in downloaded from ' +
+            'the internet until it is unblocked; the install instructions show how (the install script does it for you). ' +
             'If your company only allows signed add-ins, wait for a signed build (planned) and ask IT to trust its publisher.'
           }
           $sums = (Get-Content dist/SHA256SUMS.txt) -join "`n"
@@ -202,7 +169,7 @@ jobs:
           Follow the [install instructions](https://github.com/$env:REPO#install) (or INSTALL.txt in the zip). Choose one:
 
           - **Modelwright-$env:VERSION.zip**: the add-in with an install script (recommended), or add it to Excel by hand.
-          - **Modelwright-$env:VERSION-x64.msi**: a per-user Windows installer (no administrator rights; uninstall from Settings > Apps).
+          - **Modelwright64.xll**: the bare add-in, for IT.
 
           64-bit Windows Excel only (Microsoft 365, 2021, 2024). 32-bit Excel, Excel for Mac and Excel for the web are not supported.
 
@@ -218,11 +185,11 @@ jobs:
 
           ## Before publishing this draft
 
-          - Add the VirusTotal report links for the zip, the MSI and the add-in.
+          - Add the VirusTotal report links for the zip and the add-in.
           - Review the generated change list below.
           "@
           Set-Content -LiteralPath release-notes.md -Value $notes
-          $assets = @("dist/Modelwright-$env:VERSION.zip", "dist/Modelwright-$env:VERSION-x64.msi", 'dist/Modelwright64.xll', 'dist/SHA256SUMS.txt')
+          $assets = @("dist/Modelwright-$env:VERSION.zip", 'dist/Modelwright64.xll', 'dist/SHA256SUMS.txt')
           $prerelease = if ($env:VERSION -match '-') { @('--prerelease') } else { @() }
           gh release create $env:TAG @assets --draft --verify-tag --title "Modelwright $env:VERSION" --notes-file release-notes.md --generate-notes @prerelease
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed.' }

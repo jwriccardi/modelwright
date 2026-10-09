@@ -1,6 +1,6 @@
 # Third-party notices
 
-The Modelwright add-in (`Modelwright64.xll`) includes the third-party software listed below. Its own code is licensed under the [PolyForm Shield License 1.0.0](LICENSE). The optional Windows installer (`Modelwright-<version>-x64.msi`) contains the same add-in plus the WiX component listed at the end.
+The Modelwright add-in (`Modelwright64.xll`) includes the third-party software listed below. Its own code is licensed under the [PolyForm Shield License 1.0.0](LICENSE).
 
 ## Excel-DNA
 
@@ -67,13 +67,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SO
 ```
 
 The license text above is copied from `LICENSE` at the Irony commit the 1.5.3 package was built from (`1098ffb279a3bbb2c617f5cf5685be6afe836a7f`).
-
-## WiX Toolset DTF (in the MSI only)
-
-- **Package:** `WixToolset.Dtf.WindowsInstaller` 5.0.2 (via `WixToolset.Dtf.CustomAction` 5.0.2). Its `WixToolset.Dtf.WindowsInstaller.dll` is embedded, unmodified, in the MSI's custom-action DLL (`installer/msi/CustomActions`), which uses it to talk to Windows Installer during install and uninstall. It is not part of the `.xll`.
-- **Project:** https://wixtoolset.org/ · https://github.com/wixtoolset/wix (tag `v5.0.2`)
-- **License:** Microsoft Reciprocal License (MS-RL). Full text: https://licenses.nuget.org/MS-RL (the license expression in the package's .nuspec). Source code: https://github.com/wixtoolset/wix/tree/v5.0.2. We have not modified it. MS-RL's reciprocal terms apply only to files of the licensed software; they do not extend to Modelwright's own code.
-- The WiX command-line tool (`wix` 5.0.2, MS-RL) is used to build the MSI and is not distributed.
 
 ## Build-time and test-only dependencies (not distributed)
 
