@@ -1,0 +1,188 @@
+name: Release
+
+# Builds a tagged version and creates a DRAFT GitHub Release with:
+#   Modelwright-<version>.zip  (both add-ins, install.ps1, uninstall.ps1, INSTALL.txt, LICENSE,
+#                               THIRD_PARTY_NOTICES.md and a SHA256SUMS.txt for the two add-ins)
+#   Modelwright64.xll, Modelwright32.xll (the bare add-ins, for IT)
+#   SHA256SUMS.txt (the zip and both add-ins, sha256sum format)
+# plus a build-provenance attestation for each (verify with: gh attestation verify <file> -R <owner>/<repo>).
+# A maintainer reviews the draft (VirusTotal links, notes) and publishes it by hand.
+#
+# Code signing runs only when the SIGNING_* secrets are set; otherwise the add-ins ship unsigned and the step is
+# skipped. It uses Azure Artifact Signing with OIDC (azure/login), and needs these repository secrets:
+#   SIGNING_TENANT_ID, SIGNING_CLIENT_ID, SIGNING_SUBSCRIPTION_ID   (an app registration with a federated
+#                                                                  credential for this repo's tags)
+#   SIGNING_ENDPOINT, SIGNING_ACCOUNT_NAME, SIGNING_PROFILE_NAME    (the Artifact Signing account)
+# The signing route itself is an owner decision (docs/research/08-install-and-distribution.md, section 3).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write      # create the release
+  id-token: write      # attestations, and OIDC for signing
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      TAG: ${{ github.ref_name }}
+      SIGNING_ENABLED: ${{ secrets.SIGNING_CLIENT_ID != '' && secrets.SIGNING_ENDPOINT != '' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Version from the tag
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$') { throw "Tag '$env:TAG' is not v<major>.<minor>.<patch>[-suffix]." }
+          $version = $Matches[1]
+          $projectVersion = (dotnet msbuild src/Modelwright.AddIn/Modelwright.AddIn.csproj -getProperty:Version -p:Configuration=Release).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the project version.' }
+          if ($version -ne $projectVersion) {
+            throw "Tag $env:TAG does not match the version in Directory.Build.props ($projectVersion). Update one of them."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "Releasing Modelwright $version"
+
+      - name: Restore
+        run: dotnet restore Modelwright.sln
+
+      - name: Build
+        run: dotnet build Modelwright.sln -c Release --no-restore -p:ContinuousIntegrationBuild=true
+
+      - name: Test
+        run: dotnet test Modelwright.sln -c Release --no-build
+
+      - name: Install scripts test
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install/install-scripts.Tests.ps1
+
+      - name: License check
+        shell: pwsh
+        run: ./build/check-licenses.ps1
+
+      - name: Collect the add-ins
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          foreach ($name in 'Modelwright64.xll', 'Modelwright32.xll') {
+            Copy-Item -LiteralPath "src/Modelwright.AddIn/bin/Release/net48/publish/$name" -Destination dist
+          }
+          Get-ChildItem dist
+
+      - name: Azure login (signing)
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/login@v3
+        with:
+          tenant-id: ${{ secrets.SIGNING_TENANT_ID }}
+          client-id: ${{ secrets.SIGNING_CLIENT_ID }}
+          subscription-id: ${{ secrets.SIGNING_SUBSCRIPTION_ID }}
+
+      - name: Sign the add-ins
+        if: env.SIGNING_ENABLED == 'true'
+        uses: Azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.SIGNING_PROFILE_NAME }}
+          files: |
+            ${{ github.workspace }}\dist\Modelwright64.xll
+            ${{ github.workspace }}\dist\Modelwright32.xll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Check the signatures
+        if: env.SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          foreach ($file in Get-ChildItem dist -Filter *.xll) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "$($file.Name): signature is $($signature.Status)." }
+            "$($file.Name): signed by $($signature.SignerCertificate.Subject)"
+          }
+
+      - name: Unsigned build
+        if: env.SIGNING_ENABLED != 'true'
+        shell: pwsh
+        run: '"::notice::SIGNING_* secrets are not set: the add-ins in this release are unsigned."'
+
+      - name: Package
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # sha256sum format: "<hex>  <name>", lower case, LF line endings.
+          function Write-Sums([string[]]$Paths, [string]$Out) {
+            $lines = foreach ($path in $Paths) { "$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant())  $(Split-Path -Leaf $path)" }
+            Set-Content -LiteralPath $Out -Value (($lines -join "`n") + "`n") -NoNewline
+          }
+          $stage = "stage/Modelwright-$env:VERSION"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item dist/Modelwright64.xll, dist/Modelwright32.xll, install/*, LICENSE, THIRD_PARTY_NOTICES.md -Destination $stage
+          Write-Sums @("$stage/Modelwright64.xll", "$stage/Modelwright32.xll") "$stage/SHA256SUMS.txt"
+          $zip = "dist/Modelwright-$env:VERSION.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip
+          Write-Sums @($zip, 'dist/Modelwright64.xll', 'dist/Modelwright32.xll') 'dist/SHA256SUMS.txt'
+          Get-Content dist/SHA256SUMS.txt
+          (Get-ChildItem $stage).Name
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/Modelwright-${{ steps.version.outputs.version }}.zip
+            dist/Modelwright64.xll
+            dist/Modelwright32.xll
+
+      - name: Create the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          $signed = if ($env:SIGNING_ENABLED -eq 'true') { 'Authenticode-signed' } else { 'not code-signed' }
+          $sums = (Get-Content dist/SHA256SUMS.txt) -join "`n"
+          $notes = @"
+          ## Install
+
+          Download **Modelwright-$env:VERSION.zip** below, then follow the [install instructions](https://github.com/$env:REPO#install)
+          (or INSTALL.txt in the zip). Windows Excel only (Microsoft 365, 2021, 2024; 32- and 64-bit).
+
+          The add-ins in this release are **$signed**.
+
+          ## Verify
+
+          ``````
+          $sums
+          ``````
+
+          Build provenance: ``gh attestation verify Modelwright64.xll -R $env:REPO``
+
+          ## Before publishing this draft
+
+          - Add the VirusTotal report links for the zip and both add-ins.
+          - Review the generated change list below.
+          "@
+          Set-Content -LiteralPath release-notes.md -Value $notes
+          $assets = @("dist/Modelwright-$env:VERSION.zip", 'dist/Modelwright64.xll', 'dist/Modelwright32.xll', 'dist/SHA256SUMS.txt')
+          $prerelease = if ($env:VERSION -match '-') { @('--prerelease') } else { @() }
+          gh release create $env:TAG @assets --draft --verify-tag --title "Modelwright $env:VERSION" --notes-file release-notes.md --generate-notes @prerelease
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed.' }

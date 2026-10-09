@@ -9,6 +9,107 @@ Modelwright is a source-available Excel add-in for financial modelers:
 
 These are the features people pay for in Macabacus, FactSet Spreadsheet Tools, TTS Turbo Macros and similar tools. This project aims to provide them for free, using **exactly the same keyboard shortcuts as Macabacus**. The first target is **Excel for Windows desktop**. Mac and web are deferred, because Office.js can't bind Macabacus's punctuation keys.
 
+## Install
+
+Modelwright runs in **Excel for Windows**: Microsoft 365, Excel 2024 and Excel 2021, 32-bit or 64-bit. Windows on Arm is untested. **Excel for Mac and Excel for the web are not supported**: the add-in is a Windows-only file type (`.xll`) that they cannot load. You do **not** need administrator rights.
+
+<!--
+Screenshots to add (docs/research/08-install-and-distribution.md section 10). Not captured yet; link them
+only once the files exist:
+  docs/images/releases-assets.png         GitHub Releases page, Assets expanded, zip highlighted
+  docs/images/edge-keep.png               Edge download bubble: Keep > Show more > Keep anyway (if shown)
+  docs/images/unblock-properties.png      zip > Properties > General, with the Unblock box
+  docs/images/extract-all.png             Extract All dialog
+  docs/images/addins-folder.png           File Explorer with %APPDATA%\Microsoft\AddIns in the address bar
+  docs/images/about-excel-64bit.png       File > Account > About Excel showing "64-bit"
+  docs/images/options-addins.png          File > Options > Add-ins, Manage: Excel Add-ins and Go... highlighted
+  docs/images/addins-dialog.png           Add-ins dialog: Browse... highlighted, then Modelwright ticked
+  docs/images/ribbon-tab.png              the Modelwright ribbon tab
+  docs/images/motw-security-notice.png    "Microsoft Excel Security Notice" (quote its text verbatim below)
+  docs/images/bitness-mismatch.png        "The file format and extension of ... don't match"
+  docs/images/untrusted-publisher.png     signed-but-untrusted-publisher notice (once releases are signed)
+  docs/images/run-with-powershell.png     right-click install.ps1 > Run with PowerShell, and its output
+  docs/images/com-addins-macabacus.png    Manage: COM Add-ins dialog with Macabacus listed
+  docs/images/disabled-items.png          Manage: Disabled Items dialog
+-->
+
+### Before you start
+
+1. **Close Excel.**
+2. **Find out whether your Excel is 64-bit or 32-bit:** in Excel, File › Account › About Excel. The first line ends in "64-bit" or "32-bit". Most computers have 64-bit. (Option A works this out for you.)
+3. **Why you must "Unblock" the download.** Windows marks every file that comes from the internet. Excel refuses to load a marked add-in: it shows a "Microsoft Excel Security Notice" whose only button is **Leave this add-in disabled**. Unblocking tells Windows you trust this one file; it doesn't change any security setting. If you unblock the zip *before* extracting it, everything inside is clean.
+
+### Option A: download and run the install script (recommended)
+
+1. On the [Releases](https://github.com/jwriccardi/modelwright/releases) page, under **Assets**, download `Modelwright-<version>.zip`. If your browser warns that the file isn't commonly downloaded, choose **Keep**.
+2. In your Downloads folder, right-click the zip › **Properties** › tick **Unblock** › **OK**. (No Unblock box means the file wasn't marked, which is fine.)
+3. Right-click the zip › **Extract All…** › **Extract**.
+4. In the extracted folder, right-click `install.ps1` › **Run with PowerShell** (on Windows 11 it may be under **Show more options**).
+   If that doesn't work, open PowerShell and paste this line (change the folder if you extracted somewhere else):
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\Modelwright\install.ps1"
+   ```
+5. Start Excel. The **Modelwright** tab appears on the ribbon.
+
+The script refuses to run while Excel is open. It picks the right add-in for your Excel, copies it to your own add-ins folder (`%APPDATA%\Microsoft\AddIns`), unblocks it, and adds it to Excel's add-in list (the same registry entry Excel's Add-ins dialog writes). Running it again is safe. Add `-WhatIf` to see what it would do without changing anything.
+
+### Option B: add it to Excel by hand (no scripts)
+
+Use this if your computer doesn't allow PowerShell scripts.
+
+1. Do steps 1–3 of Option A.
+2. Copy `Modelwright64.xll` (or `Modelwright32.xll` for 32-bit Excel) to your add-ins folder: paste `%APPDATA%\Microsoft\AddIns` into the File Explorer address bar and press Enter. (You can instead browse to the extracted file in step 4, but then don't move or delete it.)
+3. Start Excel and go to **File › Options › Add-ins**. At the bottom, set **Manage: Excel Add-ins** and click **Go…**.
+4. Click **Browse…**, select the `.xll`, and click **OK**.
+5. Make sure **Modelwright** is ticked, then click **OK**. The **Modelwright** tab appears.
+
+The zip also has these steps in `INSTALL.txt`.
+
+### Option C: ask IT, or build from source
+
+<details>
+<summary>For IT staff, and for anyone who must not run downloaded binaries</summary>
+
+- **Verify the files.** Each release has a `SHA256SUMS.txt`, and GitHub shows a SHA-256 digest next to each asset: `Get-FileHash .\Modelwright64.xll -Algorithm SHA256` (or `certutil -hashfile Modelwright64.xll SHA256`). Each asset also has a build-provenance attestation that ties it to the workflow run and commit that built it: `gh attestation verify .\Modelwright64.xll -R jwriccardi/modelwright`. The release notes say whether that release is code-signed.
+- **Deploy.** Copy the `.xll` to a local folder (not a network share; Program Files is fine for a per-machine copy). With Excel closed, set the user's next free `HKCU\Software\Microsoft\Office\16.0\Excel\Options` value (`OPEN`, `OPEN1`, `OPEN2`… with no gaps) to the string `/R "C:\path\to\Modelwright64.xll"`, for example with a Group Policy Preferences registry item or Intune. `install.ps1` does exactly this, and runs in Constrained Language mode.
+- **Policies that block it.** Excel's block on `.xll` files from the internet (remove the mark of the web from the file); "Require that application add-ins are signed by Trusted Publisher", which Microsoft's Microsoft 365 Apps security baseline turns on (an unsigned add-in can never load there); AppLocker or App Control DLL rules (they need a path or publisher rule). See [research/08](docs/research/08-install-and-distribution.md) §1.5 and §2.
+- **Build from source.** Windows 10/11, the .NET SDK 10 (`global.json` pins 10.0.100 with `rollForward: latestFeature`; it installs without admin rights with [dotnet-install.ps1](https://learn.microsoft.com/dotnet/core/tools/dotnet-install-script)), and access to nuget.org or your NuGet proxy. From the source of a release tag, run `dotnet build Modelwright.sln -c Release`. The add-ins are written to `src\Modelwright.AddIn\bin\Release\net48\publish\` as `Modelwright64.xll` and `Modelwright32.xll`; install one with Option B, or with `install.ps1 -SourceFolder <that folder>`. The build embeds its date, so a rebuilt file's hash differs from the release file's.
+
+</details>
+
+### Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| "Microsoft Excel Security Notice" with only **Leave this add-in disabled** | The file is still marked as downloaded. Close Excel, right-click the `.xll` in `%APPDATA%\Microsoft\AddIns` › Properties › tick **Unblock** (or run `install.ps1` again), then start Excel. Don't turn the block off in the Trust Center: that lowers security for every add-in. |
+| "The file format and extension of '…xll' don't match" | Wrong bitness: use the other `.xll` (`Modelwright32.xll` for 32-bit Excel). |
+| The Modelwright tab is missing | File › Options › Add-ins › Manage: **Disabled Items** › Go… › select Modelwright › **Enable**. |
+| "Sorry, we couldn't find …xll" | The file was moved or deleted. Run `install.ps1` again, or untick it in the Add-ins dialog. |
+| Shortcuts do nothing, or do something else | Another add-in (often Macabacus) took the keys. See below. |
+
+### Using Modelwright alongside Macabacus
+
+Both add-ins use the same keyboard shortcuts. Whichever add-in registered its shortcuts last gets the key, so run only one of them at a time.
+- **Turn Macabacus off:** File › Options › Add-ins › Manage: **COM Add-ins** › **Go…** › untick Macabacus › OK. It stays off until you tick it again.
+- **Turn Modelwright off:** File › Options › Add-ins › Manage: **Excel Add-ins** › **Go…** › untick **Modelwright** › OK.
+- **For this session only:** click Modelwright › **Re-register shortcuts** to let Modelwright win, or Macabacus's **Override** to let Macabacus win.
+
+### Where your settings live
+
+- Settings: `%APPDATA%\Modelwright\settings.json` (change them with Modelwright › Settings…). Settings from the earlier ModelingToolkit builds are copied over on first start.
+- Log: `%LOCALAPPDATA%\Modelwright\log.txt`.
+
+Uninstalling never deletes them. Delete those folders yourself if you want them gone.
+
+### Uninstall
+
+- **Script:** close Excel, then right-click `uninstall.ps1` › **Run with PowerShell**, or paste:
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\Modelwright\uninstall.ps1" -RemoveFile
+  ```
+  It removes Modelwright from Excel's add-in list; `-RemoveFile` also deletes the `.xll` from `%APPDATA%\Microsoft\AddIns`.
+- **By hand:** File › Options › Add-ins › Manage: Excel Add-ins › Go… › untick **Modelwright** › OK. Then close Excel and delete the `.xll`.
+
 ## Status: formatting cycles shipped; Trace In in progress
 
 The architecture is decided: an **Excel-DNA (C#) add-in for Windows desktop Excel** ([ADR-0002](docs/decisions/0002-excel-dna-windows-first.md)), validated by decision spikes ([results](docs/spike-results.md)). Working today, on Macabacus's exact keys:
@@ -19,21 +120,9 @@ The architecture is decided: an **Excel-DNA (C#) add-in for Windows desktop Exce
 
 Trace In (Ctrl+Shift+[) is next ([PLAN](docs/PLAN.md)).
 
-**Excel smoke test:** with Excel open, run `powershell -ExecutionPolicy Bypass -File tests/excel-smoke/undo-smoke.ps1`. It drives Excel with real keystrokes in a scratch workbook.
-
 ### Build and test
 
-Requires the .NET SDK 10 on Windows. No Visual Studio needed.
-
-```powershell
-dotnet build Modelwright.sln -c Release
-dotnet test Modelwright.sln -c Release
-powershell -ExecutionPolicy Bypass -File build/check-licenses.ps1
-```
-
-**Load in Excel:** go to File › Options › Add-ins, set Manage: Excel Add-ins, click Go… › Browse…, and pick `src/Modelwright.AddIn/bin/Release/net48/publish/Modelwright64.xll` (`Modelwright32.xll` for 32-bit Excel). A **Modelwright** ribbon tab appears. Turn Macabacus off first, because it uses the same keys.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions need a DCO sign-off.
+Requires the .NET SDK 10 on Windows; no Visual Studio needed. See [CONTRIBUTING.md](CONTRIBUTING.md) for building, testing, loading a development build in Excel and the Excel smoke tests. Contributions need a DCO sign-off.
 
 ### Docs
 
@@ -51,6 +140,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions need a DCO sign-off.
 | [docs/research/05-keys-and-undo.md](docs/research/05-keys-and-undo.md) | Which architectures can bind Macabacus's keys, and the options for undo |
 | [docs/research/06-macabacus-observed-config.md](docs/research/06-macabacus-observed-config.md) | The owner's Macabacus settings: cycles, colors and the full keymap |
 | [docs/research/07-macabacus-trace-in-spec.md](docs/research/07-macabacus-trace-in-spec.md) | How Macabacus's Trace In behaves, and what that means for our design |
+| [docs/research/08-install-and-distribution.md](docs/research/08-install-and-distribution.md) | No-admin install, the internet block, signing, release assets and 32-bit |
 
 ## License
 

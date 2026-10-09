@@ -1,0 +1,132 @@
+MODELWRIGHT - INSTALL GUIDE
+===========================
+
+Modelwright is an add-in for Excel for Windows: Microsoft 365, Excel 2024 and Excel 2021, 32-bit or 64-bit.
+It does not work in Excel for Mac or Excel for the web. Windows on Arm is untested.
+You do not need administrator rights.
+
+This folder contains:
+  Modelwright64.xll       the add-in for 64-bit Excel (most computers)
+  Modelwright32.xll       the add-in for 32-bit Excel
+  install.ps1             installs the right one for you (Option A)
+  uninstall.ps1           removes it
+  SHA256SUMS.txt          checksums of the two add-ins
+  LICENSE, THIRD_PARTY_NOTICES.md
+
+
+BEFORE YOU START
+----------------
+1. Unblock the download. Windows marks files that come from the internet, and Excel refuses to load a
+   marked add-in (its "Microsoft Excel Security Notice" offers only "Leave this add-in disabled").
+   Right-click the downloaded Modelwright zip > Properties > General tab > tick "Unblock" > OK.
+   Then right-click it > Extract All... > Extract. Files extracted from an unblocked zip are clean.
+   (If there is no Unblock box, the file was not marked, which is fine.)
+2. Close Excel completely.
+3. Which file do you need? In Excel: File > Account > About Excel. The first line ends in
+   "64-bit" (use Modelwright64.xll) or "32-bit" (use Modelwright32.xll). If unsure, it is almost
+   always 64-bit. The wrong one gives "The file format and extension of '...xll' don't match".
+
+
+OPTION A - RUN THE INSTALL SCRIPT (recommended)
+-----------------------------------------------
+1. Close Excel.
+2. In the extracted folder, right-click install.ps1 > Run with PowerShell
+   (on Windows 11 it may be under "Show more options").
+   If that does not work, open PowerShell and paste this line (change the folder if you extracted
+   somewhere else):
+     powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\Modelwright\install.ps1"
+3. The script picks the right add-in for your Excel, copies it to %APPDATA%\Microsoft\AddIns,
+   unblocks it, and adds it to Excel's add-in list. It changes nothing if Excel is open.
+4. Start Excel. The Modelwright tab appears on the ribbon.
+
+To preview without changing anything, add -WhatIf to the command. -Verbose shows more detail.
+
+
+OPTION B - ADD IT BY HAND (no scripts)
+--------------------------------------
+1. Close Excel.
+2. Copy Modelwright64.xll (or Modelwright32.xll, see "Which file" above) to your add-ins folder:
+   paste  %APPDATA%\Microsoft\AddIns  into the File Explorer address bar and press Enter.
+3. Right-click the copied .xll > Properties > tick "Unblock" if it is there > OK.
+4. Start Excel. File > Options > Add-ins. At the bottom, Manage: "Excel Add-ins" > Go...
+5. Click Browse..., select the .xll you copied, and click OK.
+6. Make sure "Modelwright" is ticked, then click OK.
+7. The Modelwright tab appears on the ribbon.
+
+
+IF YOUR COMPANY BLOCKS IT
+-------------------------
+- "Leave this add-in disabled": the file is still marked as downloaded. Close Excel, unblock the
+  .xll in %APPDATA%\Microsoft\AddIns (step B3) or run install.ps1 again, then start Excel.
+  Do not turn the block off in the Trust Center or the registry; that weakens security for every
+  add-in. Unblocking this one file is enough.
+- The tab is missing after a crash: File > Options > Add-ins > Manage: "Disabled Items" > Go...,
+  select Modelwright > Enable.
+- Some companies only allow add-ins signed by a trusted publisher (Trust Center > Add-ins >
+  "Require Application Add-ins to be signed by Trusted Publisher"), or block scripts and add-ins
+  outside approved folders. This release says in its notes whether it is code-signed. If none of
+  the above works, ask IT: they can verify the file (below) and deploy it for you.
+- Scripts blocked: use Option B. It does not need PowerShell.
+
+
+USING IT WITH MACABACUS
+-----------------------
+Modelwright uses the same keyboard shortcuts as Macabacus. Whichever add-in registered its
+shortcuts last gets the key, so run only one of them at a time:
+- Turn Macabacus off: File > Options > Add-ins > Manage: "COM Add-ins" > Go... > untick
+  Macabacus > OK.
+- Turn Modelwright off: File > Options > Add-ins > Manage: "Excel Add-ins" > Go... > untick
+  Modelwright > OK.
+- For this session only: click Modelwright > Re-register shortcuts (Modelwright wins), or
+  Macabacus's Override (Macabacus wins).
+
+
+REMOVE IT
+---------
+Close Excel, then right-click uninstall.ps1 > Run with PowerShell, or paste:
+  powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\Modelwright\uninstall.ps1" -RemoveFile
+(-RemoveFile also deletes the .xll from %APPDATA%\Microsoft\AddIns.)
+By hand: File > Options > Add-ins > Manage: "Excel Add-ins" > Go... > untick Modelwright > OK,
+then close Excel and delete the .xll from %APPDATA%\Microsoft\AddIns.
+
+Your settings are kept in %APPDATA%\Modelwright (settings.json) and the log in
+%LOCALAPPDATA%\Modelwright. Uninstalling never deletes them; delete those folders yourself if you
+want them gone.
+
+
+FOR IT: VERIFY THE FILES
+------------------------
+Compare each file's SHA-256 with SHA256SUMS.txt (and with the digest GitHub shows next to each
+release asset):
+  Get-FileHash .\Modelwright64.xll -Algorithm SHA256
+  certutil -hashfile Modelwright64.xll SHA256        (where PowerShell is blocked)
+Check which workflow run and commit built a file (GitHub CLI):
+  gh attestation verify .\Modelwright64.xll -R jwriccardi/modelwright
+Show a code signature, if the release is signed:
+  Get-AuthenticodeSignature .\Modelwright64.xll
+
+Per-user registration is one registry value with Excel closed:
+  HKCU\Software\Microsoft\Office\16.0\Excel\Options, the next free OPEN, OPEN1, OPEN2, ... value
+  (no gaps), type REG_SZ, data:  /R "C:\path\to\Modelwright64.xll"
+The file can live in any local folder (not a network share).
+
+
+BUILD FROM SOURCE
+-----------------
+For people who must not run downloaded binaries. Needs Windows 10 or 11 and internet access to
+nuget.org (or your company's NuGet proxy). Visual Studio is not needed.
+1. Install the .NET SDK 10.0.100 or a later 10.0 feature band (the repository's global.json pins
+   10.0.100 with rollForward latestFeature). It can be installed without admin rights with
+   dotnet-install.ps1: https://learn.microsoft.com/dotnet/core/tools/dotnet-install-script
+   Running the tests also needs the .NET 8 runtime.
+2. Get the source of the release tag (for example v0.1.0) from
+   https://github.com/jwriccardi/modelwright (Code > Download ZIP, or git clone).
+3. In the source folder:
+     dotnet build Modelwright.sln -c Release
+4. The add-ins are written to:
+     src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright64.xll
+     src\Modelwright.AddIn\bin\Release\net48\publish\Modelwright32.xll
+5. Install one with Option A (run install.ps1 -SourceFolder <that publish folder>) or Option B.
+6. Verify: Get-FileHash <file> -Algorithm SHA256. The build is not yet bit-for-bit reproducible
+   (it embeds the build date), so a rebuilt file's hash will differ from the release's; use the
+   attestation above to tie a release file to its commit.

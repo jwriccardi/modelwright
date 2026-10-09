@@ -37,6 +37,12 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: ./build/check-dco.ps1 -Base "origin/$env:BASE_REF"
 
+      # install.ps1 / uninstall.ps1 under Windows PowerShell 5.1 in ConstrainedLanguage (as under AppLocker),
+      # against a scratch HKCU key and a scratch folder.
+      - name: Install scripts test
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install/install-scripts.Tests.ps1
+
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
