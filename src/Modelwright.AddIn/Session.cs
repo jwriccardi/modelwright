@@ -104,21 +104,23 @@ internal static class Session
     }
 
     /// <summary>
-    /// Uses <paramref name="settings"/>, just saved to the settings file by the settings dialog
-    /// (<paramref name="save"/>), exactly as a successful <see cref="Reload"/> would: the engine keeps its aliases
+    /// Uses <paramref name="settings"/>, just saved to the settings file (<paramref name="save"/>) by the settings
+    /// dialog, the ribbon's Shortcuts button or the Macabacus notice (<paramref name="source"/>, for the log), exactly
+    /// as a successful <see cref="Reload"/> would: the engine keeps its aliases
     /// for number format codes still in their cycle, and each cycle keeps its last state if its items are unchanged.
     /// The saved file is now the one in use. Logs the save first, while the previous diagnostics setting still
     /// applies, so turning the log off is itself logged. Never throws.
     /// </summary>
-    public static void ApplySaved(ToolkitSettings settings, SettingsFileSaveResult save)
+    public static void ApplySaved(ToolkitSettings settings, SettingsFileSaveResult save, string source)
     {
         DiagnosticsLog.Write(
             "SettingsSaved",
             SettingsStore.FilePath,
-            "source=dialog",
+            "source=" + source,
             "cycles=" + settings.Cycles.Count.ToString(CultureInfo.InvariantCulture),
             "undoCellCap=" + settings.UndoCellCap.ToString(CultureInfo.InvariantCulture),
             "diagnosticsLog=" + (settings.DiagnosticsLog ? "true" : "false"),
+            "useKeyboardShortcuts=" + (settings.UseKeyboardShortcuts ? "true" : "false"),
             "backup=" + (save.BackupPath ?? "none"));
         SourceState = SettingsLoadOutcome.Loaded;
         SourceHash = save.Hash;

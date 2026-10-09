@@ -38,6 +38,10 @@ $regRoot = "HKCU:\Software\Modelwright-InstallTest-$runId"
 $officeRoot = Join-Path $regRoot 'Office'
 $optionsKey = Join-Path $officeRoot '16.0\Excel\Options'
 $managerKey = Join-Path $officeRoot '16.0\Excel\Add-in Manager'
+# Stand-ins for HKCU's and HKLM's Software\Microsoft\Office\Excel\Addins (the COM add-ins install.ps1 looks through).
+$comUserKey = Join-Path $regRoot 'ComAddIns\User'
+$comMachineKey = Join-Path $regRoot 'ComAddIns\Machine'
+$macabacusNote = 'Macabacus is installed too. Both add-ins use the same keyboard shortcuts.'
 $source = Join-Path $scratch 'release'
 $addIns = Join-Path $scratch 'AddIns'
 $realOptionsKey = 'HKCU:\Software\Microsoft\Office\16.0\Excel\Options'
@@ -103,6 +107,7 @@ function Invoke-Script([string]$Path, [hashtable]$Arguments) {
     $Arguments.AddInsFolder = $addIns
     $Arguments.NoPause = $true
     if (-not $Arguments.ContainsKey('ExcelProcessName')) { $Arguments.ExcelProcessName = $notRunning }
+    if ($Path -eq $install) { $Arguments.ComAddInKeys = @($comUserKey, $comMachineKey) }
     $output = & $Path @Arguments *>&1 | Out-String -Width 4096
     $exitCode = $LASTEXITCODE
     $argText = @(foreach ($key in @($Arguments.Keys | Sort-Object)) { "-$key $($Arguments[$key])" }) -join ' '
@@ -116,6 +121,20 @@ function Reset-Options([hashtable]$Values) {
     $null = New-Item -Path $optionsKey -Force
     foreach ($name in $Values.Keys) {
         $null = New-ItemProperty -LiteralPath $optionsKey -Name $name -Value $Values[$name] -PropertyType String
+    }
+}
+
+# Recreates the scratch COM add-in keys with these add-ins: "User\Name" or "Machine\Name" = LoadBehavior.
+function Reset-ComAddIns([hashtable]$AddIns) {
+    foreach ($key in @($comUserKey, $comMachineKey)) {
+        if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse }
+    }
+    foreach ($name in $AddIns.Keys) {
+        $root = if ($name -like 'User\*') { $comUserKey } else { $comMachineKey }
+        $key = Join-Path $root ($name -replace '^(User|Machine)\\', '')
+        $null = New-Item -Path $key -Force
+        $null = New-ItemProperty -LiteralPath $key -Name 'LoadBehavior' -Value $AddIns[$name] -PropertyType DWord
+        $null = New-ItemProperty -LiteralPath $key -Name 'FriendlyName' -Value 'stand-in' -PropertyType String
     }
 }
 
@@ -191,6 +210,35 @@ try {
     Assert-Equal $LASTEXITCODE 0 'exit code 0'
     Assert-True ($out -match 'Already registered') 'says it is already registered'
     Assert-Equal (Get-Snapshot $optionsKey) $before 'registry unchanged'
+
+    Write-Host '--- install.ps1 without Macabacus says nothing about it'
+    Assert-True ($out -notmatch 'Macabacus') 'no Macabacus note (no COM add-in keys)'
+    Reset-ComAddIns @{ 'User\Other.Connect' = 3; 'Machine\Macabacus' = 2 }
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 0 'exit code 0'
+    Assert-True ($out -notmatch 'Macabacus is installed') 'no note for another add-in, nor for Macabacus not set to load (LoadBehavior 2)'
+
+    Write-Host '--- install.ps1 with Macabacus installed for this user notes the shared shortcuts'
+    Reset-ComAddIns @{ 'User\Macabacus' = 3 }
+    $before = Get-Snapshot $optionsKey
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 0 'exit code 0 (the note changes nothing)'
+    Assert-True ($out.Contains($macabacusNote)) 'prints the Macabacus note'
+    Assert-True ($out.Contains('click Modelwright > Shortcuts to switch Modelwright''s off')) 'the note says how to keep Macabacus''s'
+    Assert-True ($out.IndexOf('Done.') -lt $out.IndexOf($macabacusNote)) 'the note comes after the install succeeded'
+    Assert-Equal (Get-Snapshot $optionsKey) $before 'registry the same as without Macabacus'
+
+    Write-Host '--- install.ps1 with Macabacus installed for all users (another ProgId) notes it too'
+    Reset-ComAddIns @{ 'Machine\Macabacus.Excel.vsto' = 3 }
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source }
+    Assert-Equal $LASTEXITCODE 0 'exit code 0'
+    Assert-True ($out.Contains($macabacusNote)) 'prints the Macabacus note'
+
+    Write-Host '--- install.ps1 -WhatIf with Macabacus installed prints no note'
+    $out = Invoke-Script $install @{ ExcelBitness = '64'; SourceFolder = $source; WhatIf = $true }
+    Assert-Equal $LASTEXITCODE 0 'exit code 0'
+    Assert-True ($out -notmatch 'Macabacus is installed') 'no note when nothing was installed'
+    Reset-ComAddIns @{}
 
     Write-Host '--- install.ps1 appends after other add-ins'
     Reset-Options @{ OPEN = '"C:\Other\First.xlam"'; OPEN1 = '"C:\Other\Second.xlam"' }

@@ -20,8 +20,8 @@ namespace Modelwright.AddIn;
 /// <summary>
 /// The settings dialog (docs/PLAN.md section 4.6): a modal WinForms window owned by Excel's active window that
 /// edits a <see cref="SettingsDraft"/>, where all the editing logic lives. Cycles tab: items added, removed, moved,
-/// renamed and given a code or color, with a live preview; Shortcuts tab: keys typed or captured from the keyboard,
-/// with inline problems; General tab: the undo cap and the diagnostics log. Import, Export, Reset to defaults, OK
+/// renamed and given a code or color, with a live preview; Shortcuts tab: the switch for all keyboard shortcuts, and
+/// keys typed or captured from the keyboard, with inline problems; General tab: the undo cap and the diagnostics log. Import, Export, Reset to defaults, OK
 /// (validate, save settings.json atomically) and Cancel (discard).
 /// </summary>
 /// <remarks>
@@ -90,6 +90,7 @@ internal sealed class SettingsDialog : Form
     private object? _worksheetFunction;
 
     // Shortcuts tab.
+    private readonly CheckBox _shortcutsBox = new CheckBox { Text = $"Use &{ProductInfo.Name}'s keyboard shortcuts", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly ListView _actionList = CreateList();
     private readonly TextBox _keyBox = CreateTextBox();
     private readonly Button _captureButton = CreateButton("&Capture...");
@@ -568,36 +569,57 @@ internal sealed class SettingsDialog : Form
         _actionList.Columns.Add("Shortcut", LogicalToDeviceUnits(150));
         _actionList.Columns.Add("Problem", LogicalToDeviceUnits(400));
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 5, Padding = new Padding(4) };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 7, Padding = new Padding(4) };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
+        layout.Controls.Add(_shortcutsBox, 0, 0);
+        layout.SetColumnSpan(_shortcutsBox, 4);
+        var switchNote = CreateNote();
+        switchNote.Text =
+            "Off: no key below is bound and Ctrl+Z / Ctrl+Y are left to Excel, so Macabacus, which uses the same " +
+            "keys, answers them. Switched off while Excel runs, they do Excel's usual thing until you restart Excel; " +
+            "then Macabacus has them. The ribbon works either way, and the keys are kept for when you switch back on " +
+            "(that takes effect at once). The ribbon's Shortcuts button does the same.";
+        switchNote.Margin = new Padding(3, 0, 3, 8);
+        layout.Controls.Add(switchNote, 0, 1);
+        layout.SetColumnSpan(switchNote, 4);
+
         var listLabel = CreateLabel("&Actions:");
-        layout.Controls.Add(listLabel, 0, 0);
+        layout.Controls.Add(listLabel, 0, 2);
         layout.SetColumnSpan(listLabel, 4);
-        layout.Controls.Add(_actionList, 0, 1);
+        layout.Controls.Add(_actionList, 0, 3);
         layout.SetColumnSpan(_actionList, 4);
-        layout.Controls.Add(CreateLabel("&Shortcut:"), 0, 2);
-        layout.Controls.Add(_keyBox, 1, 2);
-        layout.Controls.Add(_captureButton, 2, 2);
-        layout.Controls.Add(_clearKeyButton, 3, 2);
-        layout.Controls.Add(_keyError, 1, 3);
+        layout.Controls.Add(CreateLabel("&Shortcut:"), 0, 4);
+        layout.Controls.Add(_keyBox, 1, 4);
+        layout.Controls.Add(_captureButton, 2, 4);
+        layout.Controls.Add(_clearKeyButton, 3, 4);
+        layout.Controls.Add(_keyError, 1, 5);
         layout.SetColumnSpan(_keyError, 3);
         var note = CreateNote();
         note.Text =
             "Type a shortcut such as Ctrl+Shift+K, or click Capture and press it. Use Ctrl and/or Alt, with or " +
             "without Shift. Some keys override Excel's built-ins while the add-in is loaded (e.g. Ctrl+; inserts " +
             "the date). Changes take effect when you click OK.";
-        layout.Controls.Add(note, 0, 4);
+        layout.Controls.Add(note, 0, 6);
         layout.SetColumnSpan(note, 4);
 
+        _shortcutsBox.CheckedChanged += (s, e) => Safe(() =>
+        {
+            if (!_loading)
+            {
+                _draft.UseKeyboardShortcuts = _shortcutsBox.Checked;
+            }
+        });
         _actionList.SelectedIndexChanged += (s, e) => Safe(ShowAction);
         _keyBox.TextChanged += (s, e) => Safe(KeyTyped);
         _keyBox.Leave += (s, e) => Safe(ShowAction); // Shows the key in its standard form.
@@ -759,6 +781,7 @@ internal sealed class SettingsDialog : Form
 
             _undoCapBox.Value = Math.Max(1, _draft.UndoCellCap);
             _logBox.Checked = _draft.DiagnosticsLog;
+            _shortcutsBox.Checked = _draft.UseKeyboardShortcuts;
         }
         finally
         {
@@ -1361,7 +1384,7 @@ internal sealed class SettingsDialog : Form
     /// dialog out once at the system DPI and Windows scales it on other monitors, rather than a per-monitor-aware
     /// Excel thread leaving it unscaled or clipped on a monitor at another DPI.
     /// </summary>
-    private static class DpiContext
+    internal static class DpiContext
     {
         private static readonly IntPtr SystemAware = new IntPtr(-2); // DPI_AWARENESS_CONTEXT_SYSTEM_AWARE
 
@@ -1390,6 +1413,9 @@ internal sealed class SettingsDialog : Form
         [DllImport("user32.dll")]
         private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
     }
+
+    /// <summary>Excel's active window (else its main window), as the owner of a dialog or message box.</summary>
+    internal static IWin32Window ExcelOwner() => new ExcelWindow();
 
     /// <summary>Excel's active window (else its main window), as the dialog's owner.</summary>
     private sealed class ExcelWindow : IWin32Window

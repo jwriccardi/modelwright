@@ -10,6 +10,13 @@ namespace Modelwright.AddIn;
 /// Binds the settings keymap to the add-in's commands through <c>xlcOnKey</c> (spike K3), and restores Excel's
 /// defaults for the keys we bound. Call in macro context (AutoOpen, AutoClose, commands) on the main thread.
 /// </summary>
+/// <remarks>
+/// <see cref="Apply(ToolkitSettings)"/> also applies the keyboard shortcuts switch
+/// (<see cref="ToolkitSettings.UseKeyboardShortcuts"/>): off, no key is bound and the Ctrl+Z / Ctrl+Y hook passes
+/// every key on (<see cref="UndoKeyHook.TakesKeys"/>); the ribbon works either way. Excel keeps one binding per key,
+/// the most recent: switching off hands each key back to Excel's default (see <see cref="Clear"/>), and switching on
+/// binds them all again, which also takes them back from an add-in that bound them since.
+/// </remarks>
 internal static class KeyBindings
 {
     /// <summary>Action id to the <see cref="ExcelCommandAttribute"/> macro name that runs it.</summary>
@@ -38,11 +45,35 @@ internal static class KeyBindings
     public static int Count => Registered.Count;
 
     /// <summary>
+    /// Applies <paramref name="settings"/>' shortcuts: with <see cref="ToolkitSettings.UseKeyboardShortcuts"/> on,
+    /// binds the keymap (<see cref="Apply(IReadOnlyDictionary{string, string})"/>) and lets the Ctrl+Z / Ctrl+Y hook
+    /// take its keys; off, restores Excel's default for every key we bound (<see cref="Clear"/>) and has the hook pass
+    /// every key on. Updates the ribbon's Shortcuts button. Returns one message per key that could not be bound.
+    /// </summary>
+    public static IReadOnlyList<string> Apply(ToolkitSettings settings)
+    {
+        UndoKeyHook.TakesKeys = settings.UseKeyboardShortcuts;
+        ToolkitRibbon.RefreshShortcuts();
+        if (settings.UseKeyboardShortcuts)
+        {
+            return Apply(settings.Keymap);
+        }
+
+        Clear();
+        DiagnosticsLog.Write("Keys", "bound=0", "failures=0", "shortcuts=off");
+        return Array.Empty<string>();
+    }
+
+    /// <summary>For a status-bar message: <c>13 shortcuts registered</c>, or <c>shortcuts off</c> with the switch off.</summary>
+    public static string Describe(ToolkitSettings settings) =>
+        settings.UseKeyboardShortcuts ? $"{Count} shortcuts registered" : "shortcuts off";
+
+    /// <summary>
     /// Binds every non-empty keymap entry to its command (re-binding keys we already hold, which takes them back
     /// from any add-in that bound them since, like Macabacus's Override). Keys we held that the keymap no longer
     /// uses are restored to Excel's default. Returns one message per key that could not be bound.
     /// </summary>
-    public static IReadOnlyList<string> Apply(IReadOnlyDictionary<string, string> keymap)
+    private static IReadOnlyList<string> Apply(IReadOnlyDictionary<string, string> keymap)
     {
         var failures = new List<string>();
         var wanted = new List<KeyValuePair<string, KeyChord>>();
@@ -130,7 +161,9 @@ internal static class KeyBindings
         return missing;
     }
 
-    /// <summary>Restores Excel's default for every key we bound (AutoClose). Never throws.</summary>
+    /// <summary>
+    /// Restores Excel's default for every key we bound (AutoClose, and the shortcuts switched off). Never throws.
+    /// </summary>
     public static void Clear()
     {
         // Known limitation: xlcOnKey with no macro restores Excel's default even if another add-in rebound the

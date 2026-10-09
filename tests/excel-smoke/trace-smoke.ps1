@@ -52,6 +52,9 @@
 #   (without the window it is Excel's Flash Fill).
 #   If Excel is still editing a cell then (a run that aborted in Point mode), Esc is sent first (at most three, each
 #   after the same foreground check).
+# - The add-in's one-time Macabacus notice (a modal dialog) must not take the focus: before the add-in is loaded,
+#   ui-state.json is marked as having shown it ("macabacusNoticeShown": true), and the previous value is put back in
+#   `finally` (notice-flag.ps1).
 # The focus trick taps Shift (only when Excel is not already in front): an Alt tap would turn on ribbon KeyTips and
 # send the next key to the ribbon.
 param(
@@ -133,6 +136,8 @@ $extName = 'EMT_TraceExternal.xlsx'
 $mainPath = Join-Path $fixtureFolder $mainName
 $log = Join-Path $env:LOCALAPPDATA 'Modelwright\log.txt'
 $uiState = Join-Path $env:APPDATA 'Modelwright\ui-state.json'
+. (Join-Path $PSScriptRoot 'notice-flag.ps1')
+$noticeBefore = $null
 $evaluateWasOff = $false
 $logStart = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
 $low32 = [int64]4294967295
@@ -325,6 +330,9 @@ try {
   if (Evaluate-On) { throw "ABORT: Trace In's Evaluate functions & groups is on ($uiState); the sections expect the classic rows. Press Ctrl+E in the Trace In window to turn it off, then run again. No key sent." }
   $evaluateWasOff = $true
   $xl.Iteration = $true                             # the fixture's circular reference, without Excel's warning
+
+  # --- No Macabacus notice during the run (it would take the focus); put back in `finally` ---
+  $noticeBefore = Set-NoticeFlag $uiState
 
   # --- Swap add-in builds (same as the Add-ins dialog); put back in `finally` ---
   foreach ($a in @($xl.AddIns)) {
@@ -731,6 +739,10 @@ finally {
     }
   }
   catch { $failures.Add("could not turn evaluate mode off again: $($_.Exception.Message)"); "WARNING: could not turn evaluate mode off in $uiState`: $($_.Exception.Message)" }
+
+  # 6. The Macabacus notice flag, last: the add-in builds and the fixture (any open trace) have saved their state.
+  try { if ($null -ne $noticeBefore) { Restore-NoticeFlag $noticeBefore } }
+  catch { $failures.Add("could not put the Macabacus notice flag back: $($_.Exception.Message)"); "WARNING: could not put the Macabacus notice flag back in $uiState`: $($_.Exception.Message)" }
 }
 
 # --- Diagnostics log: the trace lines, and the timings against the Phase 4 targets (only if the log is on) ---

@@ -7,7 +7,7 @@ namespace Modelwright.Core.Settings;
 
 /// <summary>
 /// The settings dialog's editing model (docs/PLAN.md section 4.6): a mutable copy of <see cref="ToolkitSettings"/>
-/// whose cycles' items (<see cref="CycleDraft"/>), keymap, undo cap and diagnostics setting can be changed, reset
+/// whose cycles' items (<see cref="CycleDraft"/>), keymap, undo cap, diagnostics and keyboard shortcuts settings can be changed, reset
 /// to the defaults, exported and imported. Contents may be invalid while editing; <see cref="ToSettings"/> builds
 /// the immutable settings and reports their problems with <see cref="ToolkitSettings.Validate"/>, the same rules
 /// that check the settings file.
@@ -35,6 +35,9 @@ public sealed class SettingsDraft
 
     /// <summary>See <see cref="ToolkitSettings.DiagnosticsLog"/>.</summary>
     public bool DiagnosticsLog { get; set; }
+
+    /// <summary>See <see cref="ToolkitSettings.UseKeyboardShortcuts"/>.</summary>
+    public bool UseKeyboardShortcuts { get; set; }
 
     /// <summary>
     /// The actions the shortcuts editor lists: every action in <see cref="ActionIds.All"/> order, then any other
@@ -154,7 +157,8 @@ public sealed class SettingsDraft
             _cycles.Select(c => c.ToDefinition()),
             _keymap,
             UndoCellCap,
-            DiagnosticsLog);
+            DiagnosticsLog,
+            UseKeyboardShortcuts);
         problems = settings.Validate();
         return settings;
     }
@@ -218,6 +222,7 @@ public sealed class SettingsDraft
 
         UndoCellCap = settings.UndoCellCap;
         DiagnosticsLog = settings.DiagnosticsLog;
+        UseKeyboardShortcuts = settings.UseKeyboardShortcuts;
     }
 
     /// <summary>A key that <see cref="KeyChord.Parse"/> accepts in its display form; any other text unchanged.</summary>

@@ -101,10 +101,23 @@ The zip also has these steps in `INSTALL.txt`.
 
 ### Using Modelwright alongside Macabacus
 
-Both add-ins use the same keyboard shortcuts. Whichever add-in registered its shortcuts last gets the key, so run only one of them at a time.
-- **Turn Macabacus off:** File › Options › Add-ins › Manage: **COM Add-ins** › **Go…** › untick Macabacus › OK. It stays off until you tick it again.
-- **Turn Modelwright off:** File › Options › Add-ins › Manage: **Excel Add-ins** › **Go…** › untick **Modelwright** › OK.
-- **For this session only:** click Modelwright › **Re-register shortcuts** to let Modelwright win, or Macabacus's **Override** to let Macabacus win.
+Both add-ins use the same keyboard shortcuts, and Excel gives each key to one add-in only: the one that bound it last. You can keep both installed.
+
+- **What happens:** about 3 seconds after Excel starts, Modelwright checks whether Macabacus is loaded. If it is, and Modelwright's shortcuts are on, Modelwright binds its keys again so that they win. With both add-ins installed and Modelwright's shortcuts on, **Modelwright answers the shared shortcuts** (Ctrl+Shift+1, Ctrl+', Ctrl+Shift+[ and the others), and Macabacus's commands stay available from its ribbon.
+- **The switch:** Modelwright › **Shortcuts** on the ribbon (also Settings… › Shortcuts › **Use Modelwright's keyboard shortcuts**). Off, Modelwright binds no keys and leaves Ctrl+Z / Ctrl+Y to Excel; its ribbon buttons keep working. Switching off while Excel runs hands the keys to Excel's own meaning (Ctrl+Shift+1 is Excel's number format again) until you restart Excel; from the next start Macabacus has them. Switching on takes effect at once. The setting is saved in your settings.
+- **The one-time notice:** the first time Modelwright finds Macabacus loaded (with its shortcuts on), it says so and offers **Use Modelwright's shortcuts** (the default; Esc chooses it too) or **Keep Macabacus's shortcuts** (switches Modelwright's off). It does not appear again.
+- **Turn one add-in off entirely:**
+  - Macabacus: File › Options › Add-ins › Manage: **COM Add-ins** › **Go…** › untick Macabacus › OK. It stays off until you tick it again. If Macabacus was installed for all users, the box may be greyed out or come back ticked: that needs an administrator (ask IT).
+  - Modelwright: File › Options › Add-ins › Manage: **Excel Add-ins** › **Go…** › untick **Modelwright** › OK.
+- **Take the keys back for this session:** Modelwright › **Re-register shortcuts** (with the shortcuts on).
+
+<!-- coexistence test results -->
+Measured on 2026-10-09 in Excel 16.0 (build 20430) with the Macabacus 2016 build installed on the test machine (COM add-in `Macabacus.Excel.vsto` and `Macabacus.xlam`) and a Modelwright development build:
+
+1. Both loading with Excel, before Modelwright re-binds: the Macabacus COM add-in loads after Modelwright, so Macabacus answered every shared shortcut (Ctrl+Shift+[ opened Macabacus's own Trace In). Macabacus's keys come from its COM add-in, not from `Macabacus.xlam`: with only the `.xlam` loaded, Modelwright answered everything.
+2. After Modelwright re-bound its keys, Modelwright answered every shared shortcut, and kept them after new workbooks, opening a saved workbook and switching windows (Macabacus does not re-bind on those).
+3. A key Modelwright releases while Excel runs goes to Excel's built-in meaning, not back to Macabacus: Macabacus binds its keys only when it loads. Hence "restart Excel" above.
+4. Ctrl+Z: Modelwright's undo hook decides Ctrl+Z / Ctrl+Y whenever its shortcuts are on, even while Macabacus owns the formatting keys; with Modelwright's undo history empty the key went to Excel. With Modelwright changes in that history, a Ctrl+Z meant for a Macabacus change would undo Modelwright's older change instead. With its shortcuts off, Modelwright leaves Ctrl+Z / Ctrl+Y alone (use Undo formatting on its ribbon).
 
 ### Where your settings live
 

@@ -78,7 +78,7 @@ internal static class SettingsUpgrade
         notes = found;
         return found.Count == 0
             ? settings
-            : new ToolkitSettings(cycles, keymap, settings.UndoCellCap, settings.DiagnosticsLog);
+            : new ToolkitSettings(cycles, keymap, settings.UndoCellCap, settings.DiagnosticsLog, settings.UseKeyboardShortcuts);
     }
 
     /// <summary>

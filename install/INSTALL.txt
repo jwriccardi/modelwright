@@ -104,14 +104,32 @@ IF YOUR COMPANY BLOCKS IT
 
 USING IT WITH MACABACUS
 -----------------------
-Modelwright uses the same keyboard shortcuts as Macabacus. Whichever add-in registered its
-shortcuts last gets the key, so run only one of them at a time:
-- Turn Macabacus off: File > Options > Add-ins > Manage: "COM Add-ins" > Go... > untick
-  Macabacus > OK.
-- Turn Modelwright off: File > Options > Add-ins > Manage: "Excel Add-ins" > Go... > untick
-  Modelwright > OK.
-- For this session only: click Modelwright > Re-register shortcuts (Modelwright wins), or
-  Macabacus's Override (Macabacus wins).
+Modelwright uses the same keyboard shortcuts as Macabacus, and Excel gives each key to one
+add-in only: the one that bound it last. You can keep both installed.
+- What happens: about 3 seconds after Excel starts, Modelwright checks whether Macabacus is
+  loaded. If it is, and Modelwright's shortcuts are on, Modelwright binds its keys again so
+  they win. With both installed and Modelwright's shortcuts on, Modelwright answers the
+  shared shortcuts, and Macabacus's commands stay available from its ribbon.
+- The switch: click Modelwright > Shortcuts on the ribbon (or Settings... > Shortcuts > "Use
+  Modelwright's keyboard shortcuts"). Off, Modelwright binds no keys and leaves Ctrl+Z /
+  Ctrl+Y to Excel; its ribbon buttons keep working. Switched off while Excel runs, the keys
+  do Excel's usual thing until you restart Excel; from the next start Macabacus has them.
+  Switching on takes effect at once.
+- The one-time notice: the first time Modelwright finds Macabacus loaded, it offers "Use
+  Modelwright's shortcuts" (the default) or "Keep Macabacus's shortcuts" (switches
+  Modelwright's off). It does not appear again.
+- Turn Macabacus off entirely: File > Options > Add-ins > Manage: "COM Add-ins" > Go... >
+  untick Macabacus > OK. If Macabacus was installed for all users, this may need an
+  administrator (ask IT).
+- Turn Modelwright off entirely: File > Options > Add-ins > Manage: "Excel Add-ins" > Go...
+  > untick Modelwright > OK.
+- Take the keys back for this session: click Modelwright > Re-register shortcuts.
+
+Tested on 2026-10-09 (Excel 16.0 build 20430, the Macabacus 2016 build): after Modelwright
+re-binds its keys at startup it answers every shared shortcut, and keeps them after new
+workbooks, opened workbooks and window switches. A key Modelwright lets go of while Excel
+runs does Excel's usual thing, not Macabacus's, until Excel restarts: Macabacus binds its
+keys only when it loads.
 
 
 REMOVE IT

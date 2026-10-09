@@ -87,14 +87,20 @@ public static class Commands
 
     /// <summary>
     /// Re-binds every shortcut in the keymap, taking back keys another add-in has bound since (like Macabacus's
-    /// Override button).
+    /// Override button). With the shortcuts switched off, binds nothing and says so.
     /// </summary>
     [ExcelCommand(Name = "MwReregisterKeys")]
     public static void MwReregisterKeys()
     {
         try
         {
-            var failures = KeyBindings.Apply(Session.Settings.Keymap);
+            if (!Session.Settings.UseKeyboardShortcuts)
+            {
+                StatusBar.Show($"{ProductInfo.Name}: shortcuts are off; switch them on with {ProductInfo.Name} > Shortcuts.");
+                return;
+            }
+
+            var failures = KeyBindings.Apply(Session.Settings);
             StatusBar.Show(Session.Summarize($"{ProductInfo.Name}: {KeyBindings.Count} shortcuts registered", null, failures));
         }
         catch (Exception ex)
@@ -123,9 +129,9 @@ public static class Commands
                 return;
             }
 
-            var failures = KeyBindings.Apply(Session.Settings.Keymap);
+            var failures = KeyBindings.Apply(Session.Settings);
             StatusBar.Show(Session.Summarize(
-                $"{ProductInfo.Name}: settings reloaded, {KeyBindings.Count} shortcuts registered", load, failures));
+                $"{ProductInfo.Name}: settings reloaded, {KeyBindings.Describe(Session.Settings)}", load, failures));
         }
         catch (Exception ex)
         {
@@ -167,15 +173,89 @@ public static class Commands
                 return;
             }
 
-            Session.ApplySaved(saved.Value.Settings, saved.Value.Save);
-            var failures = KeyBindings.Apply(Session.Settings.Keymap);
-            StatusBar.Show(Session.Summarize(
-                $"{ProductInfo.Name}: settings saved, {KeyBindings.Count} shortcuts registered", null, failures));
+            var wasOn = Session.Settings.UseKeyboardShortcuts;
+            Session.ApplySaved(saved.Value.Settings, saved.Value.Save, "dialog");
+            var failures = KeyBindings.Apply(Session.Settings);
+            StatusBar.Show(wasOn && !Session.Settings.UseKeyboardShortcuts
+                ? OffMessage
+                : Session.Summarize($"{ProductInfo.Name}: settings saved, {KeyBindings.Describe(Session.Settings)}", null, failures));
         }
         catch (Exception ex)
         {
             DiagnosticsLog.Write("SettingsDialogFailed", ex.ToString());
             StatusBar.Show($"{ProductInfo.Name}: the settings dialog failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>The status-bar message for the shortcuts switched off while Excel runs.</summary>
+    internal static string OffMessage =>
+        $"{ProductInfo.Name}'s shortcuts are off. Restart Excel to give them back to Macabacus (until then they do " +
+        "Excel's usual thing). The ribbon still works.";
+
+    /// <summary>
+    /// Switches the keyboard shortcuts on or off (<see cref="ToolkitSettings.UseKeyboardShortcuts"/>) from the ribbon's
+    /// Shortcuts button or the Macabacus notice (<paramref name="source"/>, for the log): saves settings.json the way
+    /// the settings dialog does (atomically, with a backup, asking first if the file was changed outside the add-in
+    /// or is not in use), then applies the switch at once (<see cref="KeyBindings.Apply(ToolkitSettings)"/>) and says
+    /// so on the status bar. Returns true if the setting is now <paramref name="on"/>. Call in macro context. Never
+    /// throws.
+    /// </summary>
+    internal static bool SetKeyboardShortcuts(bool on, string source)
+    {
+        // Excel keeps one binding per key and Macabacus binds its keys only when it loads: a key we release goes to
+        // Excel's default, not back to Macabacus (measured 2026-10-09), hence the restart in the off message.
+        try
+        {
+            if (Session.Settings.UseKeyboardShortcuts == on)
+            {
+                return true;
+            }
+
+            var settings = Session.Settings.WithUseKeyboardShortcuts(on);
+            if (SettingsStore.Exists() &&
+                (Session.SourceState == SettingsLoadOutcome.Rejected || SettingsStore.HasChangedSince(Session.SourceHash)))
+            {
+                var answer = MessageBox.Show(
+                    SettingsDialog.ExcelOwner(),
+                    $"settings.json was changed outside {ProductInfo.Name} (or has problems and isn't in use). Switching " +
+                    "the shortcuts saves the settings in use now over it; the current file will be kept as a backup.\n\n" +
+                    "Switch anyway? Choose No to leave everything as it is; you can click Reload settings to use the " +
+                    "file's changes first.",
+                    ProductInfo.Name,
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+                if (answer != DialogResult.Yes)
+                {
+                    StatusBar.Show($"{ProductInfo.Name}: shortcuts not switched; settings.json was not changed.");
+                    return false;
+                }
+            }
+
+            var save = SettingsStore.Save(settings);
+            if (!save.Succeeded)
+            {
+                StatusBar.Show($"{ProductInfo.Name}: shortcuts not switched: the settings were not saved: {save.Problem}");
+                return false;
+            }
+
+            Session.ApplySaved(settings, save, source);
+            var failures = KeyBindings.Apply(Session.Settings);
+            StatusBar.Show(on
+                ? Session.Summarize($"{ProductInfo.Name} shortcuts on", null, failures)
+                : OffMessage);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            DiagnosticsLog.Write("ShortcutsSwitchFailed", source, ex.ToString());
+            StatusBar.Show($"{ProductInfo.Name}: switching the shortcuts failed: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            // The toggle shows the setting in use, also when the switch was refused or failed.
+            ToolkitRibbon.RefreshShortcuts();
         }
     }
 

@@ -42,6 +42,9 @@ public sealed class ToolkitSettings
     /// The most format reads one undo snapshot may take (see <see cref="UndoCellCap"/>).
     /// </param>
     /// <param name="diagnosticsLog">True to write the per-command diagnostics log.</param>
+    /// <param name="useKeyboardShortcuts">
+    /// True to bind the keymap's keys and take Ctrl+Z / Ctrl+Y (see <see cref="UseKeyboardShortcuts"/>).
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="cycles"/> or <paramref name="keymap"/> is null.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="cycles"/> contains null, or <paramref name="keymap"/> has a null or repeated action id,
@@ -51,7 +54,8 @@ public sealed class ToolkitSettings
         IEnumerable<CycleDefinition> cycles,
         IEnumerable<KeyValuePair<string, string>> keymap,
         int undoCellCap = DefaultUndoCellCap,
-        bool diagnosticsLog = true)
+        bool diagnosticsLog = true,
+        bool useKeyboardShortcuts = true)
     {
         var cycleList = (cycles ?? throw new ArgumentNullException(nameof(cycles))).ToArray();
         if (cycleList.Any(c => c is null))
@@ -78,6 +82,7 @@ public sealed class ToolkitSettings
         Cycles = cycleList;
         UndoCellCap = undoCellCap;
         DiagnosticsLog = diagnosticsLog;
+        UseKeyboardShortcuts = useKeyboardShortcuts;
     }
 
     /// <summary>The schema version (always <see cref="CurrentSchemaVersion"/> for a loaded or created instance).</summary>
@@ -100,6 +105,17 @@ public sealed class ToolkitSettings
 
     /// <summary>True to write the per-command diagnostics log.</summary>
     public bool DiagnosticsLog { get; }
+
+    /// <summary>
+    /// True (the default) to bind the keymap's keys and take Ctrl+Z / Ctrl+Y for our formatting undo; false to leave
+    /// every key to Excel or to another add-in that binds the same ones (Macabacus). The ribbon works either way, and
+    /// the keymap is kept, for when the shortcuts are switched on again.
+    /// </summary>
+    public bool UseKeyboardShortcuts { get; }
+
+    /// <summary>These settings with <see cref="UseKeyboardShortcuts"/> set to <paramref name="useKeyboardShortcuts"/>.</summary>
+    public ToolkitSettings WithUseKeyboardShortcuts(bool useKeyboardShortcuts) =>
+        new ToolkitSettings(Cycles, _keymap, UndoCellCap, DiagnosticsLog, useKeyboardShortcuts);
 
     /// <summary>The factory defaults (the owner's Macabacus configuration); see <see cref="DefaultSettings"/>.</summary>
     public static ToolkitSettings Defaults() => DefaultSettings.Create();

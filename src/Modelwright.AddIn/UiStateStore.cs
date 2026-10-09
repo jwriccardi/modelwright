@@ -6,8 +6,8 @@ using Modelwright.Core.Trace;
 namespace Modelwright.AddIn;
 
 /// <summary>
-/// The Trace In window's remembered position, size and wrap setting, <c>%APPDATA%\Modelwright\ui-state.json</c>
-/// (<see cref="TraceUiState"/>). Best effort, and kept apart from settings.json and its overwrite protection: a
+/// The Trace In window's remembered position, size and wrap setting, and whether the Macabacus notice was shown,
+/// <c>%APPDATA%\Modelwright\ui-state.json</c> (<see cref="TraceUiState"/>). Best effort, and kept apart from settings.json and its overwrite protection: a
 /// missing, unreadable or damaged file gives the defaults, and a failed save is only logged. No member throws.
 /// </summary>
 internal static class UiStateStore
@@ -34,8 +34,17 @@ internal static class UiStateStore
         }
     }
 
-    /// <summary>Saves <paramref name="state"/> through a temporary file, so a failed write leaves the old file whole.</summary>
-    public static void Save(TraceUiState state)
+    /// <summary>
+    /// Saves the Trace In window's <paramref name="state"/>, keeping the file's Macabacus notice flag (which
+    /// <paramref name="state"/>, loaded when the window opened, may predate).
+    /// </summary>
+    public static void Save(TraceUiState state) => Write(state.WithMacabacusNoticeShown(Load().MacabacusNoticeShown));
+
+    /// <summary>Remembers that the one-time Macabacus notice was shown (<see cref="MacabacusCheck"/>).</summary>
+    public static void MarkMacabacusNoticeShown() => Write(Load().WithMacabacusNoticeShown(true));
+
+    /// <summary>Writes <paramref name="state"/> through a temporary file, so a failed write leaves the old file whole.</summary>
+    private static void Write(TraceUiState state)
     {
         var temporary = FilePath + ".tmp";
         try

@@ -363,6 +363,25 @@ public class SettingsDraftTests
     }
 
     [Fact]
+    public void Keyboard_shortcuts_switch_is_loaded_and_written()
+    {
+        var draft = new SettingsDraft(ToolkitSettings.Defaults().WithUseKeyboardShortcuts(false));
+        Assert.False(draft.UseKeyboardShortcuts);
+
+        draft.UseKeyboardShortcuts = true;
+        Assert.True(draft.ToSettings(out _).UseKeyboardShortcuts);
+
+        draft.UseKeyboardShortcuts = false;
+        var settings = draft.ToSettings(out var problems);
+        Assert.Empty(problems);
+        Assert.False(settings.UseKeyboardShortcuts);
+        Assert.NotEqual(new SettingsDraft(ToolkitSettings.Defaults()).ContentJson(), draft.ContentJson()); // Cancel would discard a change.
+
+        draft.ResetToDefaults();
+        Assert.True(draft.UseKeyboardShortcuts);
+    }
+
+    [Fact]
     public void Reset_restores_the_factory_defaults()
     {
         var draft = ProvisionalDraft();

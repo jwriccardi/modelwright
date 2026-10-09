@@ -145,6 +145,19 @@ public class SettingsUpgradeTests
     }
 
     [Fact]
+    public void Keyboard_shortcuts_switched_off_stay_off_when_an_earlier_file_is_brought_up_to_date()
+    {
+        var json = EarlierBuildJson.Replace("\"diagnosticsLog\": false,", "\"diagnosticsLog\": false, \"useKeyboardShortcuts\": false,");
+        Assert.NotEqual(EarlierBuildJson, json);
+
+        var result = ToolkitSettings.FromJson(json);
+
+        Assert.Empty(result.Problems);
+        Assert.NotEmpty(result.Notes);
+        Assert.False(result.Settings.UseKeyboardShortcuts);
+    }
+
+    [Fact]
     public void Upgraded_settings_save_and_reload_without_further_changes()
     {
         var upgraded = ToolkitSettings.FromJson(EarlierBuildJson).Settings;

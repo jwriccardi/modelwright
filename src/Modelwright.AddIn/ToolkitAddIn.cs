@@ -4,8 +4,9 @@ using ExcelDna.Integration;
 namespace Modelwright.AddIn;
 
 /// <summary>
-/// Add-in lifetime: loads the settings, registers their keyboard shortcuts, installs the Ctrl+Z / Ctrl+Y hook and
-/// connects the Excel events that invalidate undo history on load; closes any Trace In window (removing its key hook),
+/// Add-in lifetime: loads the settings, registers their keyboard shortcuts (unless they are switched off), installs the
+/// Ctrl+Z / Ctrl+Y hook, connects the Excel events that invalidate undo history and schedules the Macabacus check
+/// (<see cref="MacabacusCheck"/>) on load; closes any Trace In window (removing its key hook),
 /// disconnects the events, removes the hook, empties our undo stacks and restores Excel's defaults for our keys on
 /// unload.
 /// </summary>
@@ -18,7 +19,7 @@ public sealed class ToolkitAddIn : IExcelAddIn
         {
             var load = Session.Initialize();
             DiagnosticsLog.Write("AutoOpen", ProductInfo.Version);
-            var failures = KeyBindings.Apply(Session.Settings.Keymap);
+            var failures = KeyBindings.Apply(Session.Settings);
             var message = Session.Summarize($"{ProductInfo.Name} {ProductInfo.Version} loaded", load, failures);
             if (!UndoKeyHook.Install())
             {
@@ -40,6 +41,9 @@ public sealed class ToolkitAddIn : IExcelAddIn
 
             // Trace In's one-time start-up costs, paid shortly after Excel has loaded us rather than at the first trace.
             TraceSession.ScheduleWarmUp();
+
+            // Macabacus binds the same keys: look for it once Excel has loaded the other add-ins.
+            MacabacusCheck.Schedule();
         }
         catch (Exception ex)
         {
@@ -52,6 +56,7 @@ public sealed class ToolkitAddIn : IExcelAddIn
     public void AutoClose()
     {
         TraceSession.CancelWarmUp();
+        MacabacusCheck.Cancel();
         TraceSession.Current?.Abort("add-in closing");
         TraceWindow.DestroySpare();
         TraceKeyHook.Uninstall();
